@@ -824,8 +824,39 @@ impl VM {
                 let b = get(&node.inputs[1]);
                 match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
-                        let r = self.tape.matmul(ta, tb);
-                        Ok(Value::Tensor(r))
+                        let target_device = match node.device {
+                            DeviceTarget::CPU => crate::device::Device::CPU,
+                            DeviceTarget::CUDA(id) => crate::device::Device::CUDA(id),
+                            DeviceTarget::Auto => crate::device::Device::auto(),
+                        };
+                        let is_cuda = match target_device {
+                            crate::device::Device::CUDA(_) => crate::device::Device::cuda_available(),
+                            _ => false,
+                        };
+                        if is_cuda {
+                            let is_differentiable = if let Some(frame) = self.call_stack.last() {
+                                if let Some(func) = self.functions.get(&frame.function_name) {
+                                    func.is_differentiable
+                                } else {
+                                    true
+                                }
+                            } else {
+                                true
+                            };
+                            if !is_differentiable {
+                                self.execute_cuda_matmul(node, ta, tb)
+                            } else {
+                                let mut r = self.tape.matmul(ta, tb);
+                                let gpu_val = self.execute_cuda_matmul(node, ta, tb)?;
+                                if let Value::Tensor(gpu_tensor) = gpu_val {
+                                    r.data = gpu_tensor.data;
+                                }
+                                Ok(Value::Tensor(r))
+                            }
+                        } else {
+                            let r = self.tape.matmul(ta, tb);
+                            Ok(Value::Tensor(r))
+                        }
                     }
                     _ => Err("MatMul requires tensor operands".into()),
                 }
@@ -1810,6 +1841,80 @@ impl VM {
         } else {
             Err("CUDA context not available".to_string())
         }
+    }
+
+    fn execute_cuda_matmul(&mut self, _node: &IRNode, ta: &Tensor, tb: &Tensor) -> Result<Value, String> {
+        let (lhs_rows, lhs_cols) = (ta.shape[0], ta.shape[1]);
+        let (rhs_rows, rhs_cols) = (tb.shape[0], tb.shape[1]);
+        if lhs_cols != rhs_rows {
+            return Err(format!("Shape mismatch in MatMul: cannot multiply {}x{} by {}x{}", lhs_rows, lhs_cols, rhs_rows, rhs_cols));
+        }
+
+        // Ensure operands are on the device
+        ta.data.ensure_device();
+        tb.data.ensure_device();
+
+        let numel = lhs_rows * rhs_cols;
+        let output_shape = vec![lhs_rows, rhs_cols];
+
+        let output_tensor = Tensor::new(Buffer::new_vram(numel), output_shape);
+        let out_ptr = output_tensor.device_ptr();
+
+        if out_ptr == 0 {
+            // Fall back to CPU matmul
+            let r = self.tape.matmul(ta, tb);
+            return Ok(Value::Tensor(r));
+        }
+
+        let ctx = crate::device::get_cuda_context()
+            .ok_or_else(|| "CUDA context not available".to_string())?;
+
+        let cublas = ctx.cublas.as_ref()
+            .ok_or_else(|| "cuBLAS library not loaded. Ensure libcublas is installed.".to_string())?;
+
+        let handle = ctx.cublas_handle;
+        if handle.is_null() {
+            return Err("cuBLAS handle is null".to_string());
+        }
+
+        // zero-overhead transpose trick: row-major C = A x B via column-major B x A
+        let m = rhs_cols as i32;
+        let n = lhs_rows as i32;
+        let k = lhs_cols as i32;
+
+        let alpha: f64 = 1.0;
+        let beta: f64 = 0.0;
+
+        let a_ptr = ta.device_ptr() as *const f64;
+        let b_ptr = tb.device_ptr() as *const f64;
+        let c_ptr = out_ptr as *mut f64;
+
+        let res = unsafe {
+            (cublas.cublasDgemm_v2)(
+                handle,
+                0, // CUBLAS_OP_N
+                0, // CUBLAS_OP_N
+                m, n, k,
+                &alpha,
+                b_ptr, m, // lda
+                a_ptr, k, // ldb
+                &beta,
+                c_ptr, m, // ldc
+            )
+        };
+
+        if res != 0 {
+            return Err(format!("cublasDgemm_v2 failed: error code {}", res));
+        }
+
+        // Synchronize CUDA context
+        let sync_res = unsafe { (ctx.cuda.cuCtxSynchronize)() };
+        if sync_res != 0 {
+            return Err(format!("cuCtxSynchronize failed: {}", sync_res));
+        }
+
+        output_tensor.data.mark_device_dirty();
+        Ok(Value::Tensor(output_tensor))
     }
 }
 

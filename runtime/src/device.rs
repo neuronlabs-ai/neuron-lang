@@ -139,9 +139,62 @@ pub struct NvrtcApi {
     pub nvrtcGetErrorString: unsafe extern "C" fn(result: u32) -> *const std::os::raw::c_char,
 }
 
+pub struct CublasApi {
+    _lib: Library,
+    pub cublasCreate_v2: unsafe extern "C" fn(handle: *mut *mut std::ffi::c_void) -> i32,
+    pub cublasDestroy_v2: unsafe extern "C" fn(handle: *mut std::ffi::c_void) -> i32,
+    pub cublasDgemm_v2: unsafe extern "C" fn(
+        handle: *mut std::ffi::c_void,
+        transa: u32, transb: u32,
+        m: i32, n: i32, k: i32,
+        alpha: *const f64,
+        A: *const f64, lda: i32,
+        B: *const f64, ldb: i32,
+        beta: *const f64,
+        C: *mut f64, ldc: i32,
+    ) -> i32,
+}
+
+impl CublasApi {
+    pub fn load() -> Result<Self, String> {
+        let filenames = if cfg!(target_os = "windows") {
+            vec!["cublas64_12.dll", "cublas64_11.dll", "cublas.dll"]
+        } else if cfg!(target_os = "macos") {
+            vec!["libcublas.dylib"]
+        } else {
+            vec!["libcublas.so.12", "libcublas.so.11", "libcublas.so"]
+        };
+        
+        let mut loaded_lib = None;
+        for name in filenames {
+            if let Ok(lib) = unsafe { Library::new(name) } {
+                loaded_lib = Some(lib);
+                break;
+            }
+        }
+        
+        let lib = loaded_lib.ok_or_else(|| "Could not load cuBLAS library".to_string())?;
+        
+        unsafe {
+            let cublasCreate_v2 = *lib.get(b"cublasCreate_v2").map_err(|e| e.to_string())?;
+            let cublasDestroy_v2 = *lib.get(b"cublasDestroy_v2").map_err(|e| e.to_string())?;
+            let cublasDgemm_v2 = *lib.get(b"cublasDgemm_v2").map_err(|e| e.to_string())?;
+            
+            Ok(CublasApi {
+                _lib: lib,
+                cublasCreate_v2,
+                cublasDestroy_v2,
+                cublasDgemm_v2,
+            })
+        }
+    }
+}
+
 pub struct CudaContext {
     pub cuda: CudaApi,
     pub nvrtc: NvrtcApi,
+    pub cublas: Option<CublasApi>,
+    pub cublas_handle: *mut std::ffi::c_void,
     pub ctx: *mut std::ffi::c_void,
     pub device: i32,
 }
@@ -398,9 +451,20 @@ impl CudaContext {
                 }
             }
             
+            let cublas = CublasApi::load().ok();
+            let mut cublas_handle = std::ptr::null_mut();
+            if let Some(ref api) = cublas {
+                let res = (api.cublasCreate_v2)(&mut cublas_handle);
+                if res != 0 {
+                    cublas_handle = std::ptr::null_mut();
+                }
+            }
+
             Ok(CudaContext {
                 cuda,
                 nvrtc,
+                cublas,
+                cublas_handle,
                 ctx,
                 device,
             })
@@ -487,6 +551,11 @@ impl CudaContext {
 impl Drop for CudaContext {
     fn drop(&mut self) {
         unsafe {
+            if !self.cublas_handle.is_null() {
+                if let Some(ref api) = self.cublas {
+                    (api.cublasDestroy_v2)(self.cublas_handle);
+                }
+            }
             (self.cuda.cuCtxDestroy_v2)(self.ctx);
         }
     }
