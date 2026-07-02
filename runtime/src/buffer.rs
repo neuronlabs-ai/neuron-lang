@@ -155,12 +155,7 @@ impl Buffer {
         }
         let byte_size = size * std::mem::size_of::<f64>();
 
-        // Check VRAM budget
-        if crate::device::vram_available() < byte_size {
-            return None;
-        }
-
-        // Try the VRAM caching pool first
+        // Try the VRAM caching pool first (avoids fresh allocation and budget checks)
         if let Ok(mut pool) = vram_pool().lock() {
             if let Some(ptrs) = pool.get_mut(&size) {
                 if let Some(device_ptr) = ptrs.pop() {
@@ -183,6 +178,11 @@ impl Buffer {
                     });
                 }
             }
+        }
+
+        // Check VRAM budget for new allocations
+        if crate::device::vram_available() < byte_size {
+            return None;
         }
 
         // Allocate fresh VRAM
