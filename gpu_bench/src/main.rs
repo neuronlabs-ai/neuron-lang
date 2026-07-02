@@ -23,6 +23,7 @@ use neuron_runtime::device;
 /// This is the ideal workload for the GPU fusion backend.
 fn gen_elementwise_chain(n: i64, chain_len: usize) -> String {
     let mut lines = vec![
+        "@opaque".to_string(),
         format!("fn main() -> Tensor[{}, {}]:", n, n),
         format!("  let x = zeros({}, {}) + 1.0", n, n),
     ];
@@ -46,6 +47,7 @@ fn gen_elementwise_chain(n: i64, chain_len: usize) -> String {
 /// Generates a MatMul-heavy program (NOT fused on GPU — serves as a control).
 fn gen_matmul_chain(n: i64, reps: usize) -> String {
     let mut lines = vec![
+        "@opaque".to_string(),
         format!("fn main() -> Tensor[{}, {}]:", n, n),
         format!("  let w = glorot({}, {})", n, n),
         format!("  let x = glorot({}, {})", n, n),
@@ -60,7 +62,8 @@ fn gen_matmul_chain(n: i64, reps: usize) -> String {
 /// Generates a mixed workload: matmul followed by element-wise activations.
 fn gen_mixed_workload(n: i64) -> String {
     format!(
-r#"fn main() -> Tensor[{n}, {n}]:
+r#"@opaque
+fn main() -> Tensor[{n}, {n}]:
   let w1 = glorot({n}, {n})
   let w2 = glorot({n}, {n})
   let x = glorot({n}, {n})
