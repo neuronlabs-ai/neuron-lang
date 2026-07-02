@@ -1860,19 +1860,6 @@ impl VM {
         let output_tensor = Tensor::new(Buffer::new_vram(numel), output_shape);
         let out_ptr = output_tensor.device_ptr();
 
-        println!("[NEURON-DEBUG] execute_cuda_matmul: {}x{} @ {}x{}, out_ptr={:#x}, a_ptr={:#x}, b_ptr={:#x}, a_storage={}, b_storage={}",
-                 lhs_rows, lhs_cols, rhs_rows, rhs_cols, out_ptr, ta.device_ptr(), tb.device_ptr(),
-                 match &ta.data.storage {
-                     crate::buffer::BufferStorage::Host(_) => "Host",
-                     crate::buffer::BufferStorage::Uvm { .. } => "Uvm",
-                     crate::buffer::BufferStorage::Vram { .. } => "Vram",
-                 },
-                 match &tb.data.storage {
-                     crate::buffer::BufferStorage::Host(_) => "Host",
-                     crate::buffer::BufferStorage::Uvm { .. } => "Uvm",
-                     crate::buffer::BufferStorage::Vram { .. } => "Vram",
-                 });
-
         if out_ptr == 0 {
             // Fall back to CPU matmul
             let r = self.tape.matmul(ta, tb);
