@@ -566,7 +566,7 @@ static CUDA_CONTEXT: OnceLock<Option<CudaContext>> = OnceLock::new();
 
 // ── VRAM Usage Tracking ──
 static VRAM_USED: AtomicUsize = AtomicUsize::new(0);
-static VRAM_LIMIT: AtomicUsize = AtomicUsize::new(512 * 1024 * 1024); // 512 MB default
+static VRAM_LIMIT: AtomicUsize = AtomicUsize::new(4096 * 1024 * 1024); // 4 GB default
 
 /// Record a VRAM allocation.
 pub fn vram_alloc_track(bytes: usize) {
