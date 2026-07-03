@@ -93,7 +93,7 @@ agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
     let write_attn = sigmoid(content @ self.write_gate)
     let erase_vec = sigmoid(content @ self.erase_gate)
     let erase_gate_val = write_attn * erase_vec
-    let keep_gate = 1.0 - erase_gate_val
+    let keep_gate = (erase_gate_val * 0.0 + 1.0) - erase_gate_val
     let keep_gate_col = transpose(keep_gate, 0, 1)
     let ones = zeros(1, 8) + 1.0
     let keep_matrix = keep_gate_col @ ones
