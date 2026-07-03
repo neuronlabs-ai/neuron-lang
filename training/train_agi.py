@@ -65,7 +65,8 @@ class EpisodicMemory(nn.Module):
             return torch.zeros(1, self.embed_dim, device=query.device)
         n = self.current_size.item()
         q = self.query_proj(query)                           # [1, D]
-        k_proj = self.key_proj(self.keys[:n])                # [N, D]
+        stored_keys = self.keys[:n].detach()                 # Detach stored keys
+        k_proj = self.key_proj(stored_keys)                  # [N, D]
         scale = self.embed_dim ** -0.5
         scores = (q @ k_proj.T) * scale                     # [1, N]
         # Recency weighting
@@ -73,7 +74,7 @@ class EpisodicMemory(nn.Module):
         recency = torch.sigmoid(-time_diff * 0.01)
         scores = scores * recency
         attn = F.softmax(scores * 10.0, dim=-1)             # [1, N]
-        retrieved = attn @ self.values[:n]                   # [1, D]
+        retrieved = attn @ self.values[:n].detach()          # [1, D]
         return retrieved
 
 # ─────────────────────────────────────────────
@@ -101,9 +102,10 @@ class SemanticMemory(nn.Module):
     def query(self, subject, relation):
         """Retrieve the most relevant object for a subject-relation pair."""
         query_embed = subject + relation                     # [1, D]
-        scores = query_embed @ self.objects.T                # [1, Cap]
+        stored_objects = self.objects.detach()                # Detach stored objects
+        scores = query_embed @ stored_objects.T              # [1, Cap]
         attn = F.softmax(scores * 10.0, dim=-1)
-        result = attn @ self.objects                         # [1, D]
+        result = attn @ stored_objects                       # [1, D]
         return result
 
     def associate(self, a, b):
@@ -127,20 +129,22 @@ class WorkingMemory(nn.Module):
     def read(self, query):
         """Attention-based read from working memory slots."""
         key = self.read_key_proj(query)                      # [B, D]
-        scores = key @ self.slots.T                          # [B, S]
+        slots = self.slots.detach()                           # Detach from previous writes
+        scores = key @ slots.T                               # [B, S]
         scale = self.embed_dim ** -0.5
         attn = F.softmax(scores * scale, dim=-1)             # [B, S]
-        return attn @ self.slots                             # [B, D]
+        return attn @ slots                                  # [B, D]
 
     def write(self, content):
         """Gated write with erase mechanism (Neural Turing Machine style)."""
-        write_attn = torch.sigmoid(self.write_gate(content))  # [B, S]
-        erase_vec = torch.sigmoid(self.erase_gate(content))   # [B, S]
-        erase_gate_val = write_attn * erase_vec                # [B, S]
-        keep_gate = 1.0 - erase_gate_val                       # [B, S]
-        # Apply erase and write
-        self.slots = (self.slots * keep_gate.mean(0).unsqueeze(-1) +
-                      write_attn.mean(0).unsqueeze(-1) * content.mean(0).unsqueeze(0))
+        with torch.no_grad():
+            write_attn = torch.sigmoid(self.write_gate(content))  # [B, S]
+            erase_vec = torch.sigmoid(self.erase_gate(content))   # [B, S]
+            erase_gate_val = write_attn * erase_vec                # [B, S]
+            keep_gate = 1.0 - erase_gate_val                       # [B, S]
+            # Apply erase and write (detached from graph)
+            self.slots = (self.slots * keep_gate.mean(0).unsqueeze(-1) +
+                          write_attn.mean(0).unsqueeze(-1) * content.mean(0).unsqueeze(0)).detach()
 
 # ─────────────────────────────────────────────
 #  ICM Curiosity Module
