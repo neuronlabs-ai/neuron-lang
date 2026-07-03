@@ -307,10 +307,9 @@ class NeuroCognitiveAgent(nn.Module):
         # 5. Policy output
         logits = self.policy(combined)
         safe_logits = self.safety(logits)
-        action_probs = F.softmax(safe_logits, dim=-1)
 
-        # 6. Sample action
-        dist = torch.distributions.Categorical(action_probs)
+        # 6. Sample action (use logits= for numerical stability)
+        dist = torch.distributions.Categorical(logits=safe_logits)
         action = dist.sample()
         log_prob = dist.log_prob(action)
 
