@@ -56,7 +56,8 @@ class EpisodicMemory(nn.Module):
         self.values[pos] = value.detach()
         self.timestamps[pos] = self.current_time.float()
         self.write_pos += 1
-        self.current_size = min(self.current_size + 1, self.capacity)
+        self.current_size += 1
+        self.current_size.clamp_(max=self.capacity)
         self.current_time += 1
 
     def recall(self, query, k=4):
