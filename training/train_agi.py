@@ -65,7 +65,7 @@ class EpisodicMemory(nn.Module):
             return torch.zeros(1, self.embed_dim, device=query.device)
         n = self.current_size.item()
         q = self.query_proj(query)                           # [1, D]
-        stored_keys = self.keys[:n].detach()                 # Detach stored keys
+        stored_keys = self.keys[:n].clone().detach()         # Clone+detach from storage
         k_proj = self.key_proj(stored_keys)                  # [N, D]
         scale = self.embed_dim ** -0.5
         scores = (q @ k_proj.T) * scale                     # [1, N]
@@ -74,7 +74,7 @@ class EpisodicMemory(nn.Module):
         recency = torch.sigmoid(-time_diff * 0.01)
         scores = scores * recency
         attn = F.softmax(scores * 10.0, dim=-1)             # [1, N]
-        retrieved = attn @ self.values[:n].detach()          # [1, D]
+        retrieved = attn @ self.values[:n].clone().detach()  # [1, D]
         return retrieved
 
 # ─────────────────────────────────────────────
@@ -102,7 +102,7 @@ class SemanticMemory(nn.Module):
     def query(self, subject, relation):
         """Retrieve the most relevant object for a subject-relation pair."""
         query_embed = subject + relation                     # [1, D]
-        stored_objects = self.objects.detach()                # Detach stored objects
+        stored_objects = self.objects.clone().detach()        # Clone+detach stored objects
         scores = query_embed @ stored_objects.T              # [1, Cap]
         attn = F.softmax(scores * 10.0, dim=-1)
         result = attn @ stored_objects                       # [1, D]
@@ -129,7 +129,7 @@ class WorkingMemory(nn.Module):
     def read(self, query):
         """Attention-based read from working memory slots."""
         key = self.read_key_proj(query)                      # [B, D]
-        slots = self.slots.detach()                           # Detach from previous writes
+        slots = self.slots.clone().detach()                   # Clone+detach from previous writes
         scores = key @ slots.T                               # [B, S]
         scale = self.embed_dim ** -0.5
         attn = F.softmax(scores * scale, dim=-1)             # [B, S]
