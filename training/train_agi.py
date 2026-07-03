@@ -177,7 +177,7 @@ class CuriosityModule(nn.Module):
         """Compute curiosity-driven intrinsic reward."""
         phi_t = self.encode(state)
         phi_tp1 = self.encode(next_state)
-        action_onehot = F.one_hot(action.long(), ACTION_DIM).float()
+        action_onehot = F.one_hot(action.long().squeeze(-1), ACTION_DIM).float()
         phi_pred = self.forward_net(torch.cat([phi_t, action_onehot], dim=-1))
         return ((phi_pred - phi_tp1) ** 2).mean(dim=-1, keepdim=True)
 
@@ -185,7 +185,7 @@ class CuriosityModule(nn.Module):
         """Combined forward + inverse prediction loss."""
         phi_t = self.encode(states)
         phi_tp1 = self.encode(next_states)
-        action_onehot = F.one_hot(actions.long(), ACTION_DIM).float()
+        action_onehot = F.one_hot(actions.long().squeeze(-1), ACTION_DIM).float()
         # Forward loss
         phi_pred = self.forward_net(torch.cat([phi_t, action_onehot], dim=-1))
         forward_loss = F.mse_loss(phi_pred, phi_tp1.detach())
@@ -226,7 +226,7 @@ class WorldModel(nn.Module):
         return self.encoder(state)
 
     def predict_next(self, latent, action):
-        action_onehot = F.one_hot(action.long(), ACTION_DIM).float()
+        action_onehot = F.one_hot(action.long().squeeze(-1), ACTION_DIM).float()
         return self.transition(torch.cat([latent, action_onehot], dim=-1))
 
     def predict_reward(self, latent):
