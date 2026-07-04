@@ -598,6 +598,17 @@ impl TypeChecker {
                 for s in &i.then_body { self.check_stmt(s); }
                 for s in &i.else_body { self.check_stmt(s); }
             }
+            Stmt::While(w) => {
+                let cond_ty = self.infer_expr(&w.cond);
+                if !matches!(cond_ty, NType::Base(ref n) if n == "Bool") && !matches!(cond_ty, NType::Any) {
+                    self.result.add_error(NeuronError::new(
+                        ErrorCode::TypeMismatch, "While condition must be Bool", w.span.clone(),
+                    ).with_actual(&cond_ty.display()));
+                }
+                self.symbols.push();
+                for s in &w.body { self.check_stmt(s); }
+                self.symbols.pop();
+            }
             Stmt::Return(r) => { self.infer_expr(&r.value); }
             Stmt::Update(u) => {
                 self.symbols.record_mutation(&u.target);

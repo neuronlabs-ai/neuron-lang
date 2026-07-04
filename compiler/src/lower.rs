@@ -370,6 +370,17 @@ impl Lowerer {
                 self.emit(func, IROp::Store { name: l.name.clone() }, vec![val_id], IRType::Void);
             }
             Stmt::For(f) => {
+                // Collect and invalidate variables modified inside the loop body
+                let mut modified = std::collections::HashSet::new();
+                self.collect_modified_vars(&f.body, &mut modified);
+                for name in &modified {
+                    if name != &f.var {
+                        for scope in self.env.iter_mut() {
+                            scope.remove(name);
+                        }
+                    }
+                }
+
                 let iter_id = self.lower_expr(func, &f.iter_expr);
                 
                 let cond_block = self.new_block();
@@ -450,6 +461,44 @@ impl Lowerer {
                         scope.remove(name);
                     }
                 }
+                self.current_block_id = Some(exit_block);
+            }
+            Stmt::While(w) => {
+                // Collect and invalidate variables modified inside the loop body
+                let mut modified = std::collections::HashSet::new();
+                self.collect_modified_vars(&w.body, &mut modified);
+                for name in &modified {
+                    for scope in self.env.iter_mut() {
+                        scope.remove(name);
+                    }
+                }
+
+                let cond_block = self.new_block();
+                let body_block = self.new_block();
+                let exit_block = self.new_block();
+                
+                // Jump to condition check
+                self.terminate(Terminator::Jump(cond_block));
+                
+                // Condition block: evaluate cond, branch to body or exit
+                self.current_block_id = Some(cond_block);
+                let cond_id = self.lower_expr(func, &w.cond);
+                self.terminate(Terminator::Branch {
+                    cond: cond_id,
+                    true_block: body_block,
+                    false_block: exit_block,
+                });
+                
+                // Body block: execute stmts, jump back to cond
+                self.current_block_id = Some(body_block);
+                for s in &w.body {
+                    self.lower_stmt(func, s);
+                }
+                
+                if self.current_block_id.is_some() {
+                    self.terminate(Terminator::Jump(cond_block));
+                }
+                
                 self.current_block_id = Some(exit_block);
             }
             Stmt::If(i) => {
@@ -885,6 +934,31 @@ impl Lowerer {
             TypeExpr::Causal(inner, mode, _) => IRType::Causal(Box::new(self.lower_type(inner)), mode.clone()),
             TypeExpr::ListType(inner, _) => IRType::List(Box::new(self.lower_type(inner))),
             _ => IRType::Any,
+        }
+    }
+
+    fn collect_modified_vars(&self, stmts: &[Stmt], vars: &mut std::collections::HashSet<String>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let(l) => {
+                    vars.insert(l.name.clone());
+                }
+                Stmt::Update(u) => {
+                    vars.insert(u.target.clone());
+                }
+                Stmt::For(f) => {
+                    vars.insert(f.var.clone());
+                    self.collect_modified_vars(&f.body, vars);
+                }
+                Stmt::While(w) => {
+                    self.collect_modified_vars(&w.body, vars);
+                }
+                Stmt::If(i) => {
+                    self.collect_modified_vars(&i.then_body, vars);
+                    self.collect_modified_vars(&i.else_body, vars);
+                }
+                _ => {}
+            }
         }
     }
 }

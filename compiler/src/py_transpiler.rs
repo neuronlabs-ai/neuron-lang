@@ -1,4 +1,4 @@
-use crate::ir::{IRProgram, IRFunction, IROp, IRConst, IRType, Terminator};
+use crate::ir::{IRProgram, IRFunction, IROp, IRConst, Terminator};
 
 /// PyTranspiler converts a NEURON lowered IRProgram into optimized, standard PyTorch Python source code.
 pub struct PyTranspiler;
@@ -352,6 +352,14 @@ if __name__ == "__main__":
                     IROp::Neq => format!("v{} != v{}", node.inputs[0], node.inputs[1]),
                     IROp::ListLen => format!("len(v{})", node.inputs[0]),
                     IROp::Index => format!("v{}[int(v{})]", node.inputs[0], node.inputs[1]),
+                    IROp::Nop => {
+                        if !node.inputs.is_empty() {
+                            let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}", id)).collect();
+                            format!("[{}]", parts.join(", "))
+                        } else {
+                            "None".to_string()
+                        }
+                    }
                     IROp::StopGrad => format!("v{}.detach()", node.inputs[0]),
                     IROp::Sum { dim } => match dim {
                         Some(d) => format!("v{}.sum(dim={})", node.inputs[0], d),

@@ -635,6 +635,7 @@ impl Parser {
         match self.peek_type() {
             TokenType::Let => Ok(Stmt::Let(self.parse_let_stmt()?)),
             TokenType::For => Ok(Stmt::For(self.parse_for_stmt()?)),
+            TokenType::While => Ok(Stmt::While(self.parse_while_stmt()?)),
             TokenType::If => Ok(Stmt::If(self.parse_if_stmt()?)),
             TokenType::Return => Ok(Stmt::Return(self.parse_return_stmt()?)),
             TokenType::Update => Ok(Stmt::Update(self.parse_update_stmt()?)),
@@ -694,6 +695,15 @@ impl Parser {
             self.parse_block()?
         } else { vec![] };
         Ok(IfStmt { cond, then_body, else_body, span })
+    }
+
+    fn parse_while_stmt(&mut self) -> Result<WhileStmt, NeuronError> {
+        let span = self.span();
+        self.advance(); // while
+        let cond = self.parse_expression(0)?;
+        self.expect("COLON")?;
+        let body = self.parse_block()?;
+        Ok(WhileStmt { cond, body, span })
     }
 
     fn parse_return_stmt(&mut self) -> Result<ReturnStmt, NeuronError> {

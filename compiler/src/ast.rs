@@ -196,6 +196,7 @@ pub struct ConstraintDecl {
 pub enum Stmt {
     Let(LetStmt),
     For(ForStmt),
+    While(WhileStmt),
     If(IfStmt),
     Return(ReturnStmt),
     Update(UpdateStmt),
@@ -215,6 +216,13 @@ pub struct LetStmt {
 pub struct ForStmt {
     pub var: String,
     pub iter_expr: Expr,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct WhileStmt {
+    pub cond: Expr,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
