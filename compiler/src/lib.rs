@@ -14,6 +14,7 @@ pub mod lower;
 pub mod transpiler;
 pub mod py_transpiler;
 pub mod cuda_codegen;
+pub mod optimize;
 
 use errors::CompileResult;
 use ir::IRProgram;
@@ -237,7 +238,10 @@ pub fn compile(source: &str, filename: &str) -> Result<CompileOutput, CompileRes
 
     // Phase 4: Lower to IR
     let lowerer = lower::Lowerer::new();
-    let ir = lowerer.lower(&program);
+    let mut ir = lowerer.lower(&program);
+
+    // Phase 5: Optimize IR
+    optimize::optimize_program(&mut ir);
 
     Ok(CompileOutput {
         ir,
@@ -273,7 +277,10 @@ pub fn compile_with_imports(source: &str, filename: &str) -> Result<CompileOutpu
 
     // Phase 4: Lower to IR
     let lowerer = lower::Lowerer::new();
-    let ir = lowerer.lower(&resolved_program);
+    let mut ir = lowerer.lower(&resolved_program);
+
+    // Phase 5: Optimize IR
+    optimize::optimize_program(&mut ir);
 
     Ok(CompileOutput {
         ir,
