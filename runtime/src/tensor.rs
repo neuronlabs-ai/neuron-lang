@@ -540,6 +540,9 @@ pub fn tensor_neg(a: &Tensor) -> Tensor {
 
 /// Matrix multiply. Supports batched matmul.
 /// A: [..., M, K], B: [..., K, N] → [..., M, N]
+///
+/// When a CUDA GPU with cuBLAS is available and the matrix is large enough,
+/// this automatically routes through cublasDgemm_v2 on device memory.
 pub fn tensor_matmul(a: &Tensor, b: &Tensor) -> Tensor {
     assert!(a.ndim() >= 2 && b.ndim() >= 2, "matmul requires at least 2D tensors");
     let m = a.shape[a.ndim() - 2];
@@ -556,6 +559,15 @@ pub fn tensor_matmul(a: &Tensor, b: &Tensor) -> Tensor {
     let mut result_shape = batch_dims_a.to_vec();
     result_shape.push(m);
     result_shape.push(n);
+
+    // Try GPU path for non-batched, large-enough matrices
+    if batch_size == 1 && m * k_a * n >= 4096 {
+        if let Some(gpu_result) = cublas_matmul(m, k_a, n, &a.data, &b.data) {
+            return Tensor::new(gpu_result, result_shape);
+        }
+    }
+
+    // CPU fallback
     let mut result = Buffer::new(batch_size * m * n);
 
     let a_stride = m * k_a;
@@ -596,6 +608,97 @@ pub fn tensor_matmul(a: &Tensor, b: &Tensor) -> Tensor {
     }
 
     Tensor::new(result, result_shape)
+}
+
+/// Attempt GPU matmul via cuBLAS. Returns None if GPU is unavailable.
+///
+/// Row-major trick: for C[M,N] = A[M,K] × B[K,N] in row-major,
+/// we call cublasDgemm with swapped operands:
+///   cublasDgemm(N, M, K, 1.0, B_dev, N, A_dev, K, 0.0, C_dev, N)
+/// because cuBLAS is column-major, and C_col = B^T × A^T gives us
+/// the row-major result directly.
+fn cublas_matmul(m: usize, k: usize, n: usize, a_data: &[f64], b_data: &[f64]) -> Option<Buffer> {
+    use crate::device::{get_cuda_context, is_simulate_cuda};
+
+    // Don't use GPU for simulated CUDA (no real hardware)
+    if is_simulate_cuda() {
+        return None;
+    }
+
+    let ctx = get_cuda_context()?;
+    let cublas = ctx.cublas.as_ref()?;
+    if ctx.cublas_handle.is_null() {
+        return None;
+    }
+
+    let a_bytes = m * k * std::mem::size_of::<f64>();
+    let b_bytes = k * n * std::mem::size_of::<f64>();
+    let c_bytes = m * n * std::mem::size_of::<f64>();
+
+    unsafe {
+        // Allocate device memory
+        let mut d_a: u64 = 0;
+        let mut d_b: u64 = 0;
+        let mut d_c: u64 = 0;
+
+        if (ctx.cuda.cuMemAlloc_v2)(&mut d_a, a_bytes) != 0 { return None; }
+        if (ctx.cuda.cuMemAlloc_v2)(&mut d_b, b_bytes) != 0 {
+            (ctx.cuda.cuMemFree_v2)(d_a);
+            return None;
+        }
+        if (ctx.cuda.cuMemAlloc_v2)(&mut d_c, c_bytes) != 0 {
+            (ctx.cuda.cuMemFree_v2)(d_a);
+            (ctx.cuda.cuMemFree_v2)(d_b);
+            return None;
+        }
+
+        // Copy host → device
+        (ctx.cuda.cuMemcpyHtoD_v2)(d_a, a_data.as_ptr() as *const std::ffi::c_void, a_bytes);
+        (ctx.cuda.cuMemcpyHtoD_v2)(d_b, b_data.as_ptr() as *const std::ffi::c_void, b_bytes);
+
+        // cuBLAS dgemm: row-major trick — swap A and B
+        // C[M,N] = A[M,K] * B[K,N] in row-major
+        // → cublasDgemm(CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, 1.0, B, N, A, K, 0.0, C, N)
+        let alpha: f64 = 1.0;
+        let beta: f64 = 0.0;
+        let cublas_op_n: u32 = 0; // CUBLAS_OP_N (no transpose)
+
+        let status = (cublas.cublasDgemm_v2)(
+            ctx.cublas_handle,
+            cublas_op_n, cublas_op_n,
+            n as i32, m as i32, k as i32,
+            &alpha,
+            d_b as *const f64, n as i32,
+            d_a as *const f64, k as i32,
+            &beta,
+            d_c as *mut f64, n as i32,
+        );
+
+        if status != 0 {
+            (ctx.cuda.cuMemFree_v2)(d_a);
+            (ctx.cuda.cuMemFree_v2)(d_b);
+            (ctx.cuda.cuMemFree_v2)(d_c);
+            return None;
+        }
+
+        // Synchronize
+        (ctx.cuda.cuCtxSynchronize)();
+
+        // Copy device → host
+        let mut result = Buffer::new(m * n);
+        (ctx.cuda.cuMemcpyDtoH_v2)(
+            result.as_mut_ptr() as *mut std::ffi::c_void,
+            d_c,
+            c_bytes,
+        );
+
+        // Free device memory
+        (ctx.cuda.cuMemFree_v2)(d_a);
+        (ctx.cuda.cuMemFree_v2)(d_b);
+        (ctx.cuda.cuMemFree_v2)(d_c);
+
+        Some(result)
+    }
 }
 
 /// ReLU activation: max(0, x)
