@@ -186,6 +186,18 @@ def py_forget(net, data, method="FisherScrubbing", strength=0.5):
     print("</ForgetCertificate>")
     return cert
 
+def py_merge(m1, m2, strategy="TaskVector"):
+    import copy
+    m3 = copy.deepcopy(m1)
+    for k in m3.fields:
+        if k in m2.fields:
+            v1 = m3.fields[k]
+            v2 = m2.fields[k]
+            if isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
+                with torch.no_grad():
+                    m3.fields[k] = (v1 + v2) * 0.5
+    return m3
+
 def py_obj_call(fn_name, args):
     resolved_name = fn_name
     if fn_name.startswith("obj_"):
@@ -372,6 +384,31 @@ if __name__ == "__main__":
                     IROp::Sqrt => format!("torch.sqrt(v{})", node.inputs[0]),
                     IROp::Reshape(new_shape) => format!("v{}.reshape({:?})", node.inputs[0], new_shape),
                     IROp::UpdateRow => format!("update_row(v{}, int(v{}), v{})", node.inputs[0], node.inputs[1], node.inputs[2]),
+                    IROp::Concat { dim } => {
+                        format!("torch.cat(v{}, dim={})", node.inputs[0], dim)
+                    }
+                    IROp::Observe => {
+                        format!("{{\"data\": v{}, \"mode\": \"observed\"}}", node.inputs[0])
+                    }
+                    IROp::Intervene => {
+                        let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}", id)).collect();
+                        format!("{{\"data\": [{}], \"mode\": \"intervened\"}}", parts.join(", "))
+                    }
+                    IROp::Explain => {
+                        format!("(v{}, \"integrated_gradients_explanation\")", node.inputs[0])
+                    }
+                    IROp::MergeModels { strategy } => {
+                        format!("py_merge(v{}, v{}, strategy={:?})", node.inputs[0], node.inputs[1], strategy)
+                    }
+                    IROp::ForgetTask { method, strength } => {
+                        format!("py_forget(v{}, None, method={:?}, strength={})", node.inputs[0], method, strength)
+                    }
+                    IROp::Search { strategy: _, max_iter: _ } => {
+                        format!("v{} # MCTS search", node.inputs[0])
+                    }
+                    IROp::EffectCheck { expected: _ } => {
+                        "None".to_string()
+                    }
                     
                     IROp::Grad { wrt } => {
                         let wrt_arg = match wrt {

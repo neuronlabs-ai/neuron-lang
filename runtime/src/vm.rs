@@ -50,14 +50,14 @@ impl Value {
             Value::Float(f) => *f,
             Value::Int(i) => *i as f64,
             Value::Tensor(t) if t.numel() == 1 => t.data[0],
-            _ => 0.0,
+            _ => panic!("Runtime TypeError: Expected Float, found {:?}", self),
         }
     }
     pub fn as_int(&self) -> i64 {
         match self {
             Value::Int(i) => *i,
             Value::Float(f) => *f as i64,
-            _ => 0,
+            _ => panic!("Runtime TypeError: Expected Int, found {:?}", self),
         }
     }
     pub fn as_bool(&self) -> bool {
@@ -65,7 +65,7 @@ impl Value {
             Value::Bool(b) => *b,
             Value::Int(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
-            _ => false,
+            _ => panic!("Runtime TypeError: Expected Bool, found {:?}", self),
         }
     }
     pub fn display(&self) -> String {
@@ -1286,7 +1286,11 @@ impl VM {
                 match a {
                     Value::List(items) => {
                         let i = idx.as_int() as usize;
-                        Ok(items.get(i).cloned().unwrap_or(Value::Void))
+                        if i < items.len() {
+                            Ok(items[i].clone())
+                        } else {
+                            Err(format!("Index {} out of bounds for list of length {}", i, items.len()))
+                        }
                     }
                     Value::Tensor(t) => {
                         let i = idx.as_int() as usize;
