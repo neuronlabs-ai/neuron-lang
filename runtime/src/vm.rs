@@ -1794,12 +1794,9 @@ impl VM {
                     res, err_str, grid_size, block_size, kernel_params.len(), numel));
             }
             
-            // Synchronize to ensure kernel completion
-            let res = unsafe { (ctx.cuda.cuCtxSynchronize)() };
-            if res != 0 {
-                let err_str = cuda_error_string(ctx, res);
-                return Err(format!("cuCtxSynchronize failed (code {}): {}", res, err_str));
-            }
+            // No cuCtxSynchronize needed here — kernel launches on the default
+            // stream are serialized automatically. The Buffer will sync lazily
+            // when host data is actually needed (via ensure_host / as_slice).
             
             // Mark the output tensor's VRAM as current — NO download to host!
             // The data stays in VRAM until the CPU actually needs to read it
@@ -1911,11 +1908,9 @@ impl VM {
             return Err(format!("cublasDgemm_v2 failed: error code {}", res));
         }
 
-        // Synchronize CUDA context
-        let sync_res = unsafe { (ctx.cuda.cuCtxSynchronize)() };
-        if sync_res != 0 {
-            return Err(format!("cuCtxSynchronize failed: {}", sync_res));
-        }
+        // No cuCtxSynchronize needed here — cuBLAS calls on the default stream
+        // are serialized automatically. The Buffer will sync lazily when host
+        // data is actually needed (e.g., in ensure_host / as_slice).
 
         output_tensor.data.mark_device_dirty();
         Ok(Value::Tensor(output_tensor))
