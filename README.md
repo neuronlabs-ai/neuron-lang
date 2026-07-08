@@ -238,7 +238,10 @@ neuron-lang/
       parser.rs           Recursive descent parser
       types.rs            Type checker (shapes, temporal, causal, uncertainty)
       lower.rs            AST to IR with basic block CFG
+      optimize.rs         Constant folding optimization pass
       transpiler.rs       IR to Rust (JIT compilation)
+      py_transpiler.rs    IR to PyTorch Python
+      cuda_codegen.rs     Fused CUDA kernel generation
       errors.rs           Rust-style error display
   runtime/             # Backend
     src/
@@ -246,6 +249,9 @@ neuron-lang/
       autograd.rs         Gradient tape, backward pass, Adam/SGD
       tensor.rs           N-dimensional tensor operations
       causal.rs           Causal inference (observe/intervene/counterfactual)
+      device.rs           GPU device management (CUDA/UVM)
+      memory.rs           Memory pool allocator
+      effect.rs           Effect tracking
       jit_helpers.rs      Shared runtime for JIT-compiled code
   neuronc/             # CLI tool
   stdlib/              # Standard library (.nr files)
@@ -274,7 +280,7 @@ cargo test --test test_causal      # Causal inference operations
 | Property tests (VM == JIT) | 100 | All pass |
 | Endurance (100k iterations) | 100,000 | 0 NaN, 0 Inf, constant memory |
 | Compiler fuzzing | 1,000 | 0 panics |
-| Integration tests | 20+ | All pass |
+| Integration tests | 47 | All pass |
 
 ---
 
