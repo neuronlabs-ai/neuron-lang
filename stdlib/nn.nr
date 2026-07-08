@@ -445,6 +445,9 @@ fn hardswish(x: Tensor[B, D]) -> Tensor[B, D]:
   let shifted = x + 3.0
   let clamped = relu(shifted)
   return x * clamped * (1.0 / 6.0)
+fn silu(x: Tensor[B, D]) -> Tensor[B, D]:
+  // SiLU (Swish): x * sigmoid(x)
+  return x * sigmoid(x)
 
 fn gelu_approx(x: Tensor[B, D]) -> Tensor[B, D]:
   // GELU approximate: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
