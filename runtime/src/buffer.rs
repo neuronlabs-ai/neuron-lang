@@ -418,8 +418,27 @@ impl Clone for Buffer {
                 new_buf.copy_from_slice(self);
                 new_buf
             }
-            BufferStorage::Vram { size, .. } => {
-                // Clone by allocating new VRAM and downloading+re-uploading
+            BufferStorage::Vram { device_ptr, size, dirty, .. } => {
+                // Try GPU-to-GPU copy first to avoid CPU round-trip
+                let byte_size = *size * std::mem::size_of::<f64>();
+                let dirty_flag = *dirty.borrow();
+
+                if matches!(dirty_flag, DirtyFlag::DeviceCurrent | DirtyFlag::Clean) {
+                    if let Some(new_vram) = Self::try_new_vram(*size) {
+                        if let BufferStorage::Vram { device_ptr: dst_ptr, .. } = &new_vram.storage {
+                            if let Some(ctx) = crate::device::get_cuda_context() {
+                                let res = unsafe {
+                                    (ctx.cuda.cuMemcpyDtoD_v2)(*dst_ptr, *device_ptr, byte_size)
+                                };
+                                if res == 0 {
+                                    return new_vram;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback: download to host, then re-upload
                 self.ensure_host();
                 let data: Vec<f64> = self.iter().copied().collect();
                 let mut new_buf = if let Some(vram) = Self::try_new_vram(*size) {

@@ -98,6 +98,7 @@ pub struct CudaApi {
     pub cuMemFree_v2: unsafe extern "C" fn(dptr: u64) -> u32,
     pub cuMemcpyHtoD_v2: unsafe extern "C" fn(dstDevice: u64, srcHost: *const std::ffi::c_void, byteCount: usize) -> u32,
     pub cuMemcpyDtoH_v2: unsafe extern "C" fn(dstHost: *mut std::ffi::c_void, srcDevice: u64, byteCount: usize) -> u32,
+    pub cuMemcpyDtoD_v2: unsafe extern "C" fn(dstDevice: u64, srcDevice: u64, byteCount: usize) -> u32,
     pub cuMemsetD8: unsafe extern "C" fn(dstDevice: u64, uc: u8, n: usize) -> u32,
     pub cuMemPrefetchAsync: unsafe extern "C" fn(dev_ptr: u64, count: usize, dstDevice: i32, hStream: *mut std::ffi::c_void) -> u32,
     pub cuLaunchKernel: unsafe extern "C" fn(
@@ -236,6 +237,7 @@ impl CudaApi {
             let cuMemFree_v2 = *lib.get(b"cuMemFree_v2").map_err(|e| e.to_string())?;
             let cuMemcpyHtoD_v2 = *lib.get(b"cuMemcpyHtoD_v2").map_err(|e| e.to_string())?;
             let cuMemcpyDtoH_v2 = *lib.get(b"cuMemcpyDtoH_v2").map_err(|e| e.to_string())?;
+            let cuMemcpyDtoD_v2 = *lib.get(b"cuMemcpyDtoD_v2").map_err(|e| e.to_string())?;
             let cuMemsetD8 = *lib.get(b"cuMemsetD8").map_err(|e| e.to_string())?;
             let cuMemPrefetchAsync = *lib.get(b"cuMemPrefetchAsync").map_err(|e| e.to_string())?;
             let cuLaunchKernel = *lib.get(b"cuLaunchKernel").map_err(|e| e.to_string())?;
@@ -260,6 +262,7 @@ impl CudaApi {
                 cuMemFree_v2,
                 cuMemcpyHtoD_v2,
                 cuMemcpyDtoH_v2,
+                cuMemcpyDtoD_v2,
                 cuMemsetD8,
                 cuMemPrefetchAsync,
                 cuLaunchKernel,
