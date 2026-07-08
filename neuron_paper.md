@@ -7,7 +7,7 @@
 
 ## Abstract
 
-We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a prototype compiler in approximately 12,000 lines of Rust with 17 test suites), and evaluate the system on three worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
+We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a prototype compiler in approximately 13,500 lines of Rust with 17 test suites), and evaluate the system on three worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
 
 ---
 
@@ -45,7 +45,7 @@ We make the following claims and note their boundaries:
 
 1. Typing rules for four domain-specific type constructors, including a discussion of design trade-offs in temporal direction tracking (§3).
 2. Worked examples with exact compiler output for each error class (§5).
-3. A prototype implementation comprising ~12,000 lines of Rust, 17 test suites, and 8 standard library modules (§4).
+3. A prototype implementation comprising ~13,500 lines of Rust, 17 test suites, and 8 standard library modules (§4).
 4. A structural causal model engine supporting `observe`, `intervene`, and `counterfactual` with do-calculus semantics (§4.3).
 
 ---
@@ -208,7 +208,7 @@ For matrix multiplication `Tensor[..., n, k] @ Tensor[..., k, m]`, the inner dim
 
 ## 4. Implementation
 
-NEURON is implemented as a prototype compiler in Rust, comprising approximately 12,000 lines of source code, 17 test suites (1,673 lines), and 8 standard library modules (1,983 lines of NEURON source).
+NEURON is implemented as a prototype compiler in Rust, comprising approximately 13,500 lines of source code, 17 test suites (1,809 lines), and 8 standard library modules (2,028 lines of NEURON source).
 
 ### 4.1 Compiler Pipeline
 
