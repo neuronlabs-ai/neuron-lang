@@ -59,9 +59,14 @@ impl Tensor {
     pub fn new<B: Into<Buffer>>(data: B, shape: Vec<usize>) -> Self {
         let data = data.into();
         let strides = compute_strides(&shape);
-        debug_assert_eq!(data.len(), shape.iter().product::<usize>(),
+        let mut expected_len: usize = 1;
+        for &dim in &shape {
+            expected_len = expected_len.checked_mul(dim)
+                .expect("Tensor shape size overflowed");
+        }
+        assert_eq!(data.len(), expected_len,
             "Data length {} doesn't match shape {:?} (expected {})",
-            data.len(), shape, shape.iter().product::<usize>());
+            data.len(), shape, expected_len);
         Self {
             id: 0,
             data,

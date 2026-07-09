@@ -315,11 +315,12 @@ fn cmd_jit(path: &str) {
             let rust_code = neuron_compiler::transpiler::Transpiler::transpile(&output.ir);
 
             // 2. Setup temporary Cargo project
-            let temp_dir = std::env::temp_dir().join("neuron_jit_project");
+            let temp_dir = std::env::temp_dir().join(format!("neuron_jit_{}", std::process::id()));
             let src_dir = temp_dir.join("src");
             std::fs::create_dir_all(&src_dir).unwrap();
 
-            let cargo_toml_content = r#"[package]
+            let runtime_path = find_runtime_path();
+            let cargo_toml_content = format!(r#"[package]
 name = "neuron_jit"
 version = "0.1.0"
 edition = "2021"
@@ -328,8 +329,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-neuron-runtime = { path = "C:/Users/ADMIN/neuron-lang/runtime" }
-"#;
+neuron-runtime = {{ path = "{}" }}
+"#, runtime_path);
             std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
             std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
 
@@ -428,4 +429,34 @@ fn cmd_transpile(path: &str, output_path: Option<&String>) {
             process::exit(1);
         }
     }
+}
+
+fn find_runtime_path() -> String {
+    // 1. Check environment variable
+    if let Ok(p) = std::env::var("NEURON_RUNTIME_PATH") {
+        return p.replace("\\", "/");
+    }
+    // 2. Check relative to executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            // target/release or target/debug
+            if let Some(target) = parent.parent() {
+                if let Some(root) = target.parent() {
+                    let path = root.join("runtime");
+                    if path.exists() {
+                        return path.to_string_lossy().replace("\\", "/");
+                    }
+                }
+            }
+        }
+    }
+    // 3. Check relative to current working directory
+    let local_path = std::path::Path::new("runtime");
+    if local_path.exists() {
+        if let Ok(abs) = std::fs::canonicalize(local_path) {
+            return abs.to_string_lossy().replace("\\", "/");
+        }
+    }
+    // 4. Default fallback
+    "../runtime".to_string()
 }

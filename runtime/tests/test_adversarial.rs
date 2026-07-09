@@ -319,3 +319,62 @@ fn main() -> Tensor:
     // Zero learning rate should work — just no parameter update
     should_run_ok(src).expect("training with zero lr should not crash");
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  11. CODEX AUDIT REPRODUCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn adversarial_deep_parentheses() {
+    let mut src = "fn main() -> Int:\n  return ".to_string();
+    for _ in 0..1000 {
+        src.push('(');
+    }
+    src.push_str("0");
+    for _ in 0..1000 {
+        src.push(')');
+    }
+    src.push('\n');
+    let res = compile(&src, "test.nr");
+    let err = match res {
+        Ok(_) => panic!("expected compilation failure"),
+        Err(e) => format!("{:?}", e),
+    };
+    assert!(err.contains("recursion depth exceeded") || err.contains("ParseError"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_negative_dimension() {
+    let src = "fn main() -> Tensor:\n  return zeros(2, -3)\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("Negative dimension size"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_oversized_tensor() {
+    let src = "fn main() -> Tensor:\n  return zeros(4294967296, 4294967296)\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("overflow") || err.contains("too large"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_negative_index() {
+    let src = "fn main() -> Float:\n  let x = zeros(5)\n  let y = x[-1]\n  return y\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("Negative index"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_path_traversal_ohlcv() {
+    let src = "fn main() -> List[List[Float]]:\n  return load_ohlcv(\"../secret.csv\")\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("Security Error"), "unexpected error: {}", err);
+}

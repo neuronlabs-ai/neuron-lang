@@ -11,11 +11,28 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     filename: String,
+    recursion_depth: usize,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>, filename: impl Into<String>) -> Self {
-        Self { tokens, pos: 0, filename: filename.into() }
+        Self { tokens, pos: 0, filename: filename.into(), recursion_depth: 0 }
+    }
+
+    fn enter_recursive(&mut self) -> Result<(), NeuronError> {
+        self.recursion_depth += 1;
+        if self.recursion_depth > 50 {
+            return Err(NeuronError::new(
+                ErrorCode::ParseError,
+                "Maximum parser recursion depth exceeded".to_string(),
+                self.peek().span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn exit_recursive(&mut self) {
+        self.recursion_depth -= 1;
     }
 
     // ─── token helpers ──────────────────
@@ -632,6 +649,13 @@ impl Parser {
     // ═══════════════════════════════════════
 
     fn parse_statement(&mut self) -> Result<Stmt, NeuronError> {
+        self.enter_recursive()?;
+        let res = self.parse_statement_inner();
+        self.exit_recursive();
+        res
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Stmt, NeuronError> {
         match self.peek_type() {
             TokenType::Let => Ok(Stmt::Let(self.parse_let_stmt()?)),
             TokenType::For => Ok(Stmt::For(self.parse_for_stmt()?)),
@@ -766,6 +790,13 @@ impl Parser {
     // ═══════════════════════════════════════
 
     fn parse_expression(&mut self, min_prec: u8) -> Result<Expr, NeuronError> {
+        self.enter_recursive()?;
+        let res = self.parse_expression_inner(min_prec);
+        self.exit_recursive();
+        res
+    }
+
+    fn parse_expression_inner(&mut self, min_prec: u8) -> Result<Expr, NeuronError> {
         let mut left = self.parse_unary()?;
 
         loop {
@@ -805,6 +836,13 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, NeuronError> {
+        self.enter_recursive()?;
+        let res = self.parse_unary_inner();
+        self.exit_recursive();
+        res
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expr, NeuronError> {
         match self.peek_type() {
             TokenType::Minus => {
                 let span = self.span();

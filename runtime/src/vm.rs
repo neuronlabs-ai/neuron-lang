@@ -21,6 +21,49 @@ unsafe impl Sync for CudaModuleFunction {}
 
 static GLOBAL_KERNEL_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, CudaModuleFunction>>> = std::sync::OnceLock::new();
 
+fn validate_shape(inputs: &[ValueId], get: impl Fn(ValueId) -> Value) -> Result<Vec<usize>, String> {
+    let mut shape = Vec::new();
+    let mut product: usize = 1;
+    for &id in inputs {
+        let val = get(id).as_int();
+        if val < 0 {
+            return Err(format!("Runtime Error: Negative dimension size: {}", val));
+        }
+        let dim = val as usize;
+        if dim > 1_000_000 {
+            return Err(format!("Runtime Error: Dimension size too large: {}", dim));
+        }
+        product = product.checked_mul(dim)
+            .ok_or_else(|| "Runtime Error: Shape size overflow".to_string())?;
+        shape.push(dim);
+    }
+    if product > 10_000_000 {
+        return Err(format!("Runtime Error: Tensor size too large: {} elements", product));
+    }
+    Ok(shape)
+}
+
+fn validate_static_shape(shape: &[i64]) -> Result<Vec<usize>, String> {
+    let mut s = Vec::new();
+    let mut product: usize = 1;
+    for &val in shape {
+        if val < 0 {
+            return Err(format!("Runtime Error: Negative dimension size: {}", val));
+        }
+        let dim = val as usize;
+        if dim > 1_000_000 {
+            return Err(format!("Runtime Error: Dimension size too large: {}", dim));
+        }
+        product = product.checked_mul(dim)
+            .ok_or_else(|| "Runtime Error: Shape size overflow".to_string())?;
+        s.push(dim);
+    }
+    if product > 10_000_000 {
+        return Err(format!("Runtime Error: Tensor size too large: {} elements", product));
+    }
+    Ok(s)
+}
+
 /// Runtime value — everything the VM can hold.
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -346,6 +389,9 @@ impl VM {
                 return Err("load_ohlcv requires a file path argument".into());
             }
             let path = args[0].display();
+            if path.contains("..") || path.starts_with('/') || (path.len() >= 2 && path.chars().next().unwrap().is_alphabetic() && path.chars().nth(1).unwrap() == ':') {
+                return Err(format!("Security Error: Access to path '{}' is restricted", path));
+            }
             let mut data = Vec::new();
             if let Ok(content) = std::fs::read_to_string(&path) {
                 for line in content.lines() {
@@ -630,40 +676,40 @@ impl VM {
             }),
 
             IROp::Zeros(shape) => {
-                let s: Vec<usize> = if !node.inputs.is_empty() {
-                    node.inputs.iter().map(|id| get(id).as_int() as usize).collect()
+                let s = if !node.inputs.is_empty() {
+                    validate_shape(&node.inputs, |id| get(&id))?
                 } else {
-                    shape.iter().map(|&d| d as usize).collect()
+                    validate_static_shape(shape)?
                 };
                 let mut t = Tensor::zeros(&s);
                 t.id = self.tape.alloc_id();
                 Ok(Value::Tensor(t))
             }
             IROp::Ones(shape) => {
-                let s: Vec<usize> = if !node.inputs.is_empty() {
-                    node.inputs.iter().map(|id| get(id).as_int() as usize).collect()
+                let s = if !node.inputs.is_empty() {
+                    validate_shape(&node.inputs, |id| get(&id))?
                 } else {
-                    shape.iter().map(|&d| d as usize).collect()
+                    validate_static_shape(shape)?
                 };
                 let mut t = Tensor::ones(&s);
                 t.id = self.tape.alloc_id();
                 Ok(Value::Tensor(t))
             }
             IROp::Glorot(shape) => {
-                let s: Vec<usize> = if !node.inputs.is_empty() {
-                    node.inputs.iter().map(|id| get(id).as_int() as usize).collect()
+                let s = if !node.inputs.is_empty() {
+                    validate_shape(&node.inputs, |id| get(&id))?
                 } else {
-                    shape.iter().map(|&d| d as usize).collect()
+                    validate_static_shape(shape)?
                 };
                 let mut t = Tensor::glorot(&s).with_grad();
                 t.id = self.tape.alloc_id();
                 Ok(Value::Tensor(t))
             }
             IROp::Randn(shape) => {
-                let s: Vec<usize> = if !node.inputs.is_empty() {
-                    node.inputs.iter().map(|id| get(id).as_int() as usize).collect()
+                let s = if !node.inputs.is_empty() {
+                    validate_shape(&node.inputs, |id| get(&id))?
                 } else {
-                    shape.iter().map(|&d| d as usize).collect()
+                    validate_static_shape(shape)?
                 };
                 let mut t = Tensor::randn(&s);
                 t.id = self.tape.alloc_id();
@@ -824,6 +870,14 @@ impl VM {
                 let b = get(&node.inputs[1]);
                 match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
+                        if ta.ndim() < 2 || tb.ndim() < 2 {
+                            return Err(format!("Runtime Error: MatMul requires 2D tensors, got {}D and {}D", ta.ndim(), tb.ndim()));
+                        }
+                        let lhs_cols = ta.shape[ta.shape.len() - 1];
+                        let rhs_rows = tb.shape[tb.shape.len() - 2];
+                        if lhs_cols != rhs_rows {
+                            return Err(format!("Runtime Error: Shape mismatch in MatMul: cannot multiply shape {:?} by {:?}", ta.shape, tb.shape));
+                        }
                         let target_device = match node.device {
                             DeviceTarget::CPU => crate::device::Device::CPU,
                             DeviceTarget::CUDA(id) => crate::device::Device::CUDA(id),
@@ -897,6 +951,9 @@ impl VM {
                 let pred = get(&node.inputs[0]);
                 let target = get(&node.inputs[1]);
                 if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
+                    if p.shape != t.shape {
+                        return Err(format!("Runtime Error: CrossEntropy shape mismatch: pred {:?} vs target {:?}", p.shape, t.shape));
+                    }
                     Ok(Value::Tensor(self.tape.cross_entropy(p, t)))
                 } else { Ok(Value::Float(0.0)) }
             }
@@ -904,6 +961,9 @@ impl VM {
                 let pred = get(&node.inputs[0]);
                 let target = get(&node.inputs[1]);
                 if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
+                    if p.shape != t.shape {
+                        return Err(format!("Runtime Error: MSELoss shape mismatch: pred {:?} vs target {:?}", p.shape, t.shape));
+                    }
                     Ok(Value::Tensor(self.tape.mse(p, t)))
                 } else { Ok(Value::Float(0.0)) }
             }
@@ -1283,9 +1343,13 @@ impl VM {
             IROp::Index => {
                 let a = get(&node.inputs[0]);
                 let idx = get(&node.inputs[1]);
+                let idx_val = idx.as_int();
+                if idx_val < 0 {
+                    return Err(format!("Runtime Error: Negative index {} is not allowed", idx_val));
+                }
+                let i = idx_val as usize;
                 match a {
                     Value::List(items) => {
-                        let i = idx.as_int() as usize;
                         if i < items.len() {
                             Ok(items[i].clone())
                         } else {
@@ -1293,7 +1357,6 @@ impl VM {
                         }
                     }
                     Value::Tensor(t) => {
-                        let i = idx.as_int() as usize;
                         if t.ndim() == 2 {
                             let cols = t.shape[1];
                             let start = i * cols;
@@ -1372,14 +1435,20 @@ impl VM {
                 let idx = get(&node.inputs[1]);
                 let row = get(&node.inputs[2]);
                 if let (Value::Tensor(t), Value::Tensor(r)) = (&a, &row) {
-                    let i = idx.as_int() as usize;
+                    let idx_val = idx.as_int();
+                    if idx_val < 0 {
+                        return Err(format!("Runtime Error: Negative index {} is not allowed in UpdateRow", idx_val));
+                    }
+                    let i = idx_val as usize;
                     let mut new_data = t.data.clone();
                     let row_len = r.numel();
                     let start = i * row_len;
                     if start + row_len <= new_data.len() {
                         new_data[start..start + row_len].copy_from_slice(&r.data[..row_len]);
+                        Ok(Value::Tensor(Tensor::new(new_data, t.shape.clone())))
+                    } else {
+                        Err(format!("Runtime Error: Index {} out of bounds for UpdateRow on tensor of size {}", i, t.shape[0]))
                     }
-                    Ok(Value::Tensor(Tensor::new(new_data, t.shape.clone())))
                 } else {
                     Ok(a)
                 }
