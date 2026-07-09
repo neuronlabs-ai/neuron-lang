@@ -322,7 +322,7 @@ The `neuronc` binary will be at `target/release/neuronc`.
 ## Contact
 
 For commercial inquiries, licensing questions, or support requests, please contact:
-📩 [neuronlabs768@gmail.com](mailto:neuronlabs768@gmail.com)
+📩 [contact@neuron-labs.org](mailto:contact@neuron-labs.org)
 
 ---
 
