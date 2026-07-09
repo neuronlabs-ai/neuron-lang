@@ -585,7 +585,7 @@ table.comparison-table {
 .benchmarks-section { padding: 6rem 0; }
 .benchmarks-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1.25rem;
   margin-top: 3rem;
 }
@@ -622,6 +622,7 @@ table.comparison-table {
 .bar-fill.vm { background: linear-gradient(90deg, #52525b, #71717a); }
 .bar-fill.jit { background: var(--gradient-brand); }
 .bar-fill.pytorch { background: linear-gradient(90deg, #ee4c2c, #ff7043); }
+.bar-fill.gpu { background: linear-gradient(90deg, #3b82f6, #22d3ee); }
 
 .optimizations-card {
   background: var(--bg-card);
