@@ -377,7 +377,7 @@ model LinearNet:
       waitlistSubmitBtn.textContent = "Joining...";
       waitlistSubmitBtn.style.opacity = "0.7";
       
-      fetch("https://formsubmit.co/ajax/contact@neuron-labs.org", {
+      fetch("https://formsubmit.co/ajax/contact@neuron-lab.org", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
