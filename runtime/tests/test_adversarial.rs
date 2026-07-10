@@ -496,3 +496,225 @@ fn adversarial_drive_letter_path() {
     let err = res.unwrap_err();
     assert!(err.contains("Security Error"), "drive letter path should be blocked: {}", err);
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  13. PHASE 3 ADVOCATED HARDENING TESTS
+// ═══════════════════════════════════════════════════════════════
+
+fn run_jit_helper(src: &str) -> Result<neuron_runtime::vm::Value, String> {
+    let compile_res = neuron_compiler::compile(src, "test_jit_input.nr")
+        .map_err(|e| format!("{:?}", e))?;
+    
+    let mut rust_code = neuron_compiler::transpiler::Transpiler::transpile(&compile_res.ir);
+    rust_code = format!("#![allow(warnings)]\n{}", rust_code);
+    
+    let temp_dir = std::env::temp_dir().join(format!(
+        "neuron_jit_test_project_adv_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let src_dir = temp_dir.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    
+    let runtime_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .to_string_lossy()
+        .replace('\\', "/");
+    let cargo_toml_content = format!(r#"[package]
+name = "neuron_jit_test_adv"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+neuron-runtime = {{ path = "{}" }}
+"#, runtime_path);
+    std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
+    std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
+    
+    let compile_status = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&temp_dir)
+        .status()
+        .map_err(|e| format!("Failed to run cargo: {:?}", e))?;
+        
+    if !compile_status.success() {
+        return Err("JIT compilation failed".to_string());
+    }
+    
+    let lib_path = if cfg!(target_os = "windows") {
+        temp_dir.join("target").join("debug").join("neuron_jit_test_adv.dll")
+    } else if cfg!(target_os = "macos") {
+        temp_dir.join("target").join("debug").join("libneuron_jit_test_adv.dylib")
+    } else {
+        temp_dir.join("target").join("debug").join("libneuron_jit_test_adv.so")
+    };
+    
+    let unique_dll_name = format!(
+        "neuron_jit_test_adv_{}.dll",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    let load_lib_path = temp_dir.join("target").join("debug").join(&unique_dll_name);
+    std::fs::copy(&lib_path, &load_lib_path).unwrap();
+
+    let lib = unsafe { libloading::Library::new(&load_lib_path) }
+        .map_err(|e| format!("Failed to load JIT library: {:?}", e))?;
+        
+    let result = unsafe {
+        let run_main: libloading::Symbol<fn(&mut VM) -> neuron_runtime::vm::Value> = lib
+            .get(b"run_main")
+            .map_err(|e| format!("Failed to resolve run_main: {:?}", e))?;
+        let mut vm = VM::new();
+        run_main(&mut vm)
+    };
+    
+    drop(lib);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    
+    Ok(result)
+}
+
+#[test]
+fn adversarial_python_string_escaping() {
+    let src = r#"
+fn main() -> String:
+  let s = "{__import__('builtins').print('NEURON_FSTRING_EXECUTED')}"
+  return s
+"#;
+    let compile_res = compile(src, "test_py.nr").unwrap();
+    let py_code = neuron_compiler::py_transpiler::PyTranspiler::transpile(&compile_res.ir);
+    
+    assert!(!py_code.contains("f\"\"\""), "Python transpiler should not emit f-strings for string literals");
+    assert!(py_code.contains("\"{__import__"), "Python transpiler should escape or output literal strings safely");
+}
+
+#[test]
+fn adversarial_jit_panic_safety() {
+    let src = "fn main() -> Tensor:\n  return zeros(-1)\n";
+    let res = run_jit_helper(src);
+    assert!(res.is_ok(), "JIT run should succeed (no crash)");
+    let val = res.unwrap();
+    match val {
+        neuron_runtime::vm::Value::Err(msg) => {
+            assert!(msg.contains("Negative dimension size"), "Unexpected error: {}", msg);
+        }
+        _ => panic!("Expected Value::Err, got {:?}", val),
+    }
+}
+
+#[test]
+fn adversarial_jit_imports() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "neuron_import_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    
+    let helper_code = r#"
+fn helper() -> Int:
+  return 7
+"#;
+    let main_code = r#"
+from helper import helper
+
+fn main() -> Int:
+  let x = helper()
+  return x
+"#;
+    
+    let helper_path = temp_dir.join("helper.nr");
+    let main_path = temp_dir.join("main.nr");
+    std::fs::write(&helper_path, helper_code).unwrap();
+    std::fs::write(&main_path, main_code).unwrap();
+    
+    let source = std::fs::read_to_string(&main_path).unwrap();
+    let compile_res = neuron_compiler::compile_with_imports(&source, main_path.to_str().unwrap());
+    assert!(compile_res.is_ok(), "Compilation with imports failed: {:?}", compile_res.err());
+    
+    let ir = compile_res.unwrap().ir;
+    let mut rust_code = neuron_compiler::transpiler::Transpiler::transpile(&ir);
+    rust_code = format!("#![allow(warnings)]\n{}", rust_code);
+    
+    // Now compile and run JIT
+    let jit_dir = std::env::temp_dir().join(format!(
+        "neuron_jit_test_project_import_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let src_dir = jit_dir.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    
+    let runtime_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .to_string_lossy()
+        .replace('\\', "/");
+    let cargo_toml_content = format!(r#"[package]
+name = "neuron_jit_test_import"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+neuron-runtime = {{ path = "{}" }}
+"#, runtime_path);
+    std::fs::write(jit_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
+    std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
+    
+    let compile_status = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&jit_dir)
+        .status()
+        .unwrap();
+        
+    assert!(compile_status.success());
+    
+    let lib_path = if cfg!(target_os = "windows") {
+        jit_dir.join("target").join("debug").join("neuron_jit_test_import.dll")
+    } else if cfg!(target_os = "macos") {
+        jit_dir.join("target").join("debug").join("libneuron_jit_test_import.dylib")
+    } else {
+        jit_dir.join("target").join("debug").join("libneuron_jit_test_import.so")
+    };
+    
+    let unique_dll_name = format!(
+        "neuron_jit_test_import_{}.dll",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    let load_lib_path = jit_dir.join("target").join("debug").join(&unique_dll_name);
+    std::fs::copy(&lib_path, &load_lib_path).unwrap();
+
+    let lib = unsafe { libloading::Library::new(&load_lib_path) }.unwrap();
+    let result = unsafe {
+        let run_main: libloading::Symbol<fn(&mut VM) -> neuron_runtime::vm::Value> = lib
+            .get(b"run_main")
+            .unwrap();
+        let mut vm = VM::new();
+        run_main(&mut vm)
+    };
+    
+    drop(lib);
+    let _ = std::fs::remove_dir_all(&jit_dir);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    
+    match result {
+        neuron_runtime::vm::Value::Int(val) => assert_eq!(val, 7),
+        _ => panic!("Expected Int(7), got {:?}", result),
+    }
+}
+

@@ -39,7 +39,7 @@ def initialize_globals():
                     s
                 }
                 IRConst::Bool(v) => if *v { "True".to_string() } else { "False".to_string() },
-                IRConst::String(s) => format!("f\"\"\"{}\"\"\"", s),
+                IRConst::String(s) => escape_python_string(s),
                 IRConst::Tensor(data, shape) => {
                     format!("torch.tensor({:?}, dtype=torch.float64, requires_grad=True).reshape({:?})", data, shape)
                 }
@@ -212,6 +212,112 @@ def py_obj_call(fn_name, args):
             return globals()[resolved_name](args)
     raise AttributeError(f"Method '{resolved_name}' not found")
 
+def validate_shape(shape):
+    product = 1
+    for dim in shape:
+        if dim < 0:
+            raise ValueError(f"Runtime Error: Negative dimension size: {dim}")
+        if dim > 1000000:
+            raise ValueError(f"Runtime Error: Dimension size too large: {dim}")
+        product *= dim
+    if product > 10000000:
+        raise ValueError(f"Runtime Error: Tensor size too large: {product} elements")
+    return shape
+
+def randn_tensor(shape):
+    validate_shape(shape)
+    return torch.randn(shape, dtype=torch.float64, requires_grad=True)
+
+def glorot_tensor(shape):
+    validate_shape(shape)
+    t = torch.empty(shape, dtype=torch.float64)
+    torch.nn.init.xavier_uniform_(t)
+    t.requires_grad = True
+    return t
+
+def py_zeros(shape):
+    validate_shape(shape)
+    return torch.zeros(shape, dtype=torch.float64, requires_grad=True)
+
+def py_ones(shape):
+    validate_shape(shape)
+    return torch.ones(shape, dtype=torch.float64, requires_grad=True)
+
+def py_mod(a, b):
+    if hasattr(b, 'data'):
+        if (b == 0).any():
+            raise ValueError("Runtime Error: Division by zero in modulo operation")
+        return a % b
+    if b == 0 or b == 0.0:
+        raise ValueError("Runtime Error: Division by zero in modulo operation")
+    return a % b
+
+def py_and(a, b):
+    a_bool = a.item() if hasattr(a, 'item') else bool(a)
+    b_bool = b.item() if hasattr(b, 'item') else bool(b)
+    return a_bool and b_bool
+
+def py_or(a, b):
+    a_bool = a.item() if hasattr(a, 'item') else bool(a)
+    b_bool = b.item() if hasattr(b, 'item') else bool(b)
+    return a_bool or b_bool
+
+def py_not(a):
+    a_bool = a.item() if hasattr(a, 'item') else bool(a)
+    return not a_bool
+
+def py_index(obj, idx):
+    idx_val = int(idx.item()) if hasattr(idx, 'item') else int(idx)
+    if idx_val < 0:
+        raise ValueError(f"Runtime Error: Negative index {idx_val} is not allowed")
+    if hasattr(obj, 'shape'):
+        if len(obj.shape) == 2:
+            if idx_val >= obj.shape[0]:
+                raise ValueError(f"Runtime Error: Index {idx_val} out of bounds")
+            return obj[idx_val:idx_val+1]
+        elif len(obj.shape) == 1:
+            if idx_val >= obj.shape[0]:
+                raise ValueError(f"Runtime Error: Index {idx_val} out of bounds")
+            return obj[idx_val]
+    elif isinstance(obj, list):
+        if idx_val >= len(obj):
+            raise ValueError(f"Runtime Error: Index {idx_val} out of bounds")
+        return obj[idx_val]
+    else:
+        return obj[idx_val]
+
+def py_concat(tensors, dim):
+    if not tensors:
+        return torch.zeros([0], dtype=torch.float64)
+    total_elements = sum(t.numel() for t in tensors)
+    if total_elements > 10000000:
+        raise ValueError(f"Runtime Error: Tensor size too large in Concat: {total_elements} elements")
+    return torch.cat(tensors, dim=dim)
+
+def py_reshape(tensor, new_shape):
+    product = 1
+    for dim in new_shape:
+        product *= dim
+    if tensor.numel() != product:
+        raise ValueError(f"Runtime Error: Cannot reshape tensor of shape {list(tensor.shape)} to {new_shape}")
+    return tensor.reshape(new_shape)
+
+def py_sum(tensor, dim):
+    if dim is not None:
+        ndim = len(tensor.shape)
+        if dim < 0 or dim >= ndim:
+            raise ValueError(f"Runtime Error: Sum dimension {dim} out of bounds for tensor of rank {ndim}")
+        return tensor.sum(dim=dim)
+    return tensor.sum()
+
+def py_mean(tensor, dim):
+    if dim is not None:
+        ndim = len(tensor.shape)
+        if dim < 0 or dim >= ndim:
+            raise ValueError(f"Runtime Error: Mean dimension {dim} out of bounds for tensor of rank {ndim}")
+        return tensor.mean(dim=dim)
+    return tensor.mean()
+
 "#);
 
         let global_names: std::collections::HashSet<String> = program.globals.iter().map(|g| g.name.clone()).collect();
@@ -302,7 +408,7 @@ if __name__ == "__main__":
                             s
                         }
                         IRConst::Bool(v) => if *v { "True".to_string() } else { "False".to_string() },
-                        IRConst::String(s) => format!("f\"\"\"{}\"\"\"", s),
+                        IRConst::String(s) => escape_python_string(s),
                         IRConst::Tensor(data, shape) => {
                             format!("torch.tensor({:?}, dtype=torch.float64, requires_grad=True).reshape({:?})", data, shape)
                         }
@@ -314,7 +420,7 @@ if __name__ == "__main__":
                         } else {
                             format!("{:?}", shape)
                         };
-                        format!("torch.zeros({}, dtype=torch.float64, requires_grad=True)", shape_str)
+                        format!("py_zeros({})", shape_str)
                     }
                     IROp::Ones(shape) => {
                         let shape_str = if !node.inputs.is_empty() {
@@ -323,7 +429,7 @@ if __name__ == "__main__":
                         } else {
                             format!("{:?}", shape)
                         };
-                        format!("torch.ones({}, dtype=torch.float64, requires_grad=True)", shape_str)
+                        format!("py_ones({})", shape_str)
                     }
                     IROp::Glorot(shape) => {
                         let shape_str = if !node.inputs.is_empty() {
@@ -354,6 +460,10 @@ if __name__ == "__main__":
                     IROp::Tanh => format!("torch.tanh(v{})", node.inputs[0]),
                     IROp::Softmax { dim } => format!("torch.softmax(v{}, dim={})", node.inputs[0], dim),
                     IROp::MSELoss => format!("torch.nn.functional.mse_loss(v{}, v{})", node.inputs[0], node.inputs[1]),
+                    IROp::Mod => format!("py_mod(v{}, v{})", node.inputs[0], node.inputs[1]),
+                    IROp::And => format!("py_and(v{}, v{})", node.inputs[0], node.inputs[1]),
+                    IROp::Or => format!("py_or(v{}, v{})", node.inputs[0], node.inputs[1]),
+                    IROp::Not => format!("py_not(v{})", node.inputs[0]),
                     IROp::GeLU => format!("torch.nn.functional.gelu(v{})", node.inputs[0]),
                     IROp::CrossEntropy => format!("torch.nn.functional.cross_entropy(v{}, v{})", node.inputs[0], node.inputs[1]),
                     IROp::Lt => format!("v{} < v{}", node.inputs[0], node.inputs[1]),
@@ -363,7 +473,7 @@ if __name__ == "__main__":
                     IROp::Eq => format!("v{} == v{}", node.inputs[0], node.inputs[1]),
                     IROp::Neq => format!("v{} != v{}", node.inputs[0], node.inputs[1]),
                     IROp::ListLen => format!("len(v{})", node.inputs[0]),
-                    IROp::Index => format!("v{}[int(v{})]", node.inputs[0], node.inputs[1]),
+                    IROp::Index => format!("py_index(v{}, v{})", node.inputs[0], node.inputs[1]),
                     IROp::Nop => {
                         if !node.inputs.is_empty() {
                             let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}", id)).collect();
@@ -373,19 +483,13 @@ if __name__ == "__main__":
                         }
                     }
                     IROp::StopGrad => format!("v{}.detach()", node.inputs[0]),
-                    IROp::Sum { dim } => match dim {
-                        Some(d) => format!("v{}.sum(dim={})", node.inputs[0], d),
-                        None => format!("v{}.sum()", node.inputs[0]),
-                    },
-                    IROp::Mean { dim } => match dim {
-                        Some(d) => format!("v{}.mean(dim={})", node.inputs[0], d),
-                        None => format!("v{}.mean()", node.inputs[0]),
-                    },
+                    IROp::Sum { dim } => format!("py_sum(v{}, {:?})", node.inputs[0], dim),
+                    IROp::Mean { dim } => format!("py_mean(v{}, {:?})", node.inputs[0], dim),
                     IROp::Sqrt => format!("torch.sqrt(v{})", node.inputs[0]),
-                    IROp::Reshape(new_shape) => format!("v{}.reshape({:?})", node.inputs[0], new_shape),
+                    IROp::Reshape(new_shape) => format!("py_reshape(v{}, {:?})", node.inputs[0], new_shape),
                     IROp::UpdateRow => format!("update_row(v{}, int(v{}), v{})", node.inputs[0], node.inputs[1], node.inputs[2]),
                     IROp::Concat { dim } => {
-                        format!("torch.cat(v{}, dim={})", node.inputs[0], dim)
+                        format!("py_concat(v{}, dim={})", node.inputs[0], dim)
                     }
                     IROp::Observe => {
                         format!("{{\"data\": v{}, \"mode\": \"observed\"}}", node.inputs[0])
@@ -487,7 +591,7 @@ r#"(lambda s: (
         torch.tensor([(lambda c, idx: math.sin(ord(c)))(c, i) for i, c in enumerate(s[:8])], dtype=torch.float64)
     ))(v{})"#, node.inputs[0])
                     }
-                    _ => "None".to_string(),
+                    _ => panic!("Unsupported IR operation in PyTranspiler: {:?}", node.op),
                 };
 
                 // Emit instruction assignment
@@ -522,4 +626,21 @@ r#"(lambda s: (
         f_code.push_str("\n");
         f_code
     }
+}
+
+fn escape_python_string(s: &str) -> String {
+    let mut escaped = String::new();
+    escaped.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped.push('"');
+    escaped
 }

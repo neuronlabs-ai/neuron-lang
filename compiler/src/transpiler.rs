@@ -84,7 +84,22 @@ r#"// --- Entry Point ---
 #[no_mangle]
 pub extern "Rust" fn run_main(vm: &mut VM) -> Value {
     initialize_globals(vm);
-    main(vm, vec![])
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        main(vm, vec![])
+    }));
+    match result {
+        Ok(val) => val,
+        Err(err) => {
+            let msg = if let Some(s) = err.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = err.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic in JIT execution".to_string()
+            };
+            Value::Err(msg)
+        }
+    }
 }
 "#);
 

@@ -304,7 +304,7 @@ fn cmd_run(path: &str) {
 fn cmd_jit(path: &str) {
     let source = read_source(path);
 
-    match neuron_compiler::compile(&source, path) {
+    match neuron_compiler::compile_with_imports(&source, path) {
         Ok(output) => {
             // Print warnings
             for warn in &output.result.warnings {
@@ -377,6 +377,10 @@ neuron-runtime = {{ path = "{}" }}
             eprintln!("✓ JIT execution completed in {:.2} ms", run_dur);
 
             match result {
+                neuron_runtime::vm::Value::Err(msg) => {
+                    eprintln!("\nRUNTIME ERROR: {}", msg);
+                    std::process::exit(1);
+                }
                 neuron_runtime::vm::Value::Void => {}
                 _ => println!("{}", result.display()),
             }

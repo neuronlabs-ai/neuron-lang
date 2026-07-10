@@ -172,7 +172,22 @@ r#"
 #[no_mangle]
 pub extern "Rust" fn run_main_{}(vm: &mut VM) -> Value {{
     initialize_globals_{}(vm);
-    main_{}(vm, vec![])
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
+        main_{}(vm, vec![])
+    }}));
+    match result {{
+        Ok(val) => val,
+        Err(err) => {{
+            let msg = if let Some(s) = err.downcast_ref::<&str>() {{
+                s.to_string()
+            }} else if let Some(s) = err.downcast_ref::<String>() {{
+                s.clone()
+            }} else {{
+                "Unknown panic in JIT execution".to_string()
+            }};
+            Value::Err(msg)
+        }}
+    }}
 }}
 "#,
             i, i, i

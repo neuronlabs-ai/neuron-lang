@@ -82,6 +82,7 @@ pub enum Value {
     CausalModel { name: String, variables: Vec<String> },
     Void,
     None,
+    Err(String),
 }
 
 impl Value {
@@ -149,6 +150,7 @@ impl Value {
             Value::CausalModel { name, .. } => format!("<CausalModel {}>", name),
             Value::Void => "void".into(),
             Value::None => "None".into(),
+            Value::Err(msg) => format!("Runtime Error: {}", msg),
         }
     }
 }
