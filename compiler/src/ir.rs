@@ -85,6 +85,7 @@ pub enum IROp {
     Sub,
     Mul,
     Div,
+    Mod,
     Neg,
     MatMul,
     
@@ -95,6 +96,9 @@ pub enum IROp {
     Gte,
     Eq,
     Neq,
+    And,
+    Or,
+    Not,
     ListLen,
     
     // ── Activations ──

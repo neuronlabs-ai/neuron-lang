@@ -389,7 +389,7 @@ impl VM {
                 return Err("load_ohlcv requires a file path argument".into());
             }
             let path = args[0].display();
-            if path.contains("..") || path.starts_with('/') || (path.len() >= 2 && path.chars().next().unwrap().is_alphabetic() && path.chars().nth(1).unwrap() == ':') {
+            if path.contains("..") || path.starts_with('/') || path.starts_with('\\') || (path.len() >= 2 && path.chars().next().unwrap().is_alphabetic() && path.chars().nth(1).unwrap() == ':') {
                 return Err(format!("Security Error: Access to path '{}' is restricted", path));
             }
             let mut data = Vec::new();
@@ -858,6 +858,25 @@ impl VM {
                     _ => Ok(Value::Float(a.as_float() / b.as_float())),
                 }
             }
+            IROp::Mod => {
+                let a = get(&node.inputs[0]);
+                let b = get(&node.inputs[1]);
+                match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => {
+                        if *y == 0 {
+                            return Err("Runtime Error: Division by zero in modulo operation".to_string());
+                        }
+                        Ok(Value::Int(x % y))
+                    }
+                    _ => {
+                        let y_val = b.as_float();
+                        if y_val == 0.0 {
+                            return Err("Runtime Error: Division by zero in modulo operation".to_string());
+                        }
+                        Ok(Value::Float(a.as_float() % y_val))
+                    }
+                }
+            }
             IROp::Neg => {
                 let a = get(&node.inputs[0]);
                 match &a {
@@ -1242,6 +1261,11 @@ impl VM {
                             if same_batch {
                                 let b = tensors[0].shape[0];
                                 let d_total: usize = tensors.iter().map(|t| t.shape[1]).sum();
+                                let total_elements = b.checked_mul(d_total)
+                                    .ok_or_else(|| "Runtime Error: Concat shape size overflow".to_string())?;
+                                if total_elements > 10_000_000 {
+                                    return Err(format!("Runtime Error: Tensor size too large in Concat: {} elements", total_elements));
+                                }
                                 let mut data = vec![0.0; b * d_total];
                                 for row in 0..b {
                                     let mut col_offset = 0;
@@ -1257,6 +1281,9 @@ impl VM {
                                 return Ok(Value::Tensor(Tensor::new(data, vec![b, d_total])));
                             } else {
                                 let total_len: usize = tensors.iter().map(|t| t.numel()).sum();
+                                if total_len > 10_000_000 {
+                                    return Err(format!("Runtime Error: Tensor size too large in Concat: {} elements", total_len));
+                                }
                                 let mut data = Vec::with_capacity(total_len);
                                 for t in &tensors { data.extend_from_slice(&t.data); }
                                 return Ok(Value::Tensor(Tensor::new(data, vec![total_len])));
@@ -1271,6 +1298,10 @@ impl VM {
                 if let Some(first) = node.inputs.first() {
                     let val = get(first);
                     if let Value::Tensor(t) = &val {
+                        let ndim = t.ndim();
+                        if *dim0 >= ndim || *dim1 >= ndim {
+                            return Err(format!("Runtime Error: Transpose dimensions ({}, {}) out of bounds for tensor of rank {}", dim0, dim1, ndim));
+                        }
                         return Ok(Value::Tensor(t.transpose(*dim0, *dim1)));
                     }
                 }
@@ -1331,6 +1362,20 @@ impl VM {
                     (Value::Str(x), Value::Str(y)) => x != y,
                     _ => a.as_float() != b.as_float(),
                 }))
+            }
+            IROp::And => {
+                let a = get(&node.inputs[0]);
+                let b = get(&node.inputs[1]);
+                Ok(Value::Bool(a.as_bool() && b.as_bool()))
+            }
+            IROp::Or => {
+                let a = get(&node.inputs[0]);
+                let b = get(&node.inputs[1]);
+                Ok(Value::Bool(a.as_bool() || b.as_bool()))
+            }
+            IROp::Not => {
+                let a = get(&node.inputs[0]);
+                Ok(Value::Bool(!a.as_bool()))
             }
             IROp::ListLen => {
                 let a = get(&node.inputs[0]);
@@ -1395,6 +1440,11 @@ impl VM {
             IROp::Sum { dim } => {
                 let a = get(&node.inputs[0]);
                 if let Value::Tensor(t) = &a {
+                    if let Some(d) = dim {
+                        if *d < 0 || (*d as usize) >= t.ndim() {
+                            return Err(format!("Runtime Error: Sum dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
+                        }
+                    }
                     let dim_usize = dim.map(|d| d as usize);
                     Ok(Value::Tensor(self.tape.sum(t, dim_usize)))
                 } else {
@@ -1404,6 +1454,11 @@ impl VM {
             IROp::Mean { dim } => {
                 let a = get(&node.inputs[0]);
                 if let Value::Tensor(t) = &a {
+                    if let Some(d) = dim {
+                        if *d < 0 || (*d as usize) >= t.ndim() {
+                            return Err(format!("Runtime Error: Mean dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
+                        }
+                    }
                     let dim_usize = dim.map(|d| d as usize);
                     Ok(Value::Tensor(self.tape.mean(t, dim_usize)))
                 } else {
@@ -1424,7 +1479,24 @@ impl VM {
             IROp::Reshape(new_shape) => {
                 let a = get(&node.inputs[0]);
                 if let Value::Tensor(t) = &a {
-                    let shape_usize: Vec<usize> = new_shape.iter().map(|&x| x as usize).collect();
+                    // Validate new shape doesn't have negative numbers or zero-element overflow
+                    let mut new_n: usize = 1;
+                    let mut shape_usize = Vec::new();
+                    for &x in new_shape {
+                        if x <= 0 {
+                            return Err(format!("Runtime Error: Reshape dimension must be positive, got {}", x));
+                        }
+                        let x_usize = x as usize;
+                        if let Some(prod) = new_n.checked_mul(x_usize) {
+                            new_n = prod;
+                        } else {
+                            return Err("Runtime Error: Reshape dimension product overflows usize".to_string());
+                        }
+                        shape_usize.push(x_usize);
+                    }
+                    if t.numel() != new_n {
+                        return Err(format!("Runtime Error: Cannot reshape tensor of size {} to shape {:?}", t.numel(), shape_usize));
+                    }
                     Ok(Value::Tensor(t.reshape(&shape_usize)))
                 } else {
                     Ok(a)
@@ -1440,6 +1512,9 @@ impl VM {
                         return Err(format!("Runtime Error: Negative index {} is not allowed in UpdateRow", idx_val));
                     }
                     let i = idx_val as usize;
+                    if t.shape.len() >= 2 && r.numel() != t.shape[1] {
+                        return Err(format!("Runtime Error: Row width mismatch in UpdateRow: expected {}, got {}", t.shape[1], r.numel()));
+                    }
                     let mut new_data = t.data.clone();
                     let row_len = r.numel();
                     let start = i * row_len;

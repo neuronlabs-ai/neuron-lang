@@ -210,7 +210,17 @@ fn jit_neg(vm: &mut VM, a: &Value) -> Value {
 
 fn jit_matmul(vm: &mut VM, a: &Value, b: &Value) -> Value {
     match (a, b) {
-        (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.matmul(ta, tb)),
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            if ta.ndim() < 2 || tb.ndim() < 2 {
+                panic!("Runtime Error: MatMul requires 2D tensors, got {}D and {}D", ta.ndim(), tb.ndim());
+            }
+            let lhs_cols = ta.shape[ta.shape.len() - 1];
+            let rhs_rows = tb.shape[tb.shape.len() - 2];
+            if lhs_cols != rhs_rows {
+                panic!("Runtime Error: Shape mismatch in MatMul: cannot multiply shape {:?} by {:?}", ta.shape, tb.shape);
+            }
+            Value::Tensor(vm.tape.matmul(ta, tb))
+        }
         _ => panic!("MatMul requires tensor operands"),
     }
 }
@@ -249,7 +259,12 @@ fn jit_softmax(vm: &mut VM, a: &Value, dim: i64) -> Value {
 
 fn jit_mse(vm: &mut VM, a: &Value, b: &Value) -> Value {
     match (a, b) {
-        (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.mse(ta, tb)),
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            if ta.shape != tb.shape {
+                panic!("Runtime Error: MSELoss shape mismatch: pred {:?} vs target {:?}", ta.shape, tb.shape);
+            }
+            Value::Tensor(vm.tape.mse(ta, tb))
+        }
         _ => Value::Float(0.0),
     }
 }
@@ -295,13 +310,16 @@ fn jit_list_len(a: &Value) -> Value {
 }
 
 fn jit_index(a: &Value, idx: &Value) -> Value {
+    let idx_val = idx.as_int();
+    if idx_val < 0 {
+        panic!("Runtime Error: Negative index {} is not allowed", idx_val);
+    }
+    let i = idx_val as usize;
     match a {
         Value::List(items) => {
-            let i = idx.as_int() as usize;
             items.get(i).cloned().unwrap_or(Value::Void)
         }
         Value::Tensor(t) => {
-            let i = idx.as_int() as usize;
             if t.ndim() == 2 {
                 let cols = t.shape[1];
                 let start = i * cols;
@@ -347,6 +365,10 @@ fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
             if same_batch {
                 let b = tensors[0].shape[0];
                 let d_total: usize = tensors.iter().map(|t| t.shape[1]).sum();
+                let total_elements = b.checked_mul(d_total).expect("Runtime Error: Concat shape size overflow");
+                if total_elements > 10_000_000 {
+                    panic!("Runtime Error: Tensor size too large in Concat: {} elements", total_elements);
+                }
                 let mut data = vec![0.0; b * d_total];
                 for row in 0..b {
                     let mut col_offset = 0;
@@ -362,6 +384,9 @@ fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
                 return Value::Tensor(Tensor::new(data, vec![b, d_total]));
             } else {
                 let total_len: usize = tensors.iter().map(|t| t.numel()).sum();
+                if total_len > 10_000_000 {
+                    panic!("Runtime Error: Tensor size too large in Concat: {} elements", total_len);
+                }
                 let mut data = Vec::with_capacity(total_len);
                 for t in &tensors { data.extend_from_slice(&t.data); }
                 return Value::Tensor(Tensor::new(data, vec![total_len]));
@@ -381,13 +406,24 @@ fn jit_gelu(vm: &mut VM, a: &Value) -> Value {
 
 fn jit_cross_entropy(vm: &mut VM, a: &Value, b: &Value) -> Value {
     match (a, b) {
-        (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.cross_entropy(ta, tb)),
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            if ta.shape != tb.shape {
+                panic!("Runtime Error: CrossEntropy shape mismatch: pred {:?} vs target {:?}", ta.shape, tb.shape);
+            }
+            Value::Tensor(vm.tape.cross_entropy(ta, tb))
+        }
         _ => Value::Float(0.0),
     }
 }
 
 fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
     if let Value::Tensor(t) = a {
+        if let Some(d) = dim {
+            let ndim = t.ndim() as i64;
+            if d < 0 || d >= ndim {
+                panic!("Runtime Error: Sum dimension {} out of bounds for tensor of rank {}", d, ndim);
+            }
+        }
         Value::Tensor(vm.tape.sum(t, dim.map(|d| d as usize)))
     } else {
         a.clone()
@@ -396,6 +432,12 @@ fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
 
 fn jit_mean(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
     if let Value::Tensor(t) = a {
+        if let Some(d) = dim {
+            let ndim = t.ndim() as i64;
+            if d < 0 || d >= ndim {
+                panic!("Runtime Error: Mean dimension {} out of bounds for tensor of rank {}", d, ndim);
+            }
+        }
         Value::Tensor(vm.tape.mean(t, dim.map(|d| d as usize)))
     } else {
         a.clone()
@@ -416,17 +458,76 @@ fn jit_sqrt(vm: &mut VM, a: &Value) -> Value {
 
 fn jit_update_row(vm: &mut VM, a: &Value, idx: &Value, row: &Value) -> Value {
     if let (Value::Tensor(t), Value::Tensor(r)) = (a, row) {
-        let i = idx.as_int() as usize;
-        let mut new_data = t.data.clone();
+        let idx_val = idx.as_int();
+        if idx_val < 0 {
+            panic!("Runtime Error: Negative index {} is not allowed in UpdateRow", idx_val);
+        }
+        let i = idx_val as usize;
         let row_len = r.numel();
+        if t.shape.len() >= 2 && row_len != t.shape[1] {
+            panic!("Runtime Error: Row width mismatch in UpdateRow: expected {}, got {}", t.shape[1], row_len);
+        }
+        let mut new_data = t.data.clone();
         let start = i * row_len;
         if start + row_len <= new_data.len() {
             new_data[start..start + row_len].copy_from_slice(&r.data[..row_len]);
+            Value::Tensor(Tensor::new(new_data, t.shape.clone()))
+        } else {
+            panic!("Runtime Error: Index {} out of bounds for UpdateRow on tensor of size {}", i, t.shape[0]);
         }
-        Value::Tensor(Tensor::new(new_data, t.shape.clone()))
     } else {
         a.clone()
     }
+}
+
+fn jit_validate_shape(shape_i64: Vec<i64>) -> Vec<usize> {
+    let mut shape = Vec::new();
+    let mut product: usize = 1;
+    for val in shape_i64 {
+        if val < 0 {
+            panic!("Runtime Error: Negative dimension size: {}", val);
+        }
+        let dim = val as usize;
+        if dim > 1_000_000 {
+            panic!("Runtime Error: Dimension size too large: {}", dim);
+        }
+        product = product.checked_mul(dim).expect("Runtime Error: Shape size overflow");
+        shape.push(dim);
+    }
+    if product > 10_000_000 {
+        panic!("Runtime Error: Tensor size too large: {} elements", product);
+    }
+    shape
+}
+
+fn jit_mod(vm: &mut VM, a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => {
+            if *y == 0 {
+                panic!("Runtime Error: Division by zero in modulo operation");
+            }
+            Value::Int(x % y)
+        }
+        _ => {
+            let y_val = b.as_float();
+            if y_val == 0.0 {
+                panic!("Runtime Error: Division by zero in modulo operation");
+            }
+            Value::Float(a.as_float() % y_val)
+        }
+    }
+}
+
+fn jit_and(a: &Value, b: &Value) -> Value {
+    Value::Bool(a.as_bool() && b.as_bool())
+}
+
+fn jit_or(a: &Value, b: &Value) -> Value {
+    Value::Bool(a.as_bool() || b.as_bool())
+}
+
+fn jit_not(a: &Value) -> Value {
+    Value::Bool(!a.as_bool())
 }
 "#);
         rust_code
@@ -513,10 +614,10 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             },
                             IROp::Zeros(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int() as usize", id)).collect();
-                                    format!("vec![{}]", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
+                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
                                 } else {
-                                    format!("vec!{:?}", shape.iter().map(|&x| x as usize).collect::<Vec<_>>())
+                                    format!("jit_validate_shape(vec!{:?})", shape)
                                 };
                                 format!(
                                     "{{ let mut t = Tensor::zeros(&{}); t.id = vm.tape.alloc_id(); Value::Tensor(t) }}",
@@ -525,10 +626,10 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Ones(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int() as usize", id)).collect();
-                                    format!("vec![{}]", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
+                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
                                 } else {
-                                    format!("vec!{:?}", shape.iter().map(|&x| x as usize).collect::<Vec<_>>())
+                                    format!("jit_validate_shape(vec!{:?})", shape)
                                 };
                                 format!(
                                     "{{ let mut t = Tensor::ones(&{}); t.id = vm.tape.alloc_id(); Value::Tensor(t) }}",
@@ -537,10 +638,10 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Glorot(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int() as usize", id)).collect();
-                                    format!("vec![{}]", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
+                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
                                 } else {
-                                    format!("vec!{:?}", shape.iter().map(|&x| x as usize).collect::<Vec<_>>())
+                                    format!("jit_validate_shape(vec!{:?})", shape)
                                 };
                                 format!(
                                     "{{ let mut t = Tensor::glorot(&{}); t.id = vm.tape.alloc_id(); Value::Tensor(t) }}",
@@ -549,10 +650,10 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Randn(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int() as usize", id)).collect();
-                                    format!("vec![{}]", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
+                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
                                 } else {
-                                    format!("vec!{:?}", shape.iter().map(|&x| x as usize).collect::<Vec<_>>())
+                                    format!("jit_validate_shape(vec!{:?})", shape)
                                 };
                                 format!(
                                     "{{ let mut t = Tensor::randn(&{}); t.id = vm.tape.alloc_id(); Value::Tensor(t) }}",
@@ -563,6 +664,7 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             IROp::Sub => format!("jit_sub(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Mul => format!("jit_mul(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Div => format!("jit_div(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::Mod => format!("jit_mod(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Neg => format!("jit_neg(vm, &v{})", node.inputs[0]),
                             IROp::MatMul => format!("jit_matmul(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::ReLU => format!("jit_relu(vm, &v{})", node.inputs[0]),
@@ -578,6 +680,9 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             IROp::Gte => format!("jit_gte(&v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Eq => format!("jit_eq(&v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Neq => format!("jit_neq(&v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::And => format!("jit_and(&v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::Or => format!("jit_or(&v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::Not => format!("jit_not(&v{})", node.inputs[0]),
                             IROp::ListLen => format!("jit_list_len(&v{})", node.inputs[0]),
                             IROp::Index => format!("jit_index(&v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::StopGrad => format!("jit_stop_grad(vm, &v{})", node.inputs[0]),
@@ -592,10 +697,19 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Reshape(new_shape) => {
                                 let shape_str = format!("vec!{:?}", new_shape.iter().map(|&x| x as usize).collect::<Vec<_>>());
+                                let new_shape_debug = format!("{:?}", new_shape);
                                 format!(
-            r#"if let Value::Tensor(t) = &v{} {{
-                    Value::Tensor(t.reshape(&{}))
-                }} else {{ v{}.clone() }}"#, node.inputs[0], shape_str, node.inputs[0])
+            r#"if let Value::Tensor(t) = &v{input} {{
+                    let target_shape = {shape};
+                    let new_n: usize = target_shape.iter().product();
+                    if t.numel() != new_n {{
+                        panic!("Runtime Error: Cannot reshape tensor of {{:?}} to {debug_shape}", t.shape);
+                    }}
+                    Value::Tensor(t.reshape(&target_shape))
+                }} else {{ v{input}.clone() }}"#,
+                                    input = node.inputs[0],
+                                    shape = shape_str,
+                                    debug_shape = new_shape_debug)
                             }
                             IROp::UpdateRow => {
                                 format!("jit_update_row(vm, &v{}, &v{}, &v{})", node.inputs[0], node.inputs[1], node.inputs[2])

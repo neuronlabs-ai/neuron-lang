@@ -21,7 +21,7 @@ impl Parser {
 
     fn enter_recursive(&mut self) -> Result<(), NeuronError> {
         self.recursion_depth += 1;
-        if self.recursion_depth > 50 {
+        if self.recursion_depth > 30 {
             return Err(NeuronError::new(
                 ErrorCode::ParseError,
                 "Maximum parser recursion depth exceeded".to_string(),
@@ -1184,6 +1184,13 @@ impl Parser {
     // ═══════════════════════════════════════
 
     fn parse_type(&mut self) -> Result<TypeExpr, NeuronError> {
+        self.enter_recursive()?;
+        let result = self.parse_type_inner();
+        self.exit_recursive();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Result<TypeExpr, NeuronError> {
         let span = self.span();
         match self.peek_type().clone() {
             TokenType::IntKw => { self.advance(); Ok(TypeExpr::Base("Int".into(), span)) }

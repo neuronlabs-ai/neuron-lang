@@ -378,3 +378,121 @@ fn adversarial_path_traversal_ohlcv() {
     let err = res.unwrap_err();
     assert!(err.contains("Security Error"), "unexpected error: {}", err);
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  12. PHASE 2 CODEX AUDIT REPRODUCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn adversarial_windows_backslash_path() {
+    let src = "fn main() -> List[List[Float]]:\n  return load_ohlcv(\"\\\\Users\\\\secret.csv\")\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("Security Error"), "Windows backslash path should be blocked: {}", err);
+}
+
+#[test]
+fn adversarial_modulo_operation() {
+    let src = "fn main() -> Int:\n  let x = 10 % 3\n  return x\n";
+    let res = run(src);
+    assert!(res.is_ok(), "modulo should succeed: {:?}", res);
+    let val = res.unwrap();
+    assert!(val.contains("1"), "10 % 3 should be 1, got: {}", val);
+}
+
+#[test]
+fn adversarial_modulo_div_by_zero() {
+    let src = "fn main() -> Int:\n  let x = 10 % 0\n  return x\n";
+    let res = run(src);
+    assert!(res.is_err(), "modulo by zero should error");
+}
+
+#[test]
+fn adversarial_logical_and_or() {
+    let src = "fn main() -> Bool:\n  let x = true and false\n  let y = true or false\n  return y\n";
+    let res = run(src);
+    assert!(res.is_ok(), "logical and/or should work: {:?}", res);
+    let val = res.unwrap();
+    assert!(val.contains("true") || val.contains("True") || val.contains("Bool(true)"), "true or false should be true, got: {}", val);
+}
+
+#[test]
+fn adversarial_deep_nested_type() {
+    // Generate Uncertain[Uncertain[...Uncertain[Int]...]] at depth 40 (exceeds limit of 30)
+    let mut type_str = "Int".to_string();
+    for _ in 0..40 {
+        type_str = format!("Uncertain[{}]", type_str);
+    }
+    let src = format!("fn foo(x: {}) -> Int:\n  return 0\n\nfn main() -> Int:\n  return foo(0)\n", type_str);
+    let res = compile(&src, "test.nr");
+    assert!(res.is_err(), "deeply nested type should cause compile error");
+    let err = match res {
+        Ok(_) => panic!("expected compilation failure"),
+        Err(e) => format!("{:?}", e),
+    };
+    assert!(err.contains("recursion depth exceeded") || err.contains("ParseError"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_update_row_width_mismatch() {
+    let src = r#"
+fn main() -> Tensor:
+  let t = zeros(3, 4)
+  let row = zeros(1, 2)
+  let t = update_row(t, 0, row)
+  return t
+"#;
+    let res = run(src);
+    assert!(res.is_err(), "update_row with mismatched row width should error");
+    let err = res.unwrap_err();
+    assert!(err.contains("Row width mismatch") || err.contains("Runtime panicked"), "unexpected error: {}", err);
+}
+
+#[test]
+fn adversarial_concat_exceeds_ceiling() {
+    // Each tensor is 10M elements, concatenating two should exceed the 10M ceiling
+    let src = r#"
+fn main() -> Tensor:
+  let a = zeros(10000, 1000)
+  let b = zeros(10000, 1000)
+  let c = concat([a, b])
+  return c
+"#;
+    let res = run(src);
+    // Should either fail at tensor creation (10M limit) or at concat
+    assert!(res.is_err(), "concat exceeding element ceiling should error");
+}
+
+#[test]
+fn adversarial_transpose_oob_dim() {
+    let src = r#"
+fn main() -> Tensor:
+  let t = zeros(2, 3)
+  let r = t.sum(5)
+  return r
+"#;
+    let res = run(src);
+    assert!(res.is_err(), "sum with out-of-bounds dim should error");
+}
+
+#[test]
+fn adversarial_mean_oob_dim() {
+    let src = r#"
+fn main() -> Tensor:
+  let t = zeros(2, 3)
+  let r = t.mean(10)
+  return r
+"#;
+    let res = run(src);
+    assert!(res.is_err(), "mean with out-of-bounds dim should error");
+}
+
+#[test]
+fn adversarial_drive_letter_path() {
+    let src = "fn main() -> List[List[Float]]:\n  return load_ohlcv(\"C:\\\\Windows\\\\System32\\\\config.csv\")\n";
+    let res = run(src);
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.contains("Security Error"), "drive letter path should be blocked: {}", err);
+}

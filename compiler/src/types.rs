@@ -13,7 +13,7 @@ use std::collections::HashMap;
 //  Internal type representations
 // ═══════════════════════════════════════════
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NType {
     Base(String),                          // Int, Float, Bool, String, Timestamp, Loss, Dataset
     Tensor(Vec<Dim>),                      // Tensor[dims]
@@ -42,7 +42,7 @@ pub enum NType {
     Explanation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Dim {
     Static(i64),
     Symbolic(String),
@@ -50,7 +50,7 @@ pub enum Dim {
     Dynamic,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EffectEntry {
     pub kind: String,
     pub target: Option<String>,
@@ -530,7 +530,11 @@ impl TypeChecker {
         self.symbols.push();
         if let Some(st) = self_ty { self.symbols.define("self", st.clone()); }
         for p in &f.params {
-            let ty = p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any);
+            let ty = if p.name == "self" && self_ty.is_some() {
+                self_ty.unwrap().clone()
+            } else {
+                p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any)
+            };
             self.symbols.define(&p.name, ty);
         }
         for stmt in &f.body { self.check_stmt(stmt); }
@@ -640,8 +644,26 @@ impl TypeChecker {
             Expr::UnaryOp(u) => {
                 let inner = self.infer_expr(&u.operand);
                 match u.op {
-                    UnaryOp::Neg => inner,
-                    UnaryOp::Not => NType::Base("Bool".into()),
+                    UnaryOp::Neg => {
+                        if inner != NType::Any && !inner.is_numeric() && !matches!(inner, NType::Tensor(_)) && !matches!(inner, NType::Uncertain(_)) {
+                            self.result.add_error(NeuronError::new(
+                                ErrorCode::TypeMismatch,
+                                format!("Numeric negation (-) requires numeric or tensor operand, got {}", inner.display()),
+                                u.span.clone(),
+                            ));
+                        }
+                        inner
+                    }
+                    UnaryOp::Not => {
+                        if inner != NType::Any && inner != NType::Base("Bool".into()) {
+                            self.result.add_error(NeuronError::new(
+                                ErrorCode::TypeMismatch,
+                                format!("Logical negation (!) requires a boolean operand, got {}", inner.display()),
+                                u.span.clone(),
+                            ));
+                        }
+                        if inner == NType::Any { NType::Any } else { NType::Base("Bool".into()) }
+                    }
                 }
             }
             Expr::FnCall(c) => self.infer_fn_call(c),
@@ -764,10 +786,14 @@ impl TypeChecker {
             }
         }
 
-        if matches!(b.op, BinOp::Add | BinOp::Sub) {
+        if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
             if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&left, &right) {
                 self.check_elementwise(da, db, &b.span);
-                return left;
+                return left.clone();
+            }
+            // Tensor broadcasting check
+            if (matches!(left, NType::Tensor(_)) && right.is_numeric()) || (left.is_numeric() && matches!(right, NType::Tensor(_))) {
+                return if matches!(left, NType::Tensor(_)) { left.clone() } else { right.clone() };
             }
             // Uncertain propagation
             if let (NType::Uncertain(ref inner), _) = (&left, &right) {
@@ -776,10 +802,34 @@ impl TypeChecker {
         }
 
         // Comparison operators
-        if matches!(b.op, BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte) {
+        if matches!(b.op, BinOp::Eq | BinOp::Neq) {
+            if left != right && !(left.is_numeric() && right.is_numeric()) {
+                self.result.add_error(NeuronError::new(
+                    ErrorCode::TypeMismatch,
+                    format!("Comparison operator {} requires compatible types, got {} and {}", b.op.as_str(), left.display(), right.display()),
+                    b.span.clone(),
+                ));
+            }
+            return NType::Base("Bool".into());
+        }
+        if matches!(b.op, BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte) {
+            if !left.is_numeric() || !right.is_numeric() {
+                self.result.add_error(NeuronError::new(
+                    ErrorCode::TypeMismatch,
+                    format!("Comparison operator {} requires numeric operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
+                    b.span.clone(),
+                ));
+            }
             return NType::Base("Bool".into());
         }
         if matches!(b.op, BinOp::And | BinOp::Or) {
+            if left != NType::Base("Bool".into()) || right != NType::Base("Bool".into()) {
+                self.result.add_error(NeuronError::new(
+                    ErrorCode::TypeMismatch,
+                    format!("Logical operator {} requires boolean operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
+                    b.span.clone(),
+                ));
+            }
             return NType::Base("Bool".into());
         }
 
@@ -791,7 +841,23 @@ impl TypeChecker {
             return NType::Base("Int".into());
         }
 
-        left
+        // String concatenation fallback
+        if left == NType::Base("String".into()) && right == NType::Base("String".into()) && b.op == BinOp::Add {
+            return NType::Base("String".into());
+        }
+
+        // If either side is Any, allow and return Any
+        if left == NType::Any || right == NType::Any {
+            return NType::Any;
+        }
+
+        // Otherwise error
+        self.result.add_error(NeuronError::new(
+            ErrorCode::TypeMismatch,
+            format!("Unsupported binary operation: {} {} {}", left.display(), b.op.as_str(), right.display()),
+            b.span.clone(),
+        ));
+        NType::Any
     }
 
     fn check_matmul(&mut self, a_dims: &[Dim], b_dims: &[Dim], span: &Span) -> NType {

@@ -614,6 +614,7 @@ impl Lowerer {
                     BinOp::Sub => IROp::Sub,
                     BinOp::Mul => IROp::Mul,
                     BinOp::Div => IROp::Div,
+                    BinOp::Mod => IROp::Mod,
                     BinOp::MatMul => IROp::MatMul,
                     BinOp::Lt => IROp::Lt,
                     BinOp::Lte => IROp::Lte,
@@ -621,7 +622,8 @@ impl Lowerer {
                     BinOp::Gte => IROp::Gte,
                     BinOp::Eq => IROp::Eq,
                     BinOp::Neq => IROp::Neq,
-                    _ => IROp::Add,
+                    BinOp::And => IROp::And,
+                    BinOp::Or => IROp::Or,
                 };
                 self.emit(func, op, vec![left, right], IRType::Any)
             }
@@ -629,7 +631,7 @@ impl Lowerer {
                 let operand = self.lower_expr(func, &u.operand);
                 match u.op {
                     UnaryOp::Neg => self.emit(func, IROp::Neg, vec![operand], IRType::Any),
-                    UnaryOp::Not => self.emit(func, IROp::Neg, vec![operand], IRType::Bool), // Simplified
+                    UnaryOp::Not => self.emit(func, IROp::Not, vec![operand], IRType::Bool),
                 }
             }
             Expr::FnCall(c) => {
