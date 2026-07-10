@@ -385,7 +385,7 @@ pub fn jit_sqrt(vm: &mut VM, a: &Value) -> Value {
     }
 }
 
-pub fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
+pub fn jit_concat(_vm: &mut VM, a: &Value, _dim: i64) -> Value {
     if let Value::List(items) = a {
         let tensors: Vec<&Tensor> = items.iter().filter_map(|v| v.as_tensor()).collect();
 
@@ -429,7 +429,7 @@ pub fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
     Value::Tensor(Tensor::zeros(&[0]))
 }
 
-pub fn jit_update_row(vm: &mut VM, a: &Value, idx: &Value, row: &Value) -> Value {
+pub fn jit_update_row(_vm: &mut VM, a: &Value, idx: &Value, row: &Value) -> Value {
     if let (Value::Tensor(t), Value::Tensor(r)) = (a, row) {
         let idx_val = idx.as_int();
         if idx_val < 0 {
@@ -473,7 +473,7 @@ pub fn jit_validate_shape(shape_i64: Vec<i64>) -> Vec<usize> {
     shape
 }
 
-pub fn jit_mod(vm: &mut VM, a: &Value, b: &Value) -> Value {
+pub fn jit_mod(_vm: &mut VM, a: &Value, b: &Value) -> Value {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => {
             if *y == 0 {

@@ -65,9 +65,18 @@ def glorot_tensor(shape):
     return t
 
 def update_row(tensor, row_idx, new_row):
+    if row_idx < 0:
+        raise ValueError(f"Runtime Error: Negative index {row_idx} is not allowed in UpdateRow")
+    t_shape = tensor.shape
+    row_len = new_row.numel() if hasattr(new_row, 'numel') else len(new_row)
+    if len(t_shape) >= 2 and row_len != t_shape[1]:
+        raise ValueError(f"Runtime Error: Row width mismatch in UpdateRow: expected {t_shape[1]}, got {row_len}")
+    if row_idx >= t_shape[0]:
+        raise ValueError(f"Runtime Error: Index {row_idx} out of bounds for UpdateRow on tensor of size {t_shape[0]}")
     with torch.no_grad():
         tensor[row_idx] = new_row
     return tensor
+
 
 def sgd_step(locals_dict, target, lr):
     parts = target.split('.')
