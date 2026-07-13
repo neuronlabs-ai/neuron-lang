@@ -85,12 +85,72 @@ pub enum Value {
     Err(String),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ValueWrapper {
+    Temporal(String),
+    Causal(String),
+}
+
 impl Value {
+    pub fn unwrap_ref(&self) -> &Value {
+        let mut curr = self;
+        loop {
+            match curr {
+                Value::Temporal { data, .. } => curr = data,
+                Value::Causal { data, .. } => curr = data,
+                _ => break,
+            }
+        }
+        curr
+    }
+
+    pub fn strip_wrappers(self) -> (Value, Vec<ValueWrapper>) {
+        let mut val = self;
+        let mut wrappers = Vec::new();
+        loop {
+            match val {
+                Value::Temporal { data, direction } => {
+                    wrappers.push(ValueWrapper::Temporal(direction));
+                    val = *data;
+                }
+                Value::Causal { data, mode } => {
+                    wrappers.push(ValueWrapper::Causal(mode));
+                    val = *data;
+                }
+                _ => break,
+            }
+        }
+        (val, wrappers)
+    }
+
+    pub fn apply_wrappers(mut self, wrappers: Vec<ValueWrapper>) -> Self {
+        for w in wrappers.into_iter().rev() {
+            match w {
+                ValueWrapper::Temporal(dir) => self = Value::Temporal { data: Box::new(self), direction: dir },
+                ValueWrapper::Causal(mode) => self = Value::Causal { data: Box::new(self), mode },
+            }
+        }
+        self
+    }
+
+    pub fn combine_wrappers(mut a_wraps: Vec<ValueWrapper>, b_wraps: Vec<ValueWrapper>) -> Vec<ValueWrapper> {
+        for w in b_wraps {
+            if !a_wraps.iter().any(|cw| match (cw, &w) {
+                (ValueWrapper::Temporal(d1), ValueWrapper::Temporal(d2)) => d1 == d2,
+                (ValueWrapper::Causal(m1), ValueWrapper::Causal(m2)) => m1 == m2,
+                _ => false,
+            }) {
+                a_wraps.push(w);
+            }
+        }
+        a_wraps
+    }
+
     pub fn as_tensor(&self) -> Option<&Tensor> {
-        if let Value::Tensor(t) = self { Some(t) } else { None }
+        if let Value::Tensor(t) = self.unwrap_ref() { Some(t) } else { None }
     }
     pub fn as_float(&self) -> f64 {
-        match self {
+        match self.unwrap_ref() {
             Value::Float(f) => *f,
             Value::Int(i) => *i as f64,
             Value::Tensor(t) if t.numel() == 1 => t.data[0],
@@ -98,14 +158,14 @@ impl Value {
         }
     }
     pub fn as_int(&self) -> i64 {
-        match self {
+        match self.unwrap_ref() {
             Value::Int(i) => *i,
             Value::Float(f) => *f as i64,
             _ => panic!("Runtime TypeError: Expected Int, found {:?}", self),
         }
     }
     pub fn as_bool(&self) -> bool {
-        match self {
+        match self.unwrap_ref() {
             Value::Bool(b) => *b,
             Value::Int(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
@@ -451,8 +511,10 @@ impl VM {
         }
 
         if resolved_name == "load" {
+            let mut t = Tensor::zeros(&[1, 20]);
+            t.id = self.tape.alloc_id();
             return Ok(Value::Temporal {
-                data: Box::new(Value::Float(1.0)),
+                data: Box::new(Value::Tensor(t)),
                 direction: "past_to_future".into(),
             });
         }
@@ -489,7 +551,22 @@ impl VM {
                     ]));
                 }
             }
-            return Ok(Value::List(data));
+            let mut flat_data = Vec::new();
+            let rows = data.len();
+            let cols = 5;
+            for row_val in data {
+                if let Value::List(row_items) = row_val {
+                    for item in row_items.iter().take(5) {
+                        flat_data.push(item.as_float());
+                    }
+                }
+            }
+            let mut t = Tensor::new(flat_data, vec![rows, cols]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Temporal {
+                data: Box::new(Value::Tensor(t)),
+                direction: "past_to_future".into(),
+            });
         }
 
         if resolved_name == "forget" {
@@ -721,6 +798,9 @@ impl VM {
                 .or_else(|| self.globals.get(&id.to_string()).cloned())
                 .unwrap_or(Value::Void)
         };
+        let get_stripped = |id: &ValueId| -> (Value, Vec<ValueWrapper>) {
+            get(id).strip_wrappers()
+        };
 
         // Device Check & Fallback Tracking
         let target_device = match node.device {
@@ -790,9 +870,9 @@ impl VM {
             }
 
             IROp::Add => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let r = self.tape.add(ta, tb);
                         Ok(Value::Tensor(r))
@@ -824,12 +904,13 @@ impl VM {
                     (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
                     _ => Ok(Value::Float(a.as_float() + b.as_float())),
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
             IROp::Sub => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let r = self.tape.sub(ta, tb);
                         Ok(Value::Tensor(r))
@@ -859,12 +940,13 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     _ => Ok(Value::Float(a.as_float() - b.as_float())),
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
             IROp::Mul => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let r = self.tape.mul(ta, tb);
                         Ok(Value::Tensor(r))
@@ -894,12 +976,13 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     _ => Ok(Value::Float(a.as_float() * b.as_float())),
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
             IROp::Div => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let r = self.tape.div(ta, tb);
                         Ok(Value::Tensor(r))
@@ -929,12 +1012,13 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     _ => Ok(Value::Float(a.as_float() / b.as_float())),
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
             IROp::Mod => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => {
                         if *y == 0 {
                             return Err("Runtime Error: Division by zero in modulo operation".to_string());
@@ -948,19 +1032,21 @@ impl VM {
                         }
                         Ok(Value::Float(a.as_float() % y_val))
                     }
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
             IROp::Neg => {
-                let a = get(&node.inputs[0]);
-                match &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = match &a {
                     Value::Tensor(t) => Ok(Value::Tensor(self.tape.neg(t))),
                     _ => Ok(Value::Float(-a.as_float())),
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::MatMul => {
-                let a = get(&node.inputs[0]);
-                let b = get(&node.inputs[1]);
-                match (&a, &b) {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         if ta.ndim() < 2 || tb.ndim() < 2 {
                             return Err(format!("Runtime Error: MatMul requires 2D tensors, got {}D and {}D", ta.ndim(), tb.ndim()));
@@ -1005,65 +1091,75 @@ impl VM {
                         }
                     }
                     _ => Err("MatMul requires tensor operands".into()),
-                }
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
 
             IROp::ReLU => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.relu(t)))
-                } else { Ok(Value::Float(a.as_float().max(0.0))) }
+                } else { Ok(Value::Float(a.as_float().max(0.0))) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::GeLU => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.gelu(t)))
-                } else { Ok(a) }
+                } else { Ok(a) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Sigmoid => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.sigmoid(t)))
-                } else { Ok(Value::Float(1.0 / (1.0 + (-a.as_float()).exp()))) }
+                } else { Ok(Value::Float(1.0 / (1.0 + (-a.as_float()).exp()))) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Tanh => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.tanh(t)))
-                } else { Ok(Value::Float(a.as_float().tanh())) }
+                } else { Ok(Value::Float(a.as_float().tanh())) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Softmax { dim: _ } => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.softmax(t)))
-                } else { Ok(a) }
+                } else { Ok(a) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
 
             IROp::CrossEntropy => {
-                let pred = get(&node.inputs[0]);
-                let target = get(&node.inputs[1]);
-                if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
+                let (pred, pred_wraps) = get_stripped(&node.inputs[0]);
+                let (target, target_wraps) = get_stripped(&node.inputs[1]);
+                let wraps = Value::combine_wrappers(pred_wraps, target_wraps);
+                let res = if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
                     if p.shape != t.shape {
                         return Err(format!("Runtime Error: CrossEntropy shape mismatch: pred {:?} vs target {:?}", p.shape, t.shape));
                     }
                     Ok(Value::Tensor(self.tape.cross_entropy(p, t)))
-                } else { Ok(Value::Float(0.0)) }
+                } else { Ok(Value::Float(0.0)) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::MSELoss => {
-                let pred = get(&node.inputs[0]);
-                let target = get(&node.inputs[1]);
-                if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
+                let (pred, pred_wraps) = get_stripped(&node.inputs[0]);
+                let (target, target_wraps) = get_stripped(&node.inputs[1]);
+                let wraps = Value::combine_wrappers(pred_wraps, target_wraps);
+                let res = if let (Value::Tensor(p), Value::Tensor(t)) = (&pred, &target) {
                     if p.shape != t.shape {
                         return Err(format!("Runtime Error: MSELoss shape mismatch: pred {:?} vs target {:?}", p.shape, t.shape));
                     }
                     Ok(Value::Tensor(self.tape.mse(p, t)))
-                } else { Ok(Value::Float(0.0)) }
+                } else { Ok(Value::Float(0.0)) };
+                res.map(|v| v.apply_wrappers(wraps))
             }
 
             IROp::Grad { wrt } => {
                 // Run backward on the expression, return gradient
                 if let Some(input_id) = node.inputs.first() {
-                    let val = get(input_id);
+                    let (val, _wraps) = get_stripped(input_id);
                     if let Value::Tensor(t) = &val {
                         let parameter_ids = self.collect_parameter_ids();
                         self.tape.parameter_ids = parameter_ids;
@@ -1088,7 +1184,7 @@ impl VM {
             }
             IROp::Backward => {
                 if let Some(input_id) = node.inputs.first() {
-                    let val = get(input_id);
+                    let (val, _wraps) = get_stripped(input_id);
                     if let Value::Tensor(t) = &val {
                         let parameter_ids = self.collect_parameter_ids();
                         self.tape.parameter_ids = parameter_ids;
@@ -1319,11 +1415,13 @@ impl VM {
             IROp::EffectCheck { expected: _ } => Ok(Value::Void),
 
             IROp::Concat { dim: _ } => {
-                // Concatenate tensors
+                // Concatenate tensors — strip wrappers from the list and its items
                 if let Some(first) = node.inputs.first() {
-                    let val = get(first);
+                    let (val, wraps) = get_stripped(first);
                     if let Value::List(items) = &val {
-                        let tensors: Vec<&Tensor> = items.iter().filter_map(|v| v.as_tensor()).collect();
+                        // Strip wrappers from individual list items too
+                        let stripped_items: Vec<Value> = items.iter().map(|v| v.clone().strip_wrappers().0).collect();
+                        let tensors: Vec<&Tensor> = stripped_items.iter().filter_map(|v| v.as_tensor()).collect();
 
                         if !tensors.is_empty() {
                             let all_2d = tensors.iter().all(|t| t.ndim() == 2);
@@ -1351,7 +1449,7 @@ impl VM {
                                         col_offset += t_cols;
                                     }
                                 }
-                                return Ok(Value::Tensor(Tensor::new(data, vec![b, d_total])));
+                                return Ok(Value::Tensor(Tensor::new(data, vec![b, d_total])).apply_wrappers(wraps));
                             } else {
                                 let total_len: usize = tensors.iter().map(|t| t.numel()).sum();
                                 if total_len > 10_000_000 {
@@ -1359,7 +1457,7 @@ impl VM {
                                 }
                                 let mut data = Vec::with_capacity(total_len);
                                 for t in &tensors { data.extend_from_slice(&t.data); }
-                                return Ok(Value::Tensor(Tensor::new(data, vec![total_len])));
+                                return Ok(Value::Tensor(Tensor::new(data, vec![total_len])).apply_wrappers(wraps));
                             }
                         }
                     }
@@ -1369,13 +1467,13 @@ impl VM {
 
             IROp::Transpose(dim0, dim1) => {
                 if let Some(first) = node.inputs.first() {
-                    let val = get(first);
+                    let (val, wraps) = get_stripped(first);
                     if let Value::Tensor(t) = &val {
                         let ndim = t.ndim();
                         if *dim0 >= ndim || *dim1 >= ndim {
                             return Err(format!("Runtime Error: Transpose dimensions ({}, {}) out of bounds for tensor of rank {}", dim0, dim1, ndim));
                         }
-                        return Ok(Value::Tensor(t.transpose(*dim0, *dim1)));
+                        return Ok(Value::Tensor(t.transpose(*dim0, *dim1)).apply_wrappers(wraps));
                     }
                 }
                 Ok(Value::Void)
@@ -1459,14 +1557,14 @@ impl VM {
                 }))
             }
             IROp::Index => {
-                let a = get(&node.inputs[0]);
+                let (a, wraps) = get_stripped(&node.inputs[0]);
                 let idx = get(&node.inputs[1]);
                 let idx_val = idx.as_int();
                 if idx_val < 0 {
                     return Err(format!("Runtime Error: Negative index {} is not allowed", idx_val));
                 }
                 let i = idx_val as usize;
-                match a {
+                let res = match a {
                     Value::List(items) => {
                         if i < items.len() {
                             Ok(items[i].clone())
@@ -1496,7 +1594,8 @@ impl VM {
                         }
                     }
                     other => Err(format!("Cannot index into {:?}", other)),
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::StopGrad => {
                 let a = get(&node.inputs[0]);
@@ -1511,8 +1610,8 @@ impl VM {
                 })
             }
             IROp::Sum { dim } => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     if let Some(d) = dim {
                         if *d < 0 || (*d as usize) >= t.ndim() {
                             return Err(format!("Runtime Error: Sum dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
@@ -1522,11 +1621,12 @@ impl VM {
                     Ok(Value::Tensor(self.tape.sum(t, dim_usize)))
                 } else {
                     Ok(a)
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Mean { dim } => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     if let Some(d) = dim {
                         if *d < 0 || (*d as usize) >= t.ndim() {
                             return Err(format!("Runtime Error: Mean dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
@@ -1536,22 +1636,24 @@ impl VM {
                     Ok(Value::Tensor(self.tape.mean(t, dim_usize)))
                 } else {
                     Ok(a)
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Sqrt => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.sqrt(t)))
                 } else {
                     match a {
                         Value::Float(f) => Ok(Value::Float(f.sqrt())),
                         _ => Ok(a),
                     }
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Reshape(new_shape) => {
-                let a = get(&node.inputs[0]);
-                if let Value::Tensor(t) = &a {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
                     // Validate new shape doesn't have negative numbers or zero-element overflow
                     let mut new_n: usize = 1;
                     let mut shape_usize = Vec::new();
@@ -1573,13 +1675,14 @@ impl VM {
                     Ok(Value::Tensor(t.reshape(&shape_usize)))
                 } else {
                     Ok(a)
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::UpdateRow => {
-                let a = get(&node.inputs[0]);
-                let idx = get(&node.inputs[1]);
-                let row = get(&node.inputs[2]);
-                if let (Value::Tensor(t), Value::Tensor(r)) = (&a, &row) {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let (idx, _) = get_stripped(&node.inputs[1]);
+                let (row, _) = get_stripped(&node.inputs[2]);
+                let res = if let (Value::Tensor(t), Value::Tensor(r)) = (&a, &row) {
                     let idx_val = idx.as_int();
                     if idx_val < 0 {
                         return Err(format!("Runtime Error: Negative index {} is not allowed in UpdateRow", idx_val));
@@ -1599,7 +1702,8 @@ impl VM {
                     }
                 } else {
                     Ok(a)
-                }
+                };
+                res.map(|v| v.apply_wrappers(wraps))
             }
             other => Err(format!("Unhandled IR operation: {:?}", other)),
         }

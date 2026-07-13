@@ -109,7 +109,9 @@ r#"
 // --- JIT Helper Functions ---
 
 fn jit_add(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.add(ta, tb)),
         (Value::Tensor(ta), Value::Int(y)) => {
             let mut tb = Tensor::full(&ta.shape, *y as f64);
@@ -131,12 +133,15 @@ fn jit_add(vm: &mut VM, a: &Value, b: &Value) -> Value {
             ta.id = vm.tape.alloc_id();
             Value::Tensor(vm.tape.add(&ta, tb))
         }
-        _ => Value::Float(a.as_float() + b.as_float()),
-    }
+        _ => Value::Float(a_plain.as_float() + b_plain.as_float()),
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_sub(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.sub(ta, tb)),
         (Value::Tensor(ta), Value::Int(y)) => {
             let mut tb = Tensor::full(&ta.shape, *y as f64);
@@ -158,12 +163,15 @@ fn jit_sub(vm: &mut VM, a: &Value, b: &Value) -> Value {
             ta.id = vm.tape.alloc_id();
             Value::Tensor(vm.tape.sub(&ta, tb))
         }
-        _ => Value::Float(a.as_float() - b.as_float()),
-    }
+        _ => Value::Float(a_plain.as_float() - b_plain.as_float()),
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_mul(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.mul(ta, tb)),
         (Value::Tensor(ta), Value::Int(y)) => {
             let mut tb = Tensor::full(&ta.shape, *y as f64);
@@ -185,12 +193,15 @@ fn jit_mul(vm: &mut VM, a: &Value, b: &Value) -> Value {
             ta.id = vm.tape.alloc_id();
             Value::Tensor(vm.tape.mul(&ta, tb))
         }
-        _ => Value::Float(a.as_float() * b.as_float()),
-    }
+        _ => Value::Float(a_plain.as_float() * b_plain.as_float()),
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_div(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => Value::Tensor(vm.tape.div(ta, tb)),
         (Value::Tensor(ta), Value::Int(y)) => {
             let mut tb = Tensor::full(&ta.shape, *y as f64);
@@ -212,19 +223,24 @@ fn jit_div(vm: &mut VM, a: &Value, b: &Value) -> Value {
             ta.id = vm.tape.alloc_id();
             Value::Tensor(vm.tape.div(&ta, tb))
         }
-        _ => Value::Float(a.as_float() / b.as_float()),
-    }
+        _ => Value::Float(a_plain.as_float() / b_plain.as_float()),
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_neg(vm: &mut VM, a: &Value) -> Value {
-    match a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = match &a_plain {
         Value::Tensor(t) => Value::Tensor(vm.tape.neg(t)),
-        _ => Value::Float(-a.as_float()),
-    }
+        _ => Value::Float(-a_plain.as_float()),
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_matmul(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => {
             if ta.ndim() < 2 || tb.ndim() < 2 {
                 panic!("Runtime Error: MatMul requires 2D tensors, got {}D and {}D", ta.ndim(), tb.ndim());
@@ -237,43 +253,54 @@ fn jit_matmul(vm: &mut VM, a: &Value, b: &Value) -> Value {
             Value::Tensor(vm.tape.matmul(ta, tb))
         }
         _ => panic!("MatMul requires tensor operands"),
-    }
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_relu(vm: &mut VM, a: &Value) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.relu(t))
     } else {
-        Value::Float(a.as_float().max(0.0))
-    }
+        Value::Float(a_plain.as_float().max(0.0))
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_sigmoid(vm: &mut VM, a: &Value) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.sigmoid(t))
     } else {
-        Value::Float(1.0 / (1.0 + (-a.as_float()).exp()))
-    }
+        Value::Float(1.0 / (1.0 + (-a_plain.as_float()).exp()))
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_tanh(vm: &mut VM, a: &Value) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.tanh(t))
     } else {
-        Value::Float(a.as_float().tanh())
-    }
+        Value::Float(a_plain.as_float().tanh())
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_softmax(vm: &mut VM, a: &Value, dim: i64) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.softmax(t))
     } else {
-        a.clone()
-    }
+        a_plain
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_mse(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => {
             if ta.shape != tb.shape {
                 panic!("Runtime Error: MSELoss shape mismatch: pred {:?} vs target {:?}", ta.shape, tb.shape);
@@ -281,7 +308,8 @@ fn jit_mse(vm: &mut VM, a: &Value, b: &Value) -> Value {
             Value::Tensor(vm.tape.mse(ta, tb))
         }
         _ => Value::Float(0.0),
-    }
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_lt(a: &Value, b: &Value) -> Value {
@@ -325,12 +353,13 @@ fn jit_list_len(a: &Value) -> Value {
 }
 
 fn jit_index(a: &Value, idx: &Value) -> Value {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
     let idx_val = idx.as_int();
     if idx_val < 0 {
         panic!("Runtime Error: Negative index {} is not allowed", idx_val);
     }
     let i = idx_val as usize;
-    match a {
+    let res = match a_plain {
         Value::List(items) => {
             items.get(i).cloned().unwrap_or(Value::Void)
         }
@@ -341,17 +370,23 @@ fn jit_index(a: &Value, idx: &Value) -> Value {
                 let end = start + cols;
                 if end <= t.data.len() {
                     let row_data = t.data[start..end].to_vec();
-                    return Value::Tensor(Tensor::new(row_data, vec![1, cols]));
+                    Value::Tensor(Tensor::new(row_data, vec![1, cols]))
+                } else {
+                    Value::Void
                 }
             } else if t.ndim() == 1 {
                 if i < t.data.len() {
-                    return Value::Float(t.data[i]);
+                    Value::Float(t.data[i])
+                } else {
+                    Value::Void
                 }
+            } else {
+                Value::Void
             }
-            Value::Void
         }
         _ => Value::Void,
-    }
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_stop_grad(vm: &mut VM, a: &Value) -> Value {
@@ -368,8 +403,10 @@ fn jit_stop_grad(vm: &mut VM, a: &Value) -> Value {
 }
 
 fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
-    if let Value::List(items) = a {
-        let tensors: Vec<&Tensor> = items.iter().filter_map(|v| v.as_tensor()).collect();
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    if let Value::List(items) = &a_plain {
+        let stripped_items: Vec<Value> = items.iter().map(|v| v.clone().strip_wrappers().0).collect();
+        let tensors: Vec<&Tensor> = stripped_items.iter().filter_map(|v| v.as_tensor()).collect();
 
         if !tensors.is_empty() {
             let all_2d = tensors.iter().all(|t| t.ndim() == 2);
@@ -396,7 +433,7 @@ fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
                         col_offset += t_cols;
                     }
                 }
-                return Value::Tensor(Tensor::new(data, vec![b, d_total]));
+                return Value::Tensor(Tensor::new(data, vec![b, d_total])).apply_wrappers(wraps);
             } else {
                 let total_len: usize = tensors.iter().map(|t| t.numel()).sum();
                 if total_len > 10_000_000 {
@@ -404,7 +441,7 @@ fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
                 }
                 let mut data = Vec::with_capacity(total_len);
                 for t in &tensors { data.extend_from_slice(&t.data); }
-                return Value::Tensor(Tensor::new(data, vec![total_len]));
+                return Value::Tensor(Tensor::new(data, vec![total_len])).apply_wrappers(wraps);
             }
         }
     }
@@ -412,15 +449,19 @@ fn jit_concat(vm: &mut VM, a: &Value, dim: i64) -> Value {
 }
 
 fn jit_gelu(vm: &mut VM, a: &Value) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.gelu(t))
     } else {
-        a.clone()
-    }
+        a_plain
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_cross_entropy(vm: &mut VM, a: &Value, b: &Value) -> Value {
-    match (a, b) {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
         (Value::Tensor(ta), Value::Tensor(tb)) => {
             if ta.shape != tb.shape {
                 panic!("Runtime Error: CrossEntropy shape mismatch: pred {:?} vs target {:?}", ta.shape, tb.shape);
@@ -428,11 +469,13 @@ fn jit_cross_entropy(vm: &mut VM, a: &Value, b: &Value) -> Value {
             Value::Tensor(vm.tape.cross_entropy(ta, tb))
         }
         _ => Value::Float(0.0),
-    }
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
 fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         if let Some(d) = dim {
             let ndim = t.ndim() as i64;
             if d < 0 || d >= ndim {
@@ -441,12 +484,14 @@ fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
         }
         Value::Tensor(vm.tape.sum(t, dim.map(|d| d as usize)))
     } else {
-        a.clone()
-    }
+        a_plain
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_mean(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         if let Some(d) = dim {
             let ndim = t.ndim() as i64;
             if d < 0 || d >= ndim {
@@ -455,25 +500,31 @@ fn jit_mean(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
         }
         Value::Tensor(vm.tape.mean(t, dim.map(|d| d as usize)))
     } else {
-        a.clone()
-    }
+        a_plain
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_sqrt(vm: &mut VM, a: &Value) -> Value {
-    if let Value::Tensor(t) = a {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
         Value::Tensor(vm.tape.sqrt(t))
     } else {
-        match a {
+        match a_plain {
             Value::Float(f) => Value::Float(f.sqrt()),
-            Value::Int(i) => Value::Float((*i as f64).sqrt()),
-            _ => a.clone(),
+            Value::Int(i) => Value::Float((i as f64).sqrt()),
+            _ => a_plain,
         }
-    }
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_update_row(vm: &mut VM, a: &Value, idx: &Value, row: &Value) -> Value {
-    if let (Value::Tensor(t), Value::Tensor(r)) = (a, row) {
-        let idx_val = idx.as_int();
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let (idx_plain, _) = idx.clone().strip_wrappers();
+    let (row_plain, _) = row.clone().strip_wrappers();
+    let res = if let (Value::Tensor(t), Value::Tensor(r)) = (&a_plain, &row_plain) {
+        let idx_val = idx_plain.as_int();
         if idx_val < 0 {
             panic!("Runtime Error: Negative index {} is not allowed in UpdateRow", idx_val);
         }
@@ -491,8 +542,9 @@ fn jit_update_row(vm: &mut VM, a: &Value, idx: &Value, row: &Value) -> Value {
             panic!("Runtime Error: Index {} out of bounds for UpdateRow on tensor of size {}", i, t.shape[0]);
         }
     } else {
-        a.clone()
-    }
+        a_plain
+    };
+    res.apply_wrappers(wraps)
 }
 
 fn jit_validate_shape(shape_i64: Vec<i64>) -> Vec<usize> {
@@ -737,7 +789,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                                 };
                                 format!(
             r#"{{
-                    let val = &v{};
+                    let (val_plain, _wraps) = v{}.clone().strip_wrappers();
+                    let val = &val_plain;
                     if let Value::Tensor(t) = val {{
                         vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                             function_name: String::new(),
@@ -776,7 +829,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             IROp::Backward => {
                                 format!(
             r#"{{
-                    if let Value::Tensor(t) = &v{} {{
+                    let (val_plain, _wraps) = v{}.clone().strip_wrappers();
+                    if let Value::Tensor(t) = &val_plain {{
                         vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                             function_name: String::new(),
                             current_block: 0,

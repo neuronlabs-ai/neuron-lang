@@ -63,10 +63,12 @@ impl NeuronLM {
         }
     }
 
-    /// Evaluates the transformer forward pass and returns a reply.
     pub fn generate_reply(&self, prompt: &str) -> String {
-        // Run attention and feedforward calculations on the prompt embedding to simulate transformer inference
         let tokens = self.tokenize(prompt);
+        if tokens.is_empty() {
+            return "[AGI Response]: I'm listening! What's on your mind?".to_string();
+        }
+        // Run attention and feedforward calculations on the prompt embedding to simulate transformer inference
         let mut h = vec![vec![0.0; self.embed_dim]; tokens.len()];
 
         // 1. Embedding lookup
@@ -170,6 +172,9 @@ impl NeuronLM {
 
 fn matmul_2d(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let rows_a = a.len();
+    if rows_a == 0 {
+        return vec![];
+    }
     let cols_a = a[0].len();
     let cols_b = b[0].len();
 

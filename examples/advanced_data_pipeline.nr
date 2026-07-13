@@ -10,7 +10,7 @@ fn normalize_series(series: Temporal[Tensor, past_to_future]) -> Tensor:
   
   // Simple scaling without lookahead bias
   let scale_factor = zeros(1, 1) + 0.1
-  let mean_val = data @ scale_factor
+  let mean_val = data * scale_factor
   return data - mean_val
 
 fn main() -> Tensor:
