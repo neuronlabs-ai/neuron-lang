@@ -239,10 +239,81 @@ impl VM {
     /// Execute a function by name.
     pub fn execute(&mut self, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
         let mut resolved_name = fn_name.to_string();
+        let mut keyword_args = Vec::new();
+        if fn_name.contains(':') {
+            let parts: Vec<&str> = fn_name.split(':').collect();
+            resolved_name = parts[0].to_string();
+            if parts.len() > 1 {
+                keyword_args = parts[1].split(',').map(|s| s.to_string()).collect();
+            }
+        }
+        
+        // Check if this is a causal model constructor call
+        if let Some(Value::Str(ref s)) = self.globals.get(&resolved_name) {
+            if s.starts_with("causal_model:") {
+                let parts: Vec<&str> = s.split(':').collect();
+                if parts.len() >= 3 {
+                    let name = parts[1].to_string();
+                    let mut variables = Vec::new();
+                    for part in &parts[2..] {
+                        if part.starts_with("variables=") {
+                            variables = part["variables=".len()..].split(',').map(|v| v.to_string()).filter(|v| !v.is_empty()).collect();
+                        }
+                    }
+                    return Ok(Value::CausalModel { name, variables });
+                }
+            }
+        }
         
         if resolved_name.starts_with("obj_") {
             if let Some(first_arg) = args.first() {
-                if let Value::Model { name, .. } = first_arg {
+                if let Value::CausalModel { name: model_name, variables } = first_arg {
+                    if resolved_name == "obj_observe" || resolved_name == "obj_intervene" {
+                        let mut weights = vec![vec![0.0; variables.len()]; variables.len()];
+                        let noise_vars = vec![1.0; variables.len()];
+                        let noise_means = vec![0.0; variables.len()];
+
+                        if let Some(Value::Str(ref global_val)) = self.globals.get(model_name) {
+                            if global_val.starts_with("causal_model:") {
+                                let parts: Vec<&str> = global_val.split(':').collect();
+                                for part in parts {
+                                    if part.starts_with("edges=") {
+                                        let edges_str = &part["edges=".len()..];
+                                        for edge in edges_str.split(',') {
+                                            let nodes: Vec<&str> = edge.split("->").collect();
+                                            if nodes.len() == 2 {
+                                                if let (Some(&u), Some(&v)) = (
+                                                    variables.iter().position(|x| x == nodes[0]).as_ref(),
+                                                    variables.iter().position(|x| x == nodes[1]).as_ref(),
+                                                ) {
+                                                    weights[u][v] = 1.0;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut map = HashMap::new();
+                        for (i, kw) in keyword_args.iter().enumerate() {
+                            if let Some(val) = args.get(i + 1) {
+                                map.insert(kw.clone(), val.as_float());
+                            }
+                        }
+
+                        let model = crate::causal::CausalModel::new(variables.clone(), weights, noise_vars, noise_means);
+                        if resolved_name == "obj_observe" {
+                            let obs_res = model.observe(&map)
+                                .ok_or_else(|| "Failed to compute observational inference".to_string())?;
+                            return Ok(convert_causal_results(obs_res));
+                        } else {
+                            let int_res = model.intervene(&map)
+                                .ok_or_else(|| "Failed to compute interventional inference".to_string())?;
+                            return Ok(convert_causal_results(int_res));
+                        }
+                    }
+                } else if let Value::Model { name, .. } = first_arg {
                     let method = &resolved_name[4..];
                     resolved_name = format!("{}_{}", name, method);
                 }

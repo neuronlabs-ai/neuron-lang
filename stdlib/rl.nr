@@ -24,8 +24,8 @@ model ReplayBuffer(capacity: Int, state_dim: Int, action_dim: Int):
     update_row(self.rewards, self.write_pos, reward)
     update_row(self.next_states, self.write_pos, next_state)
     update_row(self.dones, self.write_pos, done)
-    self.write_pos = self.write_pos + 1
-    self.current_size = self.current_size + 1
+    let self.write_pos = self.write_pos + 1
+    let self.current_size = self.current_size + 1
 
   fn sample_batch(self, batch_size: Int) -> Tensor[batch_size, state_dim] [Effect[Rand]]:
     // Uniformly sample batch_size transitions
@@ -40,8 +40,8 @@ model ReplayBuffer(capacity: Int, state_dim: Int, action_dim: Int):
     return self.current_size
 
   fn clear(self) [Effect[Mut[self]]]:
-    self.write_pos = 0
-    self.current_size = 0
+    let self.write_pos = 0
+    let self.current_size = 0
 
 model PrioritizedReplayBuffer(capacity: Int, state_dim: Int, action_dim: Int, alpha: Float):
   // Prioritized Experience Replay (Schaul et al. 2016)
@@ -64,8 +64,8 @@ model PrioritizedReplayBuffer(capacity: Int, state_dim: Int, action_dim: Int, al
     update_row(self.next_states, self.write_pos, next_state)
     update_row(self.dones, self.write_pos, done)
     update_row(self.priorities, self.write_pos, self.max_priority)
-    self.write_pos = self.write_pos + 1
-    self.current_size = self.current_size + 1
+    let self.write_pos = self.write_pos + 1
+    let self.current_size = self.current_size + 1
 
   fn sample_batch(self, batch_size: Int, beta: Float) -> Tensor[batch_size, state_dim] [Effect[Rand]]:
     // Sample proportional to priority^alpha
@@ -102,21 +102,21 @@ model RolloutBuffer(capacity: Int, state_dim: Int, action_dim: Int):
     update_row(self.rewards, self.pos, reward)
     update_row(self.values, self.pos, value)
     update_row(self.log_probs, self.pos, log_prob)
-    self.pos = self.pos + 1
+    let self.pos = self.pos + 1
 
   fn compute_advantages(self, last_value: Float, gamma: Float, gae_lambda: Float) [Effect[Mut[self]]]:
     // Compute advantages using GAE
     let not_done_last = 1.0
     let delta = self.rewards + gamma * last_value * not_done_last - self.values
-    self.advantages = delta * gae_lambda
-    self.returns = self.advantages + self.values
+    let self.advantages = delta * gae_lambda
+    let self.returns = self.advantages + self.values
 
   fn get_batches(self, batch_size: Int) -> Tensor[batch_size, state_dim] [Effect[Rand]]:
     // Return shuffled mini-batches for PPO updates
     return self.states
 
   fn clear(self) [Effect[Mut[self]]]:
-    self.pos = 0
+    let self.pos = 0
 
 // ─────────────────────────────────────────────
 //  Advantage Estimation
@@ -233,9 +233,9 @@ agent DQNAgent(state_dim: Int, action_dim: Int, hidden_dim: Int):
 
   fn update_target(self, tau: Float) [Effect[Mut[self]]]:
     // Soft update: target = tau * online + (1 - tau) * target
-    self.target_w1 = self.q_w1 * tau + self.target_w1 * (1.0 - tau)
-    self.target_w2 = self.q_w2 * tau + self.target_w2 * (1.0 - tau)
-    self.target_w3 = self.q_w3 * tau + self.target_w3 * (1.0 - tau)
+    let self.target_w1 = self.q_w1 * tau + self.target_w1 * (1.0 - tau)
+    let self.target_w2 = self.q_w2 * tau + self.target_w2 * (1.0 - tau)
+    let self.target_w3 = self.q_w3 * tau + self.target_w3 * (1.0 - tau)
 
 agent PPOAgent(state_dim: Int, action_dim: Int, hidden_dim: Int):
   // Proximal Policy Optimization (Schulman et al. 2017)

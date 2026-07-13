@@ -89,9 +89,55 @@ impl NType {
     }
 
     pub fn is_numeric(&self) -> bool {
-        matches!(self, NType::Base(n) if n == "Int" || n == "Float")
+        matches!(self, NType::Base(n) if n == "Int" || n == "Float" || n == "Loss")
     }
     pub fn is_tensor(&self) -> bool { matches!(self, NType::Tensor(_)) }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TypeWrapper {
+    Temporal(String),
+    Causal(String),
+    Uncertain,
+    Random,
+}
+
+fn strip_wrappers(mut ty: NType) -> (NType, Vec<TypeWrapper>) {
+    let mut wrappers = Vec::new();
+    loop {
+        match ty {
+            NType::Temporal(inner, dir) => {
+                wrappers.push(TypeWrapper::Temporal(dir));
+                ty = *inner;
+            }
+            NType::Causal(inner, mode) => {
+                wrappers.push(TypeWrapper::Causal(mode));
+                ty = *inner;
+            }
+            NType::Uncertain(inner) => {
+                wrappers.push(TypeWrapper::Uncertain);
+                ty = *inner;
+            }
+            NType::Random(inner) => {
+                wrappers.push(TypeWrapper::Random);
+                ty = *inner;
+            }
+            _ => break,
+        }
+    }
+    (ty, wrappers)
+}
+
+fn apply_wrappers(mut ty: NType, wrappers: Vec<TypeWrapper>) -> NType {
+    for w in wrappers.into_iter().rev() {
+        match w {
+            TypeWrapper::Temporal(dir) => ty = NType::Temporal(Box::new(ty), dir),
+            TypeWrapper::Causal(mode) => ty = NType::Causal(Box::new(ty), mode),
+            TypeWrapper::Uncertain => ty = NType::Uncertain(Box::new(ty)),
+            TypeWrapper::Random => ty = NType::Random(Box::new(ty)),
+        }
+    }
+    ty
 }
 
 fn types_compatible(a: &NType, b: &NType) -> bool {
@@ -108,9 +154,19 @@ fn types_compatible(a: &NType, b: &NType) -> bool {
         (NType::Model(a, _, _), NType::Base(b)) => a == b,
         (NType::Base(a), NType::Model(b, _, _)) => a == b,
         (NType::Void, NType::Void) => true,
+        // Transparent temporal / causal / uncertainty compatibility
+        (x, NType::Temporal(y, _)) => types_compatible(x, y),
+        (NType::Temporal(x, _), y) => types_compatible(x, y),
+        (x, NType::Causal(y, _)) => types_compatible(x, y),
+        (NType::Causal(x, _), y) => types_compatible(x, y),
+        (x, NType::Uncertain(y)) => types_compatible(x, y),
+        (NType::Uncertain(x), y) => types_compatible(x, y),
+        (x, NType::Random(y)) => types_compatible(x, y),
+        (NType::Random(x), y) => types_compatible(x, y),
         _ => false,
     }
 }
+
 
 fn type_from_ast(te: &TypeExpr) -> NType {
     match te {
@@ -253,7 +309,7 @@ impl SymbolTable {
         global.define("gelu", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("sqrt", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("transpose", NType::Fn_(vec![tensor.clone(), int.clone(), int.clone()], Box::new(tensor.clone()), None));
-        global.define("update_row", NType::Fn_(vec![tensor.clone(), int.clone(), tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("update_row", NType::Fn_(vec![tensor.clone(), int.clone(), any.clone()], Box::new(tensor.clone()), None));
         global.define("softmax", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("sigmoid", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("tanh", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
@@ -779,85 +835,135 @@ impl TypeChecker {
             }
         }
 
+        // Strip wrappers for calculation
+        let (stripped_left, left_wrappers) = strip_wrappers(left.clone());
+        let (stripped_right, right_wrappers) = strip_wrappers(right.clone());
+
+        // Perform normal inference on stripped types
+        let mut stripped_result = NType::Any;
+
         // ── Tensor operations ──
         if b.op == BinOp::MatMul {
-            if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&left, &right) {
-                return self.check_matmul(da, db, &b.span);
+            if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&stripped_left, &stripped_right) {
+                stripped_result = self.check_matmul(da, db, &b.span);
+            } else if stripped_left == NType::Any || stripped_right == NType::Any {
+                stripped_result = NType::Any;
+            } else {
+                self.result.add_error(NeuronError::new(
+                    ErrorCode::TypeMismatch,
+                    format!("Unsupported binary operation: {} @ {}", left.display(), right.display()),
+                    b.span.clone(),
+                ));
             }
-        }
-
-        if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
-            if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&left, &right) {
+        } else if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
+            if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&stripped_left, &stripped_right) {
                 self.check_elementwise(da, db, &b.span);
-                return left.clone();
+                stripped_result = stripped_left.clone();
+            } else if (matches!(stripped_left, NType::Tensor(_)) && stripped_right.is_numeric()) || (stripped_left.is_numeric() && matches!(stripped_right, NType::Tensor(_))) {
+                stripped_result = if matches!(stripped_left, NType::Tensor(_)) { stripped_left.clone() } else { stripped_right.clone() };
+            } else if stripped_left == NType::Any || stripped_right == NType::Any {
+                stripped_result = NType::Any;
+            } else if stripped_left.is_numeric() && stripped_right.is_numeric() {
+                if matches!(stripped_left, NType::Base(ref n) if n == "Float") || matches!(stripped_right, NType::Base(ref n) if n == "Float") {
+                    stripped_result = NType::Base("Float".into());
+                } else {
+                    stripped_result = NType::Base("Int".into());
+                }
+            } else {
+                self.result.add_error(NeuronError::new(
+                    ErrorCode::TypeMismatch,
+                    format!("Unsupported binary operation: {} {} {}", left.display(), b.op.as_str(), right.display()),
+                    b.span.clone(),
+                ));
             }
-            // Tensor broadcasting check
-            if (matches!(left, NType::Tensor(_)) && right.is_numeric()) || (left.is_numeric() && matches!(right, NType::Tensor(_))) {
-                return if matches!(left, NType::Tensor(_)) { left.clone() } else { right.clone() };
-            }
-            // Uncertain propagation
-            if let (NType::Uncertain(ref inner), _) = (&left, &right) {
-                return NType::Uncertain(inner.clone());
-            }
-        }
-
-        // Comparison operators
-        if matches!(b.op, BinOp::Eq | BinOp::Neq) {
-            if left != right && !(left.is_numeric() && right.is_numeric()) {
+        } else if matches!(b.op, BinOp::Eq | BinOp::Neq) {
+            if stripped_left != stripped_right && !(stripped_left.is_numeric() && stripped_right.is_numeric()) {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Comparison operator {} requires compatible types, got {} and {}", b.op.as_str(), left.display(), right.display()),
                     b.span.clone(),
                 ));
             }
-            return NType::Base("Bool".into());
-        }
-        if matches!(b.op, BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte) {
-            if !left.is_numeric() || !right.is_numeric() {
+            stripped_result = NType::Base("Bool".into());
+        } else if matches!(b.op, BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte) {
+            if !stripped_left.is_numeric() || !stripped_right.is_numeric() {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Comparison operator {} requires numeric operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
                     b.span.clone(),
                 ));
             }
-            return NType::Base("Bool".into());
-        }
-        if matches!(b.op, BinOp::And | BinOp::Or) {
-            if left != NType::Base("Bool".into()) || right != NType::Base("Bool".into()) {
+            stripped_result = NType::Base("Bool".into());
+        } else if matches!(b.op, BinOp::And | BinOp::Or) {
+            if stripped_left != NType::Base("Bool".into()) || stripped_right != NType::Base("Bool".into()) {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Logical operator {} requires boolean operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
                     b.span.clone(),
                 ));
             }
-            return NType::Base("Bool".into());
+            stripped_result = NType::Base("Bool".into());
+        } else if stripped_left == NType::Base("String".into()) && stripped_right == NType::Base("String".into()) && b.op == BinOp::Add {
+            stripped_result = NType::Base("String".into());
+        } else if stripped_left == NType::Any || stripped_right == NType::Any {
+            stripped_result = NType::Any;
+        } else {
+            self.result.add_error(NeuronError::new(
+                ErrorCode::TypeMismatch,
+                format!("Unsupported binary operation: {} {} {}", left.display(), b.op.as_str(), right.display()),
+                b.span.clone(),
+            ));
         }
 
-        // Numeric promotion
-        if left.is_numeric() && right.is_numeric() {
-            if matches!(left, NType::Base(ref n) if n == "Float") || matches!(right, NType::Base(ref n) if n == "Float") {
-                return NType::Base("Float".into());
+        // Combine wrappers and re-apply
+        let mut combined_wrappers = left_wrappers.clone();
+        let mut has_temporal_conflict = false;
+        for rw in &right_wrappers {
+            match rw {
+                TypeWrapper::Temporal(ref rdir) => {
+                    if let Some(lw) = left_wrappers.iter().find(|w| matches!(w, TypeWrapper::Temporal(_))) {
+                        if let TypeWrapper::Temporal(ref ldir) = lw {
+                            if ldir != rdir {
+                                has_temporal_conflict = true;
+                            }
+                        }
+                    } else {
+                        combined_wrappers.push(rw.clone());
+                    }
+                }
+                TypeWrapper::Causal(ref rmode) => {
+                    if let Some(lw) = left_wrappers.iter().find(|w| matches!(w, TypeWrapper::Causal(_))) {
+                        if let TypeWrapper::Causal(ref lmode) = lw {
+                            if lmode != rmode {
+                                // Handled by causal check above
+                            }
+                        }
+                    } else {
+                        combined_wrappers.push(rw.clone());
+                    }
+                }
+                TypeWrapper::Uncertain => {
+                    if !left_wrappers.iter().any(|w| matches!(w, TypeWrapper::Uncertain)) {
+                        combined_wrappers.push(rw.clone());
+                    }
+                }
+                TypeWrapper::Random => {
+                    if !left_wrappers.iter().any(|w| matches!(w, TypeWrapper::Random)) {
+                        combined_wrappers.push(rw.clone());
+                    }
+                }
             }
-            return NType::Base("Int".into());
         }
 
-        // String concatenation fallback
-        if left == NType::Base("String".into()) && right == NType::Base("String".into()) && b.op == BinOp::Add {
-            return NType::Base("String".into());
+        if has_temporal_conflict {
+            self.result.add_error(NeuronError::new(
+                ErrorCode::TypeMismatch,
+                format!("Temporal direction mismatch in binary operation"),
+                b.span.clone(),
+            ));
         }
 
-        // If either side is Any, allow and return Any
-        if left == NType::Any || right == NType::Any {
-            return NType::Any;
-        }
-
-        // Otherwise error
-        self.result.add_error(NeuronError::new(
-            ErrorCode::TypeMismatch,
-            format!("Unsupported binary operation: {} {} {}", left.display(), b.op.as_str(), right.display()),
-            b.span.clone(),
-        ));
-        NType::Any
+        apply_wrappers(stripped_result, combined_wrappers)
     }
 
     fn check_matmul(&mut self, a_dims: &[Dim], b_dims: &[Dim], span: &Span) -> NType {
@@ -893,16 +999,17 @@ impl TypeChecker {
         if a.is_empty() || b.is_empty() {
             return;
         }
-        if a.len() != b.len() {
-            self.result.add_error(shape_mismatch_error(
-                span.clone(),
-                &format!("{} dims", a.len()),
-                &format!("{} dims", b.len()),
-                "element-wise operation",
-            ));
-            return;
-        }
-        for (da, db) in a.iter().zip(b.iter()) {
+        
+        let max_len = std::cmp::max(a.len(), b.len());
+        let mut a_padded = vec![Dim::Static(1); max_len - a.len()];
+        a_padded.extend_from_slice(a);
+        let mut b_padded = vec![Dim::Static(1); max_len - b.len()];
+        b_padded.extend_from_slice(b);
+
+        for (da, db) in a_padded.iter().zip(b_padded.iter()) {
+            if matches!(da, Dim::Static(1)) || matches!(db, Dim::Static(1)) {
+                continue;
+            }
             if !self.unifier.unify(da, db) {
                 let sa = match da { Dim::Static(v) => v.to_string(), Dim::Symbolic(s) => s.clone(), _ => "?".into() };
                 let sb = match db { Dim::Static(v) => v.to_string(), Dim::Symbolic(s) => s.clone(), _ => "?".into() };

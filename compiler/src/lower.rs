@@ -301,9 +301,31 @@ impl Lowerer {
                 self.emit(main_fn, opt_op, vec![], IRType::Void);
             }
             TopLevel::Causal(c) => {
+                let mut vars = Vec::new();
+                for edge in &c.edges {
+                    for s in &edge.sources {
+                        if !vars.contains(s) {
+                            vars.push(s.clone());
+                        }
+                    }
+                    if let Some(ref t) = &edge.target {
+                        if !vars.contains(t) {
+                            vars.push(t.clone());
+                        }
+                    }
+                }
+                let mut edge_strs = Vec::new();
+                for edge in &c.edges {
+                    if let Some(ref t) = edge.target {
+                        for s in &edge.sources {
+                            edge_strs.push(format!("{}->{}", s, t));
+                        }
+                    }
+                }
+                let val_str = format!("causal_model:{}:variables={}:edges={}", c.name, vars.join(","), edge_strs.join(","));
                 self.program.globals.push(IRGlobal {
                     name: c.name.clone(),
-                    value: IRConst::String(format!("causal_model:{}", c.name)),
+                    value: IRConst::String(val_str),
                     ty: IRType::Any,
                 });
             }
@@ -740,7 +762,14 @@ impl Lowerer {
                             }
                             _ => {
                                 arg_ids.insert(0, receiver_id);
-                                format!("{}_{}", "obj", d.field)
+                                let mut method_name = format!("{}_{}", "obj", d.field);
+                                let arg_names: Vec<String> = c.args.iter()
+                                    .filter_map(|arg| arg.name.clone())
+                                    .collect();
+                                if !arg_names.is_empty() {
+                                    method_name = format!("{}:{}", method_name, arg_names.join(","));
+                                }
+                                method_name
                             }
                         }
                     }
