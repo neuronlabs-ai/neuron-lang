@@ -585,7 +585,8 @@ impl VM {
             f.clone()
         } else if self.functions.contains_key(&format!("{}_new", resolved_name)) {
             resolved_name = format!("{}_new", resolved_name);
-            self.functions.get(&resolved_name).unwrap().clone()
+            self.functions.get(&resolved_name)
+                .ok_or_else(|| format!("Function '{}' not found", resolved_name))?.clone()
         } else {
             return Err(format!("Function '{}' not found", resolved_name));
         };
@@ -634,7 +635,8 @@ impl VM {
             let frame_idx = self.call_stack.len() - 1;
             let current_func_name = self.call_stack[frame_idx].function_name.clone();
             
-            let func = self.functions.get(&current_func_name).unwrap().clone();
+            let func = self.functions.get(&current_func_name)
+                .ok_or_else(|| format!("Function '{}' not found during execution", current_func_name))?.clone();
             let current_block_id = self.call_stack[frame_idx].current_block;
             let inst_idx = self.call_stack[frame_idx].instruction_idx;
             
@@ -686,7 +688,8 @@ impl VM {
                         Some(f.clone())
                     } else if self.functions.contains_key(&format!("{}_new", resolved_callee)) {
                         resolved_callee = format!("{}_new", resolved_callee);
-                        Some(self.functions.get(&resolved_callee).unwrap().clone())
+                        Some(self.functions.get(&resolved_callee)
+                            .ok_or_else(|| format!("Function '{}' not found", resolved_callee))?.clone())
                     } else {
                         None
                     };
@@ -771,7 +774,8 @@ impl VM {
                             Value::Void
                         };
                         
-                        let finished_frame = self.call_stack.pop().unwrap();
+                        let finished_frame = self.call_stack.pop()
+                            .ok_or_else(|| "Internal error: call stack unexpectedly empty".to_string())?;
                         
                         if let Some((_caller_name, _caller_block, dest_val_id)) = finished_frame.return_addr {
                             let caller_idx = self.call_stack.len() - 1;
@@ -1847,8 +1851,6 @@ impl VM {
 
     fn update_tensor_in_place(&mut self, t: &mut Tensor, lr: f64, method: &str) {
         if let Some(grad) = self.tape.get_grad(t.id) {
-            println!("[NEURON-DEBUG] update_tensor_in_place: id={}, numel={}, grad_len={}, first_grad={:?}, first_val={:?}",
-                     t.id, t.numel(), grad.len(), grad.get(0..5), t.data.get(0..5));
             let n = t.numel();
             match method {
                 "adam" | "adamw" => {
@@ -1932,12 +1934,12 @@ impl VM {
                                 self.cuda_kernels.insert(kernel.name.clone(), k_func);
                             }
                             Err(e) => {
-                                println!("Failed to load CUDA kernel {}: {}", kernel.name, e);
+                                eprintln!("Failed to load CUDA kernel {}: {}", kernel.name, e);
                             }
                         }
                     }
                     Err(e) => {
-                        println!("Failed to compile CUDA kernel {}: {}", kernel.name, e);
+                        eprintln!("Failed to compile CUDA kernel {}: {}", kernel.name, e);
                     }
                 }
             }

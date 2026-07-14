@@ -600,6 +600,45 @@ r#"(lambda s: (
         torch.tensor([(lambda c, idx: math.sin(ord(c)))(c, i) for i, c in enumerate(s[:8])], dtype=torch.float64)
     ))(v{})"#, node.inputs[0])
                     }
+
+                    // Temporal safety ops — emit pass-through with warnings
+                    IROp::TemporalBefore { .. } | IROp::TemporalAfter { .. } => {
+                        format!("v{}  # WARNING: temporal direction enforcement not available in Python output", node.inputs[0])
+                    }
+                    IROp::TemporalSnapshot { .. } => {
+                        format!("v{}  # WARNING: temporal snapshot (unwrap) — safety not enforced in Python", node.inputs[0])
+                    }
+                    IROp::TemporalCheckDir { ref expected } => {
+                        format!("None  # WARNING: temporal direction check (expected '{}') skipped in Python — lookahead bias NOT detected", expected)
+                    }
+
+                    // Causal safety ops — emit pass-through with warnings
+                    IROp::CausalCheckMode { ref expected } => {
+                        format!("None  # WARNING: causal mode check (expected '{}') skipped in Python — causal safety NOT enforced", expected)
+                    }
+
+                    // Uncertainty ops — emit pass-through with warnings
+                    IROp::UncertainWrap => {
+                        let std_str = if node.inputs.len() > 1 {
+                            format!("v{}", node.inputs[1])
+                        } else {
+                            "0.1".to_string()
+                        };
+                        format!("v{}  # WARNING: uncertainty wrapping (std={}) not enforced in Python", node.inputs[0], std_str)
+                    }
+                    IROp::UncertainValue => {
+                        format!("v{}  # WARNING: uncertainty .value access — confidence not checked in Python", node.inputs[0])
+                    }
+                    IROp::UncertainConfidence => {
+                        format!("1.0  # WARNING: uncertainty .confidence — always returns 1.0 in Python output")
+                    }
+
+                    IROp::GenerateReply => {
+                        format!("\"[AGI Response]: Python transpilation does not support GenerateReply\"  # v{}", node.inputs[0])
+                    }
+                    IROp::MemoryStore => "None  # memory_store stub".to_string(),
+                    IROp::MemoryRecall { .. } => "[]  # memory_recall stub".to_string(),
+
                     _ => panic!("Unsupported IR operation in PyTranspiler: {:?}", node.op),
                 };
 
