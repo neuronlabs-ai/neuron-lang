@@ -569,6 +569,42 @@ impl VM {
             });
         }
 
+        if resolved_name == "load_tensor" {
+            if args.len() < 3 {
+                return Err("load_tensor requires 3 arguments: (path, rows, cols)".into());
+            }
+            let path = args[0].display();
+            let rows = args[1].as_int() as usize;
+            let cols = args[2].as_int() as usize;
+            let expected_len = rows * cols;
+
+            let data = match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let num_f64 = bytes.len() / 8;
+                    if num_f64 < expected_len {
+                        return Err(format!(
+                            "load_tensor: file '{}' has {} f64 values but expected {} ({}x{})",
+                            path, num_f64, expected_len, rows, cols
+                        ));
+                    }
+                    let mut vals = Vec::with_capacity(expected_len);
+                    for i in 0..expected_len {
+                        let offset = i * 8;
+                        let bytes_arr: [u8; 8] = bytes[offset..offset + 8].try_into().unwrap();
+                        vals.push(f64::from_le_bytes(bytes_arr));
+                    }
+                    vals
+                }
+                Err(e) => {
+                    return Err(format!("load_tensor: cannot read file '{}': {}", path, e));
+                }
+            };
+
+            let mut t = Tensor::new(data, vec![rows, cols]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
         if resolved_name == "forget" {
             if args.len() < 4 {
                 return Err("forget requires 4 arguments: (model, task_data, method, strength)".into());

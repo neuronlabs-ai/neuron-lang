@@ -328,6 +328,7 @@ impl SymbolTable {
         global.define("load", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
         global.define("load_dataset", NType::Fn_(vec![NType::Base("String".into())], Box::new(dataset.clone()), None));
         global.define("load_ohlcv", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
+        global.define("load_tensor", NType::Fn_(vec![NType::Base("String".into()), int.clone(), int.clone()], Box::new(tensor.clone()), None));
         global.define("aggregate", NType::Fn_(vec![NType::List(Box::new(any.clone()))], Box::new(any.clone()), None));
         global.define("estimate_epistemic_std", NType::Fn_(vec![tensor.clone()], Box::new(float.clone()), None));
         global.define("fractional_kelly", NType::Fn_(vec![NType::Uncertain(Box::new(float.clone())), float.clone()], Box::new(float.clone()), None));
