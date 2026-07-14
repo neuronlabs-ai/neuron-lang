@@ -316,124 +316,69 @@ fn main() -> Tensor[1, 4]:
 
   let state = env.reset()
 
-  print("Consulting AGI Knowledge Base:")
-  model_inst.reason_about("Physics: Newtonian Mechanics (F = m * a)")
-  model_inst.reason_about("Engineering: Differentiable Control Theory")
-  model_inst.reason_about("Medicine: Genetic Transcription Pathways")
+  print("Phase 1: Pre-training AGI on synthetic scientific database...")
+  let t = 1
+  while t <= 10:
+      let msg = "hello"
+      if t == 2:
+          let msg = "physics"
+      if t == 3:
+          let msg = "medicine"
+      if t == 4:
+          let msg = "engineering"
+      if t == 5:
+          let msg = "math"
+      if t == 6:
+          let msg = "force"
+      if t == 7:
+          let msg = "genetic"
+      if t == 8:
+          let msg = "control"
+      if t == 9:
+          let msg = "calculus"
+      if t == 10:
+          let msg = "greetings"
 
-  print("Starting Unified AGI Interactive Conversational Loop...")
-  print("Goal: Converse with the AGI and guide it in the Gridworld.")
+      let obs = embed_string(msg)
+      let a = model_inst.step_agent(obs)
+      let state = env.step_env(a)
+      let dist_x = env.agent_x - env.goal_x
+      let dist_y = env.agent_y - env.goal_y
+      let dist_sq = dist_x * dist_x + dist_y * dist_y
+      let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
+      model_inst.learn_dynamics(obs, a, obs, r)
+      let t = t + 1
 
-  // Turn 1
-  print("--- Turn 1 ---")
-  print("Ask the AGI a question (e.g. physics, engineering, medicine, math, hello):")
-  let msg1 = input()
-  print("User:")
-  print(msg1)
-  let reply1 = generate_reply(msg1)
-  print(reply1)
-  let obs1 = embed_string(msg1)
-  let a1 = model_inst.step_agent(obs1)
-  let state = env.step_env(a1)
-  print("Agent position:")
-  print(env.agent_x)
-  print(env.agent_y)
-  let dist_x = env.agent_x - env.goal_x
-  let dist_y = env.agent_y - env.goal_y
-  let dist_sq = dist_x * dist_x + dist_y * dist_y
-  let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
-  print("Reward:")
-  print(r)
-  model_inst.learn_dynamics(obs1, a1, obs1, r)
+  print("Pre-training complete. World dynamics and curiosity module optimized.")
+  print("Starting Phase 2: Interactive AGI Conversational Loop...")
 
-  // Turn 2
-  print("--- Turn 2 ---")
-  print("Ask the AGI a question:")
-  let msg2 = input()
-  print("User:")
-  print(msg2)
-  let reply2 = generate_reply(msg2)
-  print(reply2)
-  let obs2 = embed_string(msg2)
-  let a2 = model_inst.step_agent(obs2)
-  let state = env.step_env(a2)
-  print("Agent position:")
-  print(env.agent_x)
-  print(env.agent_y)
-  let dist_x = env.agent_x - env.goal_x
-  let dist_y = env.agent_y - env.goal_y
-  let dist_sq = dist_x * dist_x + dist_y * dist_y
-  let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
-  print("Reward:")
-  print(r)
-  model_inst.learn_dynamics(obs2, a2, obs2, r)
-
-  // Turn 3
-  print("--- Turn 3 ---")
-  print("Ask the AGI a question:")
-  let msg3 = input()
-  print("User:")
-  print(msg3)
-  let reply3 = generate_reply(msg3)
-  print(reply3)
-  let obs3 = embed_string(msg3)
-  let a3 = model_inst.step_agent(obs3)
-  let state = env.step_env(a3)
-  print("Agent position:")
-  print(env.agent_x)
-  print(env.agent_y)
-  let dist_x = env.agent_x - env.goal_x
-  let dist_y = env.agent_y - env.goal_y
-  let dist_sq = dist_x * dist_x + dist_y * dist_y
-  let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
-  print("Reward:")
-  print(r)
-  model_inst.learn_dynamics(obs3, a3, obs3, r)
-
-  // Turn 4
-  print("--- Turn 4 ---")
-  print("Ask the AGI a question:")
-  let msg4 = input()
-  print("User:")
-  print(msg4)
-  let reply4 = generate_reply(msg4)
-  print(reply4)
-  let obs4 = embed_string(msg4)
-  let a4 = model_inst.step_agent(obs4)
-  let state = env.step_env(a4)
-  print("Agent position:")
-  print(env.agent_x)
-  print(env.agent_y)
-  let dist_x = env.agent_x - env.goal_x
-  let dist_y = env.agent_y - env.goal_y
-  let dist_sq = dist_x * dist_x + dist_y * dist_y
-  let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
-  print("Reward:")
-  print(r)
-  model_inst.learn_dynamics(obs4, a4, obs4, r)
-
-  // Turn 5
-  print("--- Turn 5 ---")
-  print("Ask the AGI a question:")
-  let msg5 = input()
-  print("User:")
-  print(msg5)
-  let reply5 = generate_reply(msg5)
-  print(reply5)
-  let obs5 = embed_string(msg5)
-  let a5 = model_inst.step_agent(obs5)
-  let state = env.step_env(a5)
-  print("Agent position:")
-  print(env.agent_x)
-  print(env.agent_y)
-  let dist_x = env.agent_x - env.goal_x
-  let dist_y = env.agent_y - env.goal_y
-  let dist_sq = dist_x * dist_x + dist_y * dist_y
-  let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
-  print("Reward:")
-  print(r)
-  model_inst.learn_dynamics(obs5, a5, obs5, r)
+  // Interactive Loop (5 Turns)
+  let turn = 1
+  let last_action = zeros(1, 4)
+  while turn <= 5:
+      print("--- Interactive Turn ---")
+      print(turn)
+      print("Ask the AGI a question (physics, medicine, engineering, math, hello):")
+      let msg = input()
+      print("User:")
+      print(msg)
+      let reply = generate_reply(msg)
+      print(reply)
+      let obs = embed_string(msg)
+      let last_action = model_inst.step_agent(obs)
+      let state = env.step_env(last_action)
+      print("Agent position:")
+      print(env.agent_x)
+      print(env.agent_y)
+      let dist_x = env.agent_x - env.goal_x
+      let dist_y = env.agent_y - env.goal_y
+      let dist_sq = dist_x * dist_x + dist_y * dist_y
+      let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
+      print("Reward:")
+      print(r)
+      model_inst.learn_dynamics(obs, last_action, obs, r)
+      let turn = turn + 1
 
   print("Simulation complete. Final safe action:")
-  return a5
+  return last_action
 
