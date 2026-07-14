@@ -605,6 +605,84 @@ impl VM {
             return Ok(Value::Tensor(t));
         }
 
+        if resolved_name == "argmax" {
+            if args.is_empty() {
+                return Err("argmax requires 1 argument: (tensor)".into());
+            }
+            let t = match &args[0] {
+                Value::Tensor(t) => t,
+                other => return Err(format!("argmax expects a Tensor, got {:?}", other)),
+            };
+            if t.data.is_empty() {
+                return Err("argmax on empty tensor".into());
+            }
+            // For a 2D tensor, return argmax of the last row (last token position)
+            // For a 1D tensor, return argmax of the whole vector
+            let slice = if t.ndim() == 2 {
+                let cols = t.shape[1];
+                let last_row_start = (t.shape[0] - 1) * cols;
+                &t.data[last_row_start..last_row_start + cols]
+            } else {
+                &t.data[..]
+            };
+            let mut max_idx = 0usize;
+            let mut max_val = f64::NEG_INFINITY;
+            for i in 0..slice.len() {
+                if slice[i] > max_val {
+                    max_val = slice[i];
+                    max_idx = i;
+                }
+            }
+            return Ok(Value::Int(max_idx as i64));
+        }
+
+        if resolved_name == "save_tensor" {
+            if args.len() < 2 {
+                return Err("save_tensor requires 2 arguments: (tensor, path)".into());
+            }
+            let t = match &args[0] {
+                Value::Tensor(t) => t,
+                other => return Err(format!("save_tensor expects a Tensor, got {:?}", other)),
+            };
+            let path = args[1].display();
+            // Create parent directories if needed
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let slice = &t.data[..];
+            let mut bytes = Vec::with_capacity(slice.len() * 8);
+            for i in 0..slice.len() {
+                bytes.extend_from_slice(&slice[i].to_le_bytes());
+            }
+            std::fs::write(&path, &bytes)
+                .map_err(|e| format!("save_tensor: cannot write '{}': {}", path, e))?;
+            return Ok(Value::Void);
+        }
+
+        if resolved_name == "char_from_int" {
+            if args.is_empty() {
+                return Err("char_from_int requires 1 argument: (int)".into());
+            }
+            let code = args[0].as_int() as u32;
+            let ch = std::char::from_u32(code).unwrap_or('?');
+            return Ok(Value::Str(ch.to_string()));
+        }
+
+        if resolved_name == "onehot" {
+            if args.len() < 2 {
+                return Err("onehot requires 2 arguments: (index, size)".into());
+            }
+            let idx = args[0].as_int() as usize;
+            let size = args[1].as_int() as usize;
+            let mut data = vec![0.0; size];
+            if idx < size {
+                data[idx] = 1.0;
+            }
+            let mut t = Tensor::new(data, vec![1, size]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
         if resolved_name == "forget" {
             if args.len() < 4 {
                 return Err("forget requires 4 arguments: (model, task_data, method, strength)".into());

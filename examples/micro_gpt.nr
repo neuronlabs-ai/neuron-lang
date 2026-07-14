@@ -122,7 +122,38 @@ fn extract_sequence(dataset: Tensor[D, 128], sample_idx: Int) -> Tensor[63, 128]
   return seq
 
 // ─────────────────────────────────────────────
-//  Main Training Loop
+//  Text Generation (Autoregressive)
+// ─────────────────────────────────────────────
+fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> Int:
+  // Generate tokens autoregressively
+  // Start with the prompt sequence, run forward, get next token
+  let current_seq = prompt_seq
+  let t = 0
+  while t < gen_len:
+    // Forward pass through the model
+    let logits = gpt.forward_sequence(current_seq)
+    // Get the predicted next token (argmax of last position's logits)
+    let next_token = argmax(logits)
+    // Print the generated character
+    let ch = char_from_int(next_token)
+    print(ch)
+    // Build proper one-hot vector for the predicted token
+    let new_row = onehot(next_token, 128)
+    // Shift the sequence left by 1 and append the new token
+    let new_seq = zeros(63, 128)
+    let k = 0
+    while k < 62:
+      let old_row = current_seq[k + 1]
+      let new_seq = update_row(new_seq, k, old_row)
+      let k = k + 1
+    // Put new token's one-hot at position 62 (last)
+    let new_seq = update_row(new_seq, 62, new_row)
+    let current_seq = new_seq
+    let t = t + 1
+  return gen_len
+
+// ─────────────────────────────────────────────
+//  Main Training + Generation Loop
 // ─────────────────────────────────────────────
 fn main() -> Tensor[1, 1]:
   print("═══════════════════════════════════════════════")
@@ -164,11 +195,31 @@ fn main() -> Tensor[1, 1]:
     let step = step + 1
 
   print("Training complete!")
-  print("Final loss:")
+
+  // Save trained weights
+  print("Saving trained token embeddings...")
+  save_tensor(gpt.token_embed, "data/trained_token_embed.bin")
+  print("Weights saved.")
+
+  // ─── Text Generation Phase ───
+  print("")
+  print("═══════════════════════════════════════════════")
+  print("  Text Generation")
+  print("═══════════════════════════════════════════════")
+
+  // Use the first training sequence as a prompt
+  let prompt = extract_sequence(train_inputs, 0)
+  print("Generating 20 characters...")
+  let gen_count = generate_text(gpt, prompt, 20)
+  print("")
+  print("Generation complete!")
+
+  // Final evaluation
   let final_input = extract_sequence(train_inputs, 0)
   let final_target = extract_sequence(train_targets, 0)
   let final_logits = gpt.forward_sequence(final_input)
   let final_loss = cross_entropy(final_logits, final_target)
+  print("Final loss:")
   print(final_loss)
 
   return final_loss
