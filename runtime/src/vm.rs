@@ -2174,7 +2174,13 @@ impl VM {
             for (idx, &input_id) in kernel.inputs.iter().enumerate() {
                 let val = get_val(input_id);
                 if kernel.input_is_tensor[idx] {
-                    let tensor = val.as_tensor().ok_or_else(|| format!("Expected tensor input for value {}", input_id))?;
+                    let tensor = match val.as_tensor() {
+                        Some(t) => t,
+                        None => {
+                            any_input_missing = true;
+                            break;
+                        }
+                    };
                     // ensure_device() handles both VRAM (no-op if already there) and UVM (prefetch)
                     tensor.data.ensure_device();
                     let ptr = tensor.device_ptr();
