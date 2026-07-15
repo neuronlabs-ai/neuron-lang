@@ -1485,6 +1485,7 @@ impl VM {
                 let val = get(&node.inputs[0]);
                 let disp = val.display();
                 println!("{}", disp);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
                 self.stdout_log.push(disp);
                 self.effect_log.push("io".into());
                 Ok(Value::Void)
