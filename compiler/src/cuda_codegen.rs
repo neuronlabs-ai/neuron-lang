@@ -370,6 +370,12 @@ pub fn generate_cuda_kernels(func: &IRFunction, all_funcs: &[IRFunction]) -> Vec
             continue;
         }
 
+        // Only generate kernels for groups that actually contain tensor operations
+        let has_tensors = group.instructions.iter().any(|node| tensor_ids.contains(&node.id));
+        if !has_tensors {
+            continue;
+        }
+
         // 1. Identify inputs & outputs of this group
         let mut produced_vals = HashSet::new();
         for node in &group.instructions {

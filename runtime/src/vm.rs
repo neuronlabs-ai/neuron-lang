@@ -2389,11 +2389,15 @@ fn cuda_error_string(ctx: &crate::device::CudaContext, code: u32) -> String {
 
 fn build_fused_groups_cache(func: &IRFunction, all_funcs: &[IRFunction]) -> HashMap<ValueId, (usize, neuron_compiler::cuda_codegen::FusedGroup)> {
     let mut map = HashMap::new();
+    let tensor_ids = neuron_compiler::cuda_codegen::get_tensor_ids(func, all_funcs);
     let groups = neuron_compiler::cuda_codegen::find_fused_groups(func, all_funcs);
     for (g_idx, group) in groups.into_iter().enumerate() {
         if !group.is_empty() {
-            let first_id = group.instructions[0].id;
-            map.insert(first_id, (g_idx, group));
+            let has_tensors = group.instructions.iter().any(|node| tensor_ids.contains(&node.id));
+            if has_tensors {
+                let first_id = group.instructions[0].id;
+                map.insert(first_id, (g_idx, group));
+            }
         }
     }
     map
