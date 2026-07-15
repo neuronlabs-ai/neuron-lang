@@ -606,7 +606,10 @@ pub fn get_cuda_context() -> Option<&'static CudaContext> {
     let context = CUDA_CONTEXT.get_or_init(|| {
         match CudaContext::init() {
             Ok(ctx) => Some(ctx),
-            Err(_) => None,
+            Err(e) => {
+                eprintln!("[NEURON DEVICE] CUDA Initialization failed: {}. Falling back to CPU.", e);
+                None
+            }
         }
     }).as_ref();
 

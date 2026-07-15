@@ -177,7 +177,7 @@ fn main() -> Tensor[1, 1]:
   // Training loop
   print("Starting training...")
   let step = 0
-  let total_steps = 500
+  let total_steps = 50
 
   while step < total_steps:
     // Get the current sample (cycling through dataset)
