@@ -2029,6 +2029,10 @@ impl VM {
         let kernels = neuron_compiler::cuda_codegen::generate_cuda_kernels(func, &all_funcs);
         
         if let Some(ctx) = crate::device::get_cuda_context() {
+            if !kernels.is_empty() {
+                println!("[NEURON JIT] Compiling {} GPU kernels for function '{}'...", kernels.len(), func.name);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
             let cache_mutex = GLOBAL_KERNEL_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
             for kernel in kernels {
                 let mut cache = cache_mutex.lock().unwrap();
@@ -2040,6 +2044,7 @@ impl VM {
                     continue;
                 }
                 
+                let start_time = std::time::Instant::now();
                 match ctx.compile_to_ptx(&kernel.name, &kernel.code) {
                     Ok(ptx) => {
                         match ctx.load_module_and_get_function(&ptx, &kernel.name) {
@@ -2047,6 +2052,8 @@ impl VM {
                                 let k_func = CudaModuleFunction { module, function };
                                 cache.insert(kernel.code.clone(), CudaModuleFunction { module, function });
                                 self.cuda_kernels.insert(kernel.name.clone(), k_func);
+                                println!("  ✓ Kernel '{}' compiled in {}ms", kernel.name, start_time.elapsed().as_millis());
+                                let _ = std::io::Write::flush(&mut std::io::stdout());
                             }
                             Err(e) => {
                                 eprintln!("Failed to load CUDA kernel {}: {}", kernel.name, e);
