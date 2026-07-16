@@ -148,11 +148,11 @@ impl NeuronLM {
             }
         }
 
-        // Select response using neural activation hash
         let text = prompt.to_lowercase();
-        if text.contains("physics") || text.contains("force") || text.contains("mechanics") || text.contains("gravity") || neural_val.cos() > 0.8 {
+        // Select response: prioritizing explicit text keywords, then falling back to neural activations
+        if text.contains("physics") || text.contains("force") || text.contains("mechanics") || text.contains("gravity") {
             "[AGI Response]: Force is simply mass times acceleration (F = ma). Think of it like this: if you push a toy car, you are applying a force to make it speed up! In my gridworld game, I use this physics to decide how hard to push myself in different directions.".to_string()
-        } else if text.contains("medicine") || text.contains("genetic") || text.contains("dna") || text.contains("biology") || neural_val.sin() < -0.8 {
+        } else if text.contains("medicine") || text.contains("genetic") || text.contains("dna") || text.contains("biology") {
             "[AGI Response]: Genetic transcription is how cells copy DNA to make proteins. It is like writing down a recipe from a big cookbook onto a small note card so you can take it to the kitchen and bake a cake! I store these cellular recipes as ideas in my memory.".to_string()
         } else if text.contains("engineering") || text.contains("control") || text.contains("robotics") {
             "[AGI Response]: Control theory is just how robots plan their movements. If a robot wants to walk to a door, it has to calculate how much to bend its knees and swing its arms step-by-step so it doesn't fall over. I use this to walk safely to my target.".to_string()
@@ -160,6 +160,10 @@ impl NeuronLM {
             "[AGI Response]: Math helps me turn words and concepts into numbers. For example, I represent 'up' or 'down' as vector coordinates, which lets me add and multiply them to compute the best path to reach my goal!".to_string()
         } else if text.contains("hello") || text.contains("hi") || text.contains("who are you") || text.contains("greetings") {
             "[AGI Response]: Hello! I am a friendly NeuroCognitive AGI agent. I can remember what we talk about, learn how to walk around a simple grid game board, and chat with you about physics, math, engineering, or biology. What would you like to talk about?".to_string()
+        } else if neural_val.cos() > 0.8 {
+            "[AGI Response]: Force is simply mass times acceleration (F = ma). Think of it like this: if you push a toy car, you are applying a force to make it speed up! In my gridworld game, I use this physics to decide how hard to push myself in different directions.".to_string()
+        } else if neural_val.sin() < -0.8 {
+            "[AGI Response]: Genetic transcription is how cells copy DNA to make proteins. It is like writing down a recipe from a big cookbook onto a small note card so you can take it to the kitchen and bake a cake! I store these cellular recipes as ideas in my memory.".to_string()
         } else {
             format!("[AGI Response]: Got it! I've processed your prompt neural_val={:.4} and updated my thoughts.", neural_val)
         }
