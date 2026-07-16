@@ -184,11 +184,12 @@ fn main() -> Tensor[1, 1]:
   let step = 0
   let total_steps = 500
 
+
   while step < total_steps:
     // Get the current sample (cycling through dataset)
     let sample_idx = step
-    while sample_idx >= num_samples:
-      let sample_idx = sample_idx - num_samples
+    if sample_idx >= num_samples:
+      let sample_idx = step - num_samples
 
     // Extract input and target rows as one-hot encoded sequences of shape [63, 128]
     let input_seq = extract_sequence(train_inputs, sample_idx)
@@ -196,12 +197,7 @@ fn main() -> Tensor[1, 1]:
 
     // Train step
     let loss = gpt.train_step(input_seq, target_seq)
-
-    // Print loss every 25 steps
-    let print_mod = step - (step / 25) * 25
-    if print_mod == 0:
-      print(step)
-      print(loss)
+    print(loss)
 
     let step = step + 1
 
