@@ -720,6 +720,7 @@ impl Lowerer {
                         }
                         "update_row" => return self.emit(func, IROp::UpdateRow, arg_ids, IRType::Tensor(vec![])),
                         "print" => return self.emit(func, IROp::Print, arg_ids, IRType::Void),
+                        "print_inline" => return self.emit(func, IROp::PrintInline, arg_ids, IRType::Void),
                         "UNCERTAIN" | "Normal" | "Beta" | "GaussianNoise" => {
                             return self.emit(func, IROp::UncertainWrap, arg_ids, IRType::Uncertain(Box::new(IRType::F64)));
                         }

@@ -141,7 +141,7 @@ fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int, tempe
     let prev_token = next_token
     // Print the generated character
     let ch = char_from_int(next_token)
-    print(ch)
+    print_inline(ch)
     // Build proper one-hot vector for the predicted token
     let new_row = onehot(next_token, 128)
     // Shift the sequence left by 1 and append the new token
@@ -180,9 +180,9 @@ fn main() -> Tensor[1, 1]:
   print("Training data loaded.")
 
   // Training loop — 500 steps cycling through all samples
-  print("Starting training (500 steps)...")
+  print("Starting training (1000 steps)...")
   let step = 0
-  let total_steps = 500
+  let total_steps = 1000
 
 
   while step < total_steps:

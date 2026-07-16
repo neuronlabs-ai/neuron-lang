@@ -340,6 +340,7 @@ impl SymbolTable {
         global.define("sample", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("condition", NType::Fn_(vec![any.clone(), any.clone()], Box::new(any.clone()), None));
         global.define("print", NType::Fn_(vec![any.clone()], Box::new(NType::Void), None));
+        global.define("print_inline", NType::Fn_(vec![any.clone()], Box::new(NType::Void), None));
         global.define("input", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));
         global.define("embed_string", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
         global.define("generate_reply", NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("String".into())), None));

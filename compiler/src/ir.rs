@@ -196,6 +196,7 @@ pub enum IROp {
     
     // ── Misc ──
     Print,
+    PrintInline,
     Input,
     EmbedString,
     GenerateReply,
