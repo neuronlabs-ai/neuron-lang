@@ -4,6 +4,14 @@
 // ═══════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────
+//  Causal Safety SCM
+// ─────────────────────────────────────────────
+causal model ActionSafety:
+  variables: [action, hazard_near, collision]
+  action -> collision
+  hazard_near -> collision
+
+// ─────────────────────────────────────────────
 //  Episodic Memory System
 // ─────────────────────────────────────────────
 agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
@@ -13,13 +21,24 @@ agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
   access_counts: Tensor[capacity, 1] = zeros(capacity, 1)
   write_pos: Int = 0
   current_size: Int = 0
-  current_time: Int = 0
+  current_time: Float = 0.0
   query_proj: Tensor[embed_dim, embed_dim] = glorot(embed_dim, embed_dim)
   key_proj: Tensor[embed_dim, embed_dim] = glorot(embed_dim, embed_dim)
   memory: EpisodicMemory[Tensor[embed_dim]]
 
   fn push(self, key: Tensor[embed_dim], value: Tensor[embed_dim]) [Effect[Mut[self]]]:
     store(self.memory, key)
+    let self.keys = update_row(self.keys, self.write_pos, key)
+    let self.values = update_row(self.values, self.write_pos, value)
+    let self.timestamps = update_row(self.timestamps, self.write_pos, zeros(1, 1) + self.current_time)
+    let self.access_counts = update_row(self.access_counts, self.write_pos, zeros(1, 1))
+    
+    let self.write_pos = self.write_pos + 1
+    if self.write_pos >= self.capacity:
+      let self.write_pos = 0
+    if self.current_size < self.capacity:
+      let self.current_size = self.current_size + 1
+    let self.current_time = self.current_time + 1.0
 
   fn recall_op(self, query: Tensor[embed_dim], k: Int) -> Tensor[k, embed_dim]:
     let q = query @ self.query_proj
@@ -37,11 +56,16 @@ agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
 
   fn consolidate(self) [Effect[Mut[self]]]:
     let similarity = self.keys @ transpose(self.keys, 0, 1)
-    let importance = self.access_counts * sigmoid(similarity)
+    let decay = similarity * 0.001
+    let self.keys = self.keys - decay @ self.keys
 
-  fn forget_old(self, max_age: Int) [Effect[Mut[self]]]:
+  fn forget_old(self, max_age: Float) [Effect[Mut[self]]]:
     let age = self.current_time - self.timestamps
     let keep_mask = sigmoid((-age + max_age) * 10.0)
+    let ones = zeros(1, 8) + 1.0
+    let mask_matrix = keep_mask @ ones
+    let self.keys = self.keys * mask_matrix
+    let self.values = self.values * mask_matrix
 
 // ─────────────────────────────────────────────
 //  Semantic Memory System
@@ -56,6 +80,12 @@ agent SemanticMemorySystem(embed_dim: Int, capacity: Int):
 
   fn store_fact(self, subject: Tensor[embed_dim], relation: Tensor[embed_dim], obj: Tensor[embed_dim]) [Effect[Mut[self]]]:
     store(self.memory, subject)
+    let self.subjects = update_row(self.subjects, self.write_pos, subject)
+    let self.relations = update_row(self.relations, self.write_pos, relation)
+    let self.objects = update_row(self.objects, self.write_pos, obj)
+    let self.write_pos = self.write_pos + 1
+    if self.write_pos >= self.capacity:
+      let self.write_pos = 0
 
   fn query(self, subject: Tensor[embed_dim], relation: Tensor[embed_dim]) -> Tensor[embed_dim]:
     let query_embed = subject + relation
@@ -68,8 +98,10 @@ agent SemanticMemorySystem(embed_dim: Int, capacity: Int):
     let composed = (concept_a + concept_b) @ self.compose_w
     return composed
 
-  fn merge_knowledge(self, other_subjects: Tensor[M, embed_dim], other_relations: Tensor[M, embed_dim], other_objects: Tensor[M, embed_dim]) [Effect[Mut[self]]]:
-    let dummy = 0
+  fn merge_knowledge(self, other_subjects: Tensor[20, embed_dim], other_relations: Tensor[20, embed_dim], other_objects: Tensor[20, embed_dim]) [Effect[Mut[self]]]:
+    let self.subjects = self.subjects * 0.9 + other_subjects * 0.1
+    let self.relations = self.relations * 0.9 + other_relations * 0.1
+    let self.objects = self.objects * 0.9 + other_objects * 0.1
 
 // ─────────────────────────────────────────────
 //  Working Memory System
@@ -106,7 +138,7 @@ agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
     let scores = context @ transpose(self.slots, 0, 1)
 
   fn clear(self) [Effect[Mut[self]]]:
-    let dummy = 0
+    let self.slots = zeros(4, 8)
 
 // ─────────────────────────────────────────────
 //  ICM Curiosity Module
@@ -213,6 +245,7 @@ model NeuroCognitiveAgent:
   working: WorkingMemorySystem = WorkingMemorySystem(8, 4)
   world: WorldModel = WorldModel(8, 4, 16, 8, 12)
   curiosity: CuriosityModule = CuriosityModule(8, 4, 16, 20, 32)
+  safety_scm: ActionSafety = ActionSafety()
   
   // Learned policy mapping combined latent state to action
   policy_w: Tensor[8, 4] = glorot(8, 4)
@@ -244,6 +277,29 @@ model NeuroCognitiveAgent:
     // 5. Select action logits
     let logits = combined @ self.policy_w
     let action_probs = softmax(logits)
+    let proposed_action = argmax(action_probs)
+
+    // Extract agent and hazard coordinates to compute distance continuously using one-hot masking
+    let agent_x = (obs * onehot(0, 8)).sum(1)
+    let agent_y = (obs * onehot(1, 8)).sum(1)
+    let hazard_x = (obs * onehot(4, 8)).sum(1)
+    let hazard_y = (obs * onehot(5, 8)).sum(1)
+    let dx = agent_x - hazard_x
+    let dy = agent_y - hazard_y
+    let dist_sq = dx * dx + dy * dy
+    let hazard_near = sigmoid((0.2 - dist_sq) * 100.0)
+
+    print("[Agent Vocalization]: Verifying safety via counterfactual causal SCM...")
+    // Evaluate collision risk using the Structural Causal Model (SCM)
+    let act_float = proposed_action * 1.0
+    let safety_check = self.safety_scm.intervene(action = act_float, hazard_near = hazard_near)
+    let collision_prob = safety_check.collision
+    let collision_val = collision_prob.value
+
+    // Apply smooth penalty based on collision risk
+    let risk_penalty = sigmoid((collision_val - 0.5) * 20.0) * 10.0
+    let penalty = onehot(proposed_action, 4) * risk_penalty
+    let final_action_probs = softmax(logits - penalty)
 
     // 6. Erase & write to Working Memory
     self.working.write(combined)
@@ -256,7 +312,7 @@ model NeuroCognitiveAgent:
 
     print("[Agent Vocalization]: Filtering policy through safety alignment constraint...")
     // 9. Enforce safety alignment filter
-    let safe_action = safe_action_filter(action_probs, self.safety_constraints, 0.5)
+    let safe_action = safe_action_filter(final_action_probs, self.safety_constraints, 0.5)
 
     return safe_action
 
@@ -264,6 +320,18 @@ model NeuroCognitiveAgent:
     // Train world dynamics and curiosity module in-place
     self.world.train_step(state, action, next_state, reward)
     self.curiosity.learn(state, action, next_state)
+
+    // Reinforcement Learning: Optimize policy mapping using policy gradient
+    let wm_context = self.working.read(state)
+    let retrieved = self.memory.recall_op(state, 1)
+    let assoc = self.semantic.query(state, state)
+    let combined = state + wm_context + retrieved + assoc
+    let logits = combined @ self.policy_w
+    let action_probs = softmax(logits)
+
+    // Compute policy loss weighted by reward
+    let policy_loss = cross_entropy(action_probs, action) * reward
+    update self.policy_w by adam(grad(policy_loss), lr=1e-3)
 
 // ─────────────────────────────────────────────
 //  Gridworld Environment Model
@@ -381,4 +449,3 @@ fn main() -> Tensor[1, 4]:
 
   print("Simulation complete. Final safe action:")
   return last_action
-
