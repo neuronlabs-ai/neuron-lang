@@ -110,7 +110,9 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                                 }
                             }
                             IROp::Call { function } => {
-                                if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
+                                if function == "onehot" {
+                                    is_tensor = true;
+                                } else if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
                                     if is_tensor_type(&f.return_type) {
                                         is_tensor = true;
                                     }
@@ -287,7 +289,9 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                             }
                         }
                         IROp::Call { function } => {
-                            if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
+                            if function == "onehot" {
+                                is_tensor = true;
+                            } else if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
                                 if is_tensor_type(&f.return_type) {
                                     is_tensor = true;
                                 }
