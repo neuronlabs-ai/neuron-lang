@@ -105,7 +105,7 @@ model MicroGPT:
     let logits = self.forward_sequence(input_ids)
     let loss = cross_entropy(logits, target_ids)
     print(loss)
-    update self by adam(grad(loss), lr=1.5e-3)
+    update self by adam(grad(loss), lr=3e-4)
     return loss
 
 // ─────────────────────────────────────────────
@@ -139,8 +139,9 @@ fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> In
     // Get the predicted next token
     let next_token = argmax(penalized_logits)
     let prev_token = next_token
-    // Print the generated character
+    // Print the generated character and its token ID
     let ch = char_from_int(next_token)
+    print(next_token)
     print(ch)
     // Build proper one-hot vector for the predicted token
     let new_row = onehot(next_token, 128)
