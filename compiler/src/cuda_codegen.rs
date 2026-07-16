@@ -109,6 +109,29 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                                     }
                                 }
                             }
+                            IROp::Call { function } => {
+                                if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
+                                    if is_tensor_type(&f.return_type) {
+                                        is_tensor = true;
+                                    }
+                                } else if function.starts_with("obj_") {
+                                    let method = &function[4..];
+                                    let suffix = format!("_{}", method);
+                                    let mut any_returns_tensor = false;
+                                    let mut found_any = false;
+                                    for f in all_funcs {
+                                        if f.name.ends_with(&suffix) {
+                                            found_any = true;
+                                            if is_tensor_type(&f.return_type) {
+                                                any_returns_tensor = true;
+                                            }
+                                        }
+                                    }
+                                    if found_any && any_returns_tensor {
+                                        is_tensor = true;
+                                    }
+                                }
+                            }
                             IROp::Add
                             | IROp::Sub
                             | IROp::Mul
@@ -260,6 +283,29 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                                     if global_fields.contains(name) {
                                         is_tensor = true;
                                     }
+                                }
+                            }
+                        }
+                        IROp::Call { function } => {
+                            if let Some(f) = all_funcs.iter().find(|f| &f.name == function) {
+                                if is_tensor_type(&f.return_type) {
+                                    is_tensor = true;
+                                }
+                            } else if function.starts_with("obj_") {
+                                let method = &function[4..];
+                                let suffix = format!("_{}", method);
+                                let mut any_returns_tensor = false;
+                                let mut found_any = false;
+                                for f in all_funcs {
+                                    if f.name.ends_with(&suffix) {
+                                        found_any = true;
+                                        if is_tensor_type(&f.return_type) {
+                                            any_returns_tensor = true;
+                                        }
+                                    }
+                                }
+                                if found_any && any_returns_tensor {
+                                    is_tensor = true;
                                 }
                             }
                         }
