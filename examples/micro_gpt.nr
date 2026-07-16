@@ -134,7 +134,7 @@ fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> In
     // Forward pass through the model
     let logits = gpt.forward_sequence(current_seq)
     // Slice to get the logits of the last position (index 62) to match penalty shape [1, 128]
-    let last_logits = logits[62:63]
+    let last_logits = logits[62]
     // Apply permanent penalty to control/pad/bos/eos tokens (0, 1, 2) and repetition penalty to prev_token
     let penalty = onehot(0, 128) * 20.0 + onehot(1, 128) * 20.0 + onehot(2, 128) * 20.0 + onehot(prev_token, 128) * 5.0
     let penalized_logits = last_logits - penalty
