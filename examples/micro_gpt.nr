@@ -105,7 +105,7 @@ model MicroGPT:
     let logits = self.forward_sequence(input_ids)
     let loss = cross_entropy(logits, target_ids)
     print(loss)
-    update self by adam(grad(loss), lr=3e-4)
+    update self by adam(grad(loss), lr=1.5e-3)
     return loss
 
 // ─────────────────────────────────────────────
@@ -128,12 +128,17 @@ fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> In
   // Generate tokens autoregressively
   // Start with the prompt sequence, run forward, get next token
   let current_seq = prompt_seq
+  let prev_token = 0
   let t = 0
   while t < gen_len:
     // Forward pass through the model
     let logits = gpt.forward_sequence(current_seq)
-    // Get the predicted next token (argmax of last position's logits)
-    let next_token = argmax(logits)
+    // Apply repetition penalty to prevent repeating the same character
+    let penalty = onehot(prev_token, 128) * 2.0
+    let penalized_logits = logits - penalty
+    // Get the predicted next token
+    let next_token = argmax(penalized_logits)
+    let prev_token = next_token
     // Print the generated character
     let ch = char_from_int(next_token)
     print(ch)
@@ -177,7 +182,7 @@ fn main() -> Tensor[1, 1]:
   // Training loop
   print("Starting training...")
   let step = 0
-  let total_steps = 50
+  let total_steps = 60
 
   while step < total_steps:
     // Get the current sample (cycling through dataset)
