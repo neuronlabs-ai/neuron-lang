@@ -52,71 +52,27 @@ fn is_tensor_type(ty: &IRType) -> bool {
     }
 }
 
-pub fn get_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
+pub fn get_tensor_fields(func: &IRFunction) -> HashSet<String> {
     let mut tensor_fields = HashSet::new();
-    
-    for func in all_funcs {
-        let mut set = HashSet::new();
-        for param in &func.params {
-            if is_tensor_type(&param.ty) {
-                set.insert(param.id);
-            }
+    let mut set = HashSet::new();
+    for param in &func.params {
+        if is_tensor_type(&param.ty) {
+            set.insert(param.id);
         }
-        
-        for _ in 0..5 {
-            let mut changed = false;
-            for block in &func.blocks {
-                for node in &block.instructions {
-                    let mut is_tensor = is_tensor_type(&node.output_type) || !node.output_shape.is_empty();
-                    if !is_tensor {
-                        match &node.op {
-                            IROp::Zeros(_)
-                            | IROp::Ones(_)
-                            | IROp::Glorot(_)
-                            | IROp::Randn(_)
-                            | IROp::MatMul
-                            | IROp::Linear { .. }
-                            | IROp::Conv2D { .. }
-                            | IROp::LayerNorm { .. }
-                            | IROp::Embedding { .. }
-                            | IROp::Softmax { .. }
-                            | IROp::Sum { .. }
-                            | IROp::Mean { .. }
-                            | IROp::Max { .. }
-                            | IROp::Min { .. }
-                            | IROp::Reshape(_)
-                            | IROp::Transpose(_, _)
-                            | IROp::Slice(_)
-                            | IROp::Concat { .. } => {
-                                is_tensor = true;
-                            }
-                            IROp::Add
-                            | IROp::Sub
-                            | IROp::Mul
-                            | IROp::Div
-                            | IROp::Neg
-                            | IROp::ReLU
-                            | IROp::GeLU
-                            | IROp::Sigmoid
-                            | IROp::Tanh
-                            | IROp::Dropout { .. }
-                            | IROp::Index => {
-                                if node.inputs.iter().any(|i| set.contains(i)) {
-                                    is_tensor = true;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if is_tensor {
-                        if set.insert(node.id) {
-                            changed = true;
-                        }
-                    }
-                    
-                    let output_is_tensor = set.contains(&node.id);
+    }
+    
+    for _ in 0..5 {
+        let mut changed = false;
+        for block in &func.blocks {
+            for node in &block.instructions {
+                let mut is_tensor = is_tensor_type(&node.output_type) || !node.output_shape.is_empty();
+                if !is_tensor {
                     match &node.op {
-                        IROp::MatMul
+                        IROp::Zeros(_)
+                        | IROp::Ones(_)
+                        | IROp::Glorot(_)
+                        | IROp::Randn(_)
+                        | IROp::MatMul
                         | IROp::Linear { .. }
                         | IROp::Conv2D { .. }
                         | IROp::LayerNorm { .. }
@@ -130,50 +86,96 @@ pub fn get_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                         | IROp::Transpose(_, _)
                         | IROp::Slice(_)
                         | IROp::Concat { .. } => {
+                            is_tensor = true;
+                        }
+                        IROp::Load { name } => {
+                            if tensor_fields.contains(name) {
+                                is_tensor = true;
+                            }
+                        }
+                        IROp::Add
+                        | IROp::Sub
+                        | IROp::Mul
+                        | IROp::Div
+                        | IROp::Neg
+                        | IROp::ReLU
+                        | IROp::GeLU
+                        | IROp::Sigmoid
+                        | IROp::Tanh
+                        | IROp::Dropout { .. }
+                        | IROp::Index => {
+                            if node.inputs.iter().any(|i| set.contains(i)) {
+                                is_tensor = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if is_tensor {
+                    if set.insert(node.id) {
+                        changed = true;
+                    }
+                }
+                
+                let output_is_tensor = set.contains(&node.id);
+                match &node.op {
+                    IROp::MatMul
+                    | IROp::Linear { .. }
+                    | IROp::Conv2D { .. }
+                    | IROp::LayerNorm { .. }
+                    | IROp::Embedding { .. }
+                    | IROp::Softmax { .. }
+                    | IROp::Sum { .. }
+                    | IROp::Mean { .. }
+                    | IROp::Max { .. }
+                    | IROp::Min { .. }
+                    | IROp::Reshape(_)
+                    | IROp::Transpose(_, _)
+                    | IROp::Slice(_)
+                    | IROp::Concat { .. } => {
+                        for &input in &node.inputs {
+                            if set.insert(input) {
+                                changed = true;
+                            }
+                        }
+                    }
+                    IROp::Neg
+                    | IROp::ReLU
+                    | IROp::GeLU
+                    | IROp::Sigmoid
+                    | IROp::Tanh
+                    | IROp::Dropout { .. } => {
+                        if output_is_tensor {
                             for &input in &node.inputs {
                                 if set.insert(input) {
                                     changed = true;
                                 }
                             }
                         }
-                        IROp::Neg
-                        | IROp::ReLU
-                        | IROp::GeLU
-                        | IROp::Sigmoid
-                        | IROp::Tanh
-                        | IROp::Dropout { .. } => {
-                            if output_is_tensor {
-                                for &input in &node.inputs {
-                                    if set.insert(input) {
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        }
-                        IROp::Index => {
-                            if output_is_tensor && !node.inputs.is_empty() {
-                                if set.insert(node.inputs[0]) {
-                                    changed = true;
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    IROp::Index => {
+                        if output_is_tensor && !node.inputs.is_empty() {
+                            if set.insert(node.inputs[0]) {
+                                changed = true;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            if !changed {
-                break;
-            }
         }
-        
-        for block in &func.blocks {
-            for node in &block.instructions {
-                if let IROp::Store { name } = &node.op {
-                    if !node.inputs.is_empty() {
-                        let value_id = *node.inputs.last().unwrap();
-                        if set.contains(&value_id) {
-                            tensor_fields.insert(name.clone());
-                        }
+        if !changed {
+            break;
+        }
+    }
+    
+    for block in &func.blocks {
+        for node in &block.instructions {
+            if let IROp::Store { name } = &node.op {
+                if !node.inputs.is_empty() {
+                    let value_id = *node.inputs.last().unwrap();
+                    if set.contains(&value_id) {
+                        tensor_fields.insert(name.clone());
                     }
                 }
             }
@@ -183,8 +185,8 @@ pub fn get_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
     tensor_fields
 }
 
-pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<usize> {
-    let tensor_fields = get_tensor_fields(all_funcs);
+pub fn get_tensor_ids(func: &IRFunction, _all_funcs: &[IRFunction]) -> HashSet<usize> {
+    let tensor_fields = get_tensor_fields(func);
     let mut set = HashSet::new();
     for param in &func.params {
         if is_tensor_type(&param.ty) {
