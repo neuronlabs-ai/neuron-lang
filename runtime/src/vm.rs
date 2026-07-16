@@ -865,6 +865,7 @@ impl VM {
                     Terminator::Jump(target) => {
                         self.call_stack[frame_idx].current_block = *target;
                         self.call_stack[frame_idx].instruction_idx = 0;
+                        self.call_stack[frame_idx].fused_skipped_ids.clear();
                         true
                     }
                     Terminator::Branch { cond, true_block, false_block } => {
@@ -876,6 +877,7 @@ impl VM {
                         let target = if cond_val.as_bool() { *true_block } else { *false_block };
                         self.call_stack[frame_idx].current_block = target;
                         self.call_stack[frame_idx].instruction_idx = 0;
+                        self.call_stack[frame_idx].fused_skipped_ids.clear();
                         true
                     }
                     Terminator::Return(val_id) => {
@@ -2178,9 +2180,15 @@ impl VM {
             let mut arg_values = Vec::new();
             arg_values.push(CudaArg::Ptr(out_ptr));
             
+            // IMPORTANT: Collect all cloned input Values FIRST so their VRAM buffers
+            // stay alive until after the kernel launch. Previously, each `get_val()` 
+            // clone was dropped at the end of the loop iteration, returning the VRAM
+            // pointer to the pool. The next iteration's clone could reuse (and zero) 
+            // the same pointer, causing all inputs to alias the last cloned buffer.
+            let input_vals: Vec<Value> = kernel.inputs.iter().map(|&id| get_val(id)).collect();
+            
             let mut any_input_missing = false;
-            for (idx, &input_id) in kernel.inputs.iter().enumerate() {
-                let val = get_val(input_id);
+            for (idx, val) in input_vals.iter().enumerate() {
                 if kernel.input_is_tensor[idx] {
                     let tensor = match val.as_tensor() {
                         Some(t) => t,
@@ -2244,10 +2252,6 @@ impl VM {
                 return Err(format!("cuLaunchKernel failed (code {}): {} [grid={}, block={}, args={}, numel={}]",
                     res, err_str, grid_size, block_size, kernel_params.len(), numel));
             }
-            
-            // No cuCtxSynchronize needed here — kernel launches on the default
-            // stream are serialized automatically. The Buffer will sync lazily
-            // when host data is actually needed (via ensure_host / as_slice).
             
             // Mark the output tensor's VRAM as current — NO download to host!
             // The data stays in VRAM until the CPU actually needs to read it
