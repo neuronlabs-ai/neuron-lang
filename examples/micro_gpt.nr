@@ -104,7 +104,6 @@ model MicroGPT:
   fn train_step(self, input_ids: Tensor[63, 128], target_ids: Tensor[63, 128]) -> Tensor[1, 1] [Effect[Mut[self]]]:
     let logits = self.forward_sequence(input_ids)
     let loss = cross_entropy(logits, target_ids)
-    print(loss)
     update self by adam(grad(loss), lr=3e-4)
     return loss
 
@@ -122,11 +121,10 @@ fn extract_sequence(dataset: Tensor[D, 128], sample_idx: Int) -> Tensor[63, 128]
   return seq
 
 // ─────────────────────────────────────────────
-//  Text Generation (Autoregressive)
+//  Text Generation (Autoregressive with Sampling)
 // ─────────────────────────────────────────────
-fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> Int:
-  // Generate tokens autoregressively
-  // Start with the prompt sequence, run forward, get next token
+fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int, temperature: Float) -> Int:
+  // Generate tokens autoregressively with temperature sampling
   let current_seq = prompt_seq
   let prev_token = 0
   let t = 0
@@ -138,15 +136,11 @@ fn generate_text(gpt: MicroGPT, prompt_seq: Tensor[63, 128], gen_len: Int) -> In
     // Apply permanent penalty to control/pad/bos/eos tokens (0, 1, 2) and repetition penalty to prev_token
     let penalty = onehot(0, 128) * 20.0 + onehot(1, 128) * 20.0 + onehot(2, 128) * 20.0 + onehot(prev_token, 128) * 5.0
     let penalized_logits = last_logits - penalty
-    if t == 0:
-      print(last_logits)
-      print(penalized_logits)
-    // Get the predicted next token
-    let next_token = argmax(penalized_logits)
+    // Sample from the distribution with temperature
+    let next_token = sample_categorical(penalized_logits, temperature)
     let prev_token = next_token
-    // Print the generated character and its token ID
+    // Print the generated character
     let ch = char_from_int(next_token)
-    print(next_token)
     print(ch)
     // Build proper one-hot vector for the predicted token
     let new_row = onehot(next_token, 128)
@@ -185,16 +179,16 @@ fn main() -> Tensor[1, 1]:
   let train_targets = load_tensor("data/train_targets.bin", total_rows, 128)
   print("Training data loaded.")
 
-  // Training loop
-  print("Starting training...")
+  // Training loop — 500 steps cycling through all samples
+  print("Starting training (500 steps)...")
   let step = 0
-  let total_steps = 60
+  let total_steps = 500
 
   while step < total_steps:
     // Get the current sample (cycling through dataset)
     let sample_idx = step
-    if sample_idx >= num_samples:
-      let sample_idx = step - num_samples
+    while sample_idx >= num_samples:
+      let sample_idx = sample_idx - num_samples
 
     // Extract input and target rows as one-hot encoded sequences of shape [63, 128]
     let input_seq = extract_sequence(train_inputs, sample_idx)
@@ -202,6 +196,12 @@ fn main() -> Tensor[1, 1]:
 
     // Train step
     let loss = gpt.train_step(input_seq, target_seq)
+
+    // Print loss every 25 steps
+    let print_mod = step - (step / 25) * 25
+    if print_mod == 0:
+      print(step)
+      print(loss)
 
     let step = step + 1
 
@@ -215,13 +215,13 @@ fn main() -> Tensor[1, 1]:
   // ─── Text Generation Phase ───
   print("")
   print("═══════════════════════════════════════════════")
-  print("  Text Generation")
+  print("  Text Generation (temperature=0.8)")
   print("═══════════════════════════════════════════════")
 
   // Use the first training sequence as a prompt
   let prompt = extract_sequence(train_inputs, 0)
-  print("Generating 20 characters...")
-  let gen_count = generate_text(gpt, prompt, 20)
+  print("Generating 200 characters...")
+  let gen_count = generate_text(gpt, prompt, 200, 0.8)
   print("")
   print("Generation complete!")
 

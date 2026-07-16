@@ -331,6 +331,7 @@ impl SymbolTable {
         global.define("load_tensor", NType::Fn_(vec![NType::Base("String".into()), int.clone(), int.clone()], Box::new(tensor.clone()), None));
         global.define("save_tensor", NType::Fn_(vec![tensor.clone(), NType::Base("String".into())], Box::new(NType::Void), None));
         global.define("argmax", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
+        global.define("sample_categorical", NType::Fn_(vec![tensor.clone(), float.clone()], Box::new(int.clone()), None));
         global.define("char_from_int", NType::Fn_(vec![int.clone()], Box::new(NType::Base("String".into())), None));
         global.define("onehot", NType::Fn_(vec![int.clone(), int.clone()], Box::new(tensor.clone()), None));
         global.define("aggregate", NType::Fn_(vec![NType::List(Box::new(any.clone()))], Box::new(any.clone()), None));

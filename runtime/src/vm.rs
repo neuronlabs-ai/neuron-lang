@@ -243,6 +243,8 @@ pub struct VM {
     pub cuda_kernels: HashMap<String, CudaModuleFunction>,
     /// Functions that have had their kernels compiled.
     pub compiled_functions: std::collections::HashSet<String>,
+    /// RNG counter for sample_categorical.
+    rng_counter: u64,
 }
 
 pub struct CallFrame {
@@ -273,6 +275,7 @@ impl VM {
             optimizer_step: 0,
             cuda_kernels: HashMap::new(),
             compiled_functions: std::collections::HashSet::new(),
+            rng_counter: 0,
         }
     }
 
@@ -634,6 +637,72 @@ impl VM {
                 }
             }
             return Ok(Value::Int(max_idx as i64));
+        }
+
+        if resolved_name == "sample_categorical" {
+            if args.len() < 2 {
+                return Err("sample_categorical requires 2 arguments: (logits_tensor, temperature)".into());
+            }
+            let t = match &args[0] {
+                Value::Tensor(t) => t,
+                other => return Err(format!("sample_categorical expects a Tensor as first arg, got {:?}", other)),
+            };
+            let temperature = match &args[1] {
+                Value::Float(f) => *f,
+                Value::Int(i) => *i as f64,
+                other => return Err(format!("sample_categorical expects a Float temperature, got {:?}", other)),
+            };
+            if t.data.is_empty() {
+                return Err("sample_categorical on empty tensor".into());
+            }
+            if temperature <= 0.0 {
+                return Err("sample_categorical: temperature must be > 0".into());
+            }
+
+            // Get the logits slice (last row for 2D, whole vector for 1D)
+            let slice = if t.ndim() == 2 {
+                let cols = t.shape[1];
+                let last_row_start = (t.shape[0] - 1) * cols;
+                &t.data[last_row_start..last_row_start + cols]
+            } else {
+                &t.data[..]
+            };
+
+            // Apply temperature scaling
+            let scaled: Vec<f64> = slice.iter().map(|&x| x / temperature).collect();
+
+            // Numerically stable softmax
+            let max_val = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let exps: Vec<f64> = scaled.iter().map(|&x| (x - max_val).exp()).collect();
+            let sum_exp: f64 = exps.iter().sum();
+            let probs: Vec<f64> = exps.iter().map(|&e| e / sum_exp).collect();
+
+            // Sample from the categorical distribution
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            // Use a simple PRNG seeded from time + a counter for reproducibility within a session
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let mut hasher = DefaultHasher::new();
+            seed.hash(&mut hasher);
+            self.rng_counter += 1;
+            self.rng_counter.hash(&mut hasher);
+            let hash = hasher.finish();
+            // Convert hash to uniform [0, 1)
+            let r: f64 = (hash as f64) / (u64::MAX as f64);
+
+            let mut cumulative = 0.0;
+            let mut sampled_idx = probs.len() - 1; // fallback to last
+            for (i, &p) in probs.iter().enumerate() {
+                cumulative += p;
+                if r < cumulative {
+                    sampled_idx = i;
+                    break;
+                }
+            }
+            return Ok(Value::Int(sampled_idx as i64));
         }
 
         if resolved_name == "save_tensor" {

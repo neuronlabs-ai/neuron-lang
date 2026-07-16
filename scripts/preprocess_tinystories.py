@@ -6,7 +6,7 @@ Downloads a subset of the TinyStories dataset, tokenizes it at the character lev
 and outputs binary f64 tensor files that NEURON's load_tensor() can read directly.
 
 Usage:
-    python preprocess_tinystories.py [--num-samples 5000] [--seq-len 64] [--output-dir ./data]
+    python preprocess_tinystories.py [--num-samples 1000] [--seq-len 64] [--output-dir ./data]
 """
 
 import os
@@ -39,6 +39,8 @@ def download_tinystories(output_dir: str, max_stories: int = 10000) -> list[str]
             if i >= max_stories:
                 break
             stories.append(example["text"])
+            if (i + 1) % 1000 == 0:
+                print(f"  Downloaded {i + 1} stories...")
         print(f"Downloaded {len(stories)} stories.")
         return stories
     except Exception as e:
@@ -81,13 +83,18 @@ def download_tinystories(output_dir: str, max_stories: int = 10000) -> list[str]
         "The teacher asked the class to {action}. A little {animal} raised its hand and said it knew the answer. Everyone clapped. The {animal} felt proud and happy.",
         "In a garden full of flowers, a {color} {animal} was playing. It jumped over the {object} and landed in the {place}. Then it started to laugh because it was having so much fun.",
         "A {animal} wanted to learn how to {action}. It practiced every day in the {place}. After many tries, the {animal} finally did it. All its friends were amazed.",
+        "The little {animal} had a dream. It wanted to visit the {place} and find a {object}. So one day, it packed its bag and set off on a journey. Along the way, the {animal} met a {color} {animal2}.",
+        "It was a sunny day in the {place}. A {color} {animal} was looking for food. It found a {object} under a tree. The {animal} was so happy it started to {action} and sing.",
+        "Mom told the {animal} to {action}. The {animal} did not want to. But then it tried, and it was fun! The {animal} {action}ed all day long in the {place}.",
+        "The {animal} was scared of the dark {place}. But its friend the {animal2} said, 'Don't worry, I will help you.' Together they walked through the {place} and found a {color} {object}.",
+        "There was a race in the {place}. The {animal} and the {animal2} both wanted to win. They ran as fast as they could. The {animal} won and everyone cheered.",
     ]
-    animals = ["cat", "dog", "bird", "rabbit", "bear", "fox", "mouse", "deer", "fish", "owl"]
-    animals2 = ["duck", "frog", "turtle", "butterfly", "squirrel", "penguin", "panda", "lion", "elephant", "monkey"]
-    colors = ["red", "blue", "green", "golden", "silver", "purple", "orange", "pink", "white", "brown"]
-    actions = ["sing", "dance", "run", "jump", "swim", "fly", "read", "paint", "cook", "build"]
-    places = ["park", "forest", "garden", "school", "mountain", "river", "beach", "library", "meadow", "castle"]
-    objects = ["ball", "book", "flower", "stone", "star", "key", "hat", "box", "ring", "shell"]
+    animals = ["cat", "dog", "bird", "rabbit", "bear", "fox", "mouse", "deer", "fish", "owl", "puppy", "kitten", "lamb", "pony", "bunny"]
+    animals2 = ["duck", "frog", "turtle", "butterfly", "squirrel", "penguin", "panda", "lion", "elephant", "monkey", "ladybug", "dragonfly", "hedgehog", "otter", "dolphin"]
+    colors = ["red", "blue", "green", "golden", "silver", "purple", "orange", "pink", "white", "brown", "yellow", "bright", "shiny", "sparkly", "tiny"]
+    actions = ["sing", "dance", "run", "jump", "swim", "fly", "read", "paint", "cook", "build", "play", "draw", "climb", "laugh", "explore"]
+    places = ["park", "forest", "garden", "school", "mountain", "river", "beach", "library", "meadow", "castle", "village", "farm", "hill", "pond", "playground"]
+    objects = ["ball", "book", "flower", "stone", "star", "key", "hat", "box", "ring", "shell", "leaf", "feather", "acorn", "balloon", "cookie"]
 
     random.seed(42)
     for i in range(max_stories):
@@ -154,7 +161,7 @@ def save_binary_tensor(data: list[list[int]], filepath: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Preprocess TinyStories for NEURON MicroGPT")
-    parser.add_argument("--num-samples", type=int, default=5000, help="Number of training sequences")
+    parser.add_argument("--num-samples", type=int, default=1000, help="Number of training sequences")
     parser.add_argument("--seq-len", type=int, default=64, help="Sequence length (tokens per sample)")
     parser.add_argument("--output-dir", type=str, default="./data", help="Output directory for binary files")
     args = parser.parse_args()
