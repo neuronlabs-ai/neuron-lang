@@ -64,6 +64,19 @@ def glorot_tensor(shape):
     t.requires_grad = True
     return t
 
+class TemporalTensor:
+    def __init__(self, data, direction):
+        self.data = data
+        self.direction = direction
+
+def temporal_check_dir(tensor, expected):
+    if hasattr(tensor, 'direction') and tensor.direction != expected:
+        raise RuntimeError(f"Temporal Type Error: Direction mismatch! Expected '{expected}', got '{tensor.direction}'. Lookahead bias detected!")
+
+def causal_check_mode(tensor, expected):
+    if isinstance(tensor, dict) and tensor.get('mode') != expected:
+        raise RuntimeError(f"Causal Type Error: Mode mismatch! Expected '{expected}', got '{tensor.get(\"mode\")}'. Causal violation detected!")
+
 def update_row(tensor, row_idx, new_row):
     if row_idx < 0:
         raise ValueError(f"Runtime Error: Negative index {row_idx} is not allowed in UpdateRow")
@@ -601,20 +614,23 @@ r#"(lambda s: (
     ))(v{})"#, node.inputs[0])
                     }
 
-                    // Temporal safety ops — emit pass-through with warnings
-                    IROp::TemporalBefore { .. } | IROp::TemporalAfter { .. } => {
-                        format!("v{}  # WARNING: temporal direction enforcement not available in Python output", node.inputs[0])
+                    // Temporal safety ops — active Python runtime enforcement
+                    IROp::TemporalBefore { .. } => {
+                        format!("TemporalTensor(v{}, 'before')", node.inputs[0])
+                    }
+                    IROp::TemporalAfter { .. } => {
+                        format!("TemporalTensor(v{}, 'after')", node.inputs[0])
                     }
                     IROp::TemporalSnapshot { .. } => {
-                        format!("v{}  # WARNING: temporal snapshot (unwrap) — safety not enforced in Python", node.inputs[0])
+                        format!("(v{}.data if hasattr(v{}, 'data') else v{})", node.inputs[0], node.inputs[0], node.inputs[0])
                     }
                     IROp::TemporalCheckDir { ref expected } => {
-                        format!("None  # WARNING: temporal direction check (expected '{}') skipped in Python — lookahead bias NOT detected", expected)
+                        format!("temporal_check_dir(v{}, '{}')", node.inputs[0], expected)
                     }
 
-                    // Causal safety ops — emit pass-through with warnings
+                    // Causal safety ops — active Python runtime enforcement
                     IROp::CausalCheckMode { ref expected } => {
-                        format!("None  # WARNING: causal mode check (expected '{}') skipped in Python — causal safety NOT enforced", expected)
+                        format!("causal_check_mode(v{}, '{}')", node.inputs[0], expected)
                     }
 
                     // Uncertainty ops — emit pass-through with warnings

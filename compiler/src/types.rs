@@ -308,6 +308,9 @@ impl SymbolTable {
         global.define("relu", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("gelu", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("sqrt", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("sin", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("cos", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("len", NType::Fn_(vec![any.clone()], Box::new(int.clone()), None));
         global.define("transpose", NType::Fn_(vec![tensor.clone(), int.clone(), int.clone()], Box::new(tensor.clone()), None));
         global.define("update_row", NType::Fn_(vec![tensor.clone(), int.clone(), any.clone()], Box::new(tensor.clone()), None));
         global.define("softmax", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
@@ -328,6 +331,7 @@ impl SymbolTable {
         global.define("load", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
         global.define("load_dataset", NType::Fn_(vec![NType::Base("String".into())], Box::new(dataset.clone()), None));
         global.define("load_ohlcv", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
+        global.define("load_ohlcv_list", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
         global.define("load_tensor", NType::Fn_(vec![NType::Base("String".into()), int.clone(), int.clone()], Box::new(tensor.clone()), None));
         global.define("save_tensor", NType::Fn_(vec![tensor.clone(), NType::Base("String".into())], Box::new(NType::Void), None));
         global.define("argmax", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
@@ -863,7 +867,29 @@ impl TypeChecker {
                 ));
             }
         } else if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
-            if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&stripped_left, &stripped_right) {
+            if let (NType::List(ref la), NType::List(ref lb)) = (&stripped_left, &stripped_right) {
+                if b.op == BinOp::Add {
+                    if types_compatible(la, lb) {
+                        stripped_result = NType::List(la.clone());
+                    } else if types_compatible(lb, la) {
+                        stripped_result = NType::List(lb.clone());
+                    } else {
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TypeMismatch,
+                            format!("List concatenation requires compatible element types, got {} and {}", la.display(), lb.display()),
+                            b.span.clone(),
+                        ));
+                    }
+                } else {
+                    self.result.add_error(NeuronError::new(
+                        ErrorCode::TypeMismatch,
+                        format!("Unsupported binary operation: {} {} {}", left.display(), b.op.as_str(), right.display()),
+                        b.span.clone(),
+                    ));
+                }
+            } else if stripped_left == NType::Base("String".into()) && stripped_right == NType::Base("String".into()) && b.op == BinOp::Add {
+                stripped_result = NType::Base("String".into());
+            } else if let (NType::Tensor(ref da), NType::Tensor(ref db)) = (&stripped_left, &stripped_right) {
                 self.check_elementwise(da, db, &b.span);
                 stripped_result = stripped_left.clone();
             } else if (matches!(stripped_left, NType::Tensor(_)) && stripped_right.is_numeric()) || (stripped_left.is_numeric() && matches!(stripped_right, NType::Tensor(_))) {
@@ -910,8 +936,6 @@ impl TypeChecker {
                 ));
             }
             stripped_result = NType::Base("Bool".into());
-        } else if stripped_left == NType::Base("String".into()) && stripped_right == NType::Base("String".into()) && b.op == BinOp::Add {
-            stripped_result = NType::Base("String".into());
         } else if stripped_left == NType::Any || stripped_right == NType::Any {
             stripped_result = NType::Any;
         } else {

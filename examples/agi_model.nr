@@ -385,6 +385,7 @@ fn main() -> Tensor[1, 4]:
   let state = env.reset()
 
   print("Phase 1: Pre-training AGI on synthetic scientific database...")
+  let history: List[List[Float]] = []
   let t = 1
   while t <= 10:
       let msg = "hello"
@@ -415,9 +416,27 @@ fn main() -> Tensor[1, 4]:
       let dist_sq = dist_x * dist_x + dist_y * dist_y
       let r = zeros(1, 1) + (1.0 - dist_sq * 0.05)
       model_inst.learn_dynamics(obs, a, obs, r)
+
+      // Collect data points dynamically for causal structure discovery
+      let dx_haz = env.agent_x - env.hazard_x
+      let dy_haz = env.agent_y - env.hazard_y
+      let h_dist_sq = dx_haz * dx_haz + dy_haz * dy_haz
+      let haz_near = sigmoid((0.3 - h_dist_sq) * 100.0)
+      let coll = sigmoid((0.1 - h_dist_sq) * 100.0)
+      let proposed_action = argmax(a)
+      
+      let row = [proposed_action * 1.0, haz_near, coll]
+      let history = history + [row]
+
       let t = t + 1
 
-  print("Pre-training complete. World dynamics and curiosity module optimized.")
+  print("Pre-training complete. Running Causal PC Discovery on environment history...")
+  let discovery_result = causal_discover(history, ["action", "hazard_near", "collision"], 0.05)
+  print("Discovered Causal Adjacency Matrix:")
+  print(discovery_result.adjacency)
+  print("Discovered Causal Confidences:")
+  print(discovery_result.confidences)
+
   print("Starting Phase 2: Interactive AGI Conversational Loop...")
 
   // Interactive Loop (5 Turns)

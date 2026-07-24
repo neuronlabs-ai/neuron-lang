@@ -28,3 +28,9 @@ meta fn evolve(agent: Explorer, episodes: Int) -> Explorer:
     agent
   )
   return best
+
+fn main():
+  let agt = Explorer(4, 2)
+  let obs = ones(1, 4)
+  let action = agt.act(obs)
+  println(action)

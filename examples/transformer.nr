@@ -39,3 +39,9 @@ model Transformer(d_model: Int, n_heads: Int, n_layers: Int):
     for batch in data:
       let loss = cross_entropy(self.forward(batch), batch)
       update self by adam(grad(loss), lr=3e-4)
+
+fn main():
+  let tf_model = Transformer(512, 8, 6)
+  let tokens = ones(1, 16)
+  let logits = tf_model.forward(tokens)
+  println(logits)

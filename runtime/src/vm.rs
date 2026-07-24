@@ -522,6 +522,22 @@ impl VM {
             });
         }
 
+        if resolved_name == "sin" {
+            if args.is_empty() {
+                return Err("sin requires 1 argument: (x)".into());
+            }
+            let val = args[0].as_float();
+            return Ok(Value::Float(val.sin()));
+        }
+
+        if resolved_name == "cos" {
+            if args.is_empty() {
+                return Err("cos requires 1 argument: (x)".into());
+            }
+            let val = args[0].as_float();
+            return Ok(Value::Float(val.cos()));
+        }
+
         if resolved_name == "load_ohlcv" {
             if args.is_empty() {
                 return Err("load_ohlcv requires a file path argument".into());
@@ -570,6 +586,29 @@ impl VM {
                 data: Box::new(Value::Tensor(t)),
                 direction: "past_to_future".into(),
             });
+        }
+
+        if resolved_name == "load_ohlcv_list" {
+            if args.is_empty() {
+                return Err("load_ohlcv_list requires a file path argument".into());
+            }
+            let path = args[0].display();
+            if path.contains("..") || path.starts_with('/') || path.starts_with('\\') || (path.len() >= 2 && path.chars().next().unwrap().is_alphabetic() && path.chars().nth(1).unwrap() == ':') {
+                return Err(format!("Security Error: Access to path '{}' is restricted", path));
+            }
+            let mut data = Vec::new();
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for line in content.lines() {
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 5 {
+                        let row: Vec<Value> = parts.iter().map(|p| {
+                            Value::Float(p.trim().parse::<f64>().unwrap_or(0.0))
+                        }).collect();
+                        data.push(Value::List(row));
+                    }
+                }
+            }
+            return Ok(Value::List(data));
         }
 
         if resolved_name == "load_tensor" {
@@ -1092,6 +1131,14 @@ impl VM {
                     }
                     (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
+                    (Value::List(x), Value::List(y)) => {
+                        let mut res = x.clone();
+                        res.extend(y.clone());
+                        Ok(Value::List(res))
+                    }
+                    (Value::Str(x), Value::Str(y)) => {
+                        Ok(Value::Str(format!("{}{}", x, y)))
+                    }
                     _ => Ok(Value::Float(a.as_float() + b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -2110,7 +2157,7 @@ impl VM {
         let kernels = neuron_compiler::cuda_codegen::generate_cuda_kernels(func, &all_funcs);
         
         if let Some(ctx) = crate::device::get_cuda_context() {
-            if !kernels.is_empty() {
+            if !kernels.is_empty() && (std::env::var("NEURON_VERBOSE").is_ok() || std::env::var("NEURON_LOG").is_ok()) {
                 println!("[NEURON JIT] Compiling {} GPU kernels for function '{}'...", kernels.len(), func.name);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
@@ -2133,8 +2180,10 @@ impl VM {
                                 let k_func = CudaModuleFunction { module, function };
                                 cache.insert(kernel.code.clone(), CudaModuleFunction { module, function });
                                 self.cuda_kernels.insert(kernel.name.clone(), k_func);
-                                println!("  ✓ Kernel '{}' compiled in {}ms", kernel.name, start_time.elapsed().as_millis());
-                                let _ = std::io::Write::flush(&mut std::io::stdout());
+                                if std::env::var("NEURON_VERBOSE").is_ok() || std::env::var("NEURON_LOG").is_ok() {
+                                    println!("  ✓ Kernel '{}' compiled in {}ms", kernel.name, start_time.elapsed().as_millis());
+                                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Failed to load CUDA kernel {}: {}", kernel.name, e);
@@ -2168,7 +2217,7 @@ impl VM {
         let kernel = kernels.iter().find(|k| k.name == kernel_name)
             .ok_or_else(|| format!("Kernel {} metadata not found", kernel_name))?;
             
-        let terminal_node = group.instructions.last().unwrap();
+        let terminal_node = group.instructions.last().ok_or_else(|| "Empty fused group in CUDA execution".to_string())?;
         let output_id = terminal_node.id;
         
         if crate::device::is_simulate_cuda() {

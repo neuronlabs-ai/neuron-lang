@@ -731,6 +731,7 @@ impl Lowerer {
                             return self.emit(func, IROp::MemoryRecall { k }, arg_ids, IRType::List(Box::new(IRType::Any)));
                         }
                         "store" => return self.emit(func, IROp::MemoryStore, arg_ids, IRType::Void),
+                        "len" => return self.emit(func, IROp::ListLen, arg_ids, IRType::I64),
                         "input" => return self.emit(func, IROp::Input, arg_ids, IRType::String),
                         "embed_string" => return self.emit(func, IROp::EmbedString, arg_ids, IRType::Tensor(vec![1, 8])),
                         "generate_reply" => return self.emit(func, IROp::GenerateReply, arg_ids, IRType::String),
