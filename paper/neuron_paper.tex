@@ -484,7 +484,29 @@ MLP Backprop (100 steps) & NEURON VM (Interpreted) & 1 & 351.22 \\
 \end{tabular}
 \end{table}
 
-Under single-threaded execution, NEURON's Native JIT compiler delivers MLP backpropagation training speeds ($443.05$~ms) that run within 2x of PyTorch CPU ($239.39$~ms) on this hybrid-core hardware. The performance parity is achieved through our compiler optimizations: IKJ loop reordering (rearranging memory access patterns to enable auto-vectorization), thread-local memory pools (eliminating heap allocation locks during loops), and slice-based bounds-check elimination in the hot inner loop. GPU backend benchmarks are deferred to future work, as the current GPU/CUDA backend is restricted to element-wise operations and kernel fusion without matrix multiplication hardware acceleration.
+Under single-threaded execution, NEURON's Native JIT compiler delivers MLP backpropagation training speeds ($443.05$~ms) that run within 2x of PyTorch CPU ($239.39$~ms) on this hybrid-core hardware. The performance parity is achieved through our compiler optimizations: IKJ loop reordering (rearranging memory access patterns to enable auto-vectorization), thread-local memory pools (eliminating heap allocation locks during loops), and slice-based bounds-check elimination in the hot inner loop.
+
+\paragraph{GPU Acceleration (cuBLAS \& Fused CUDA Kernels)}
+To evaluate the efficiency of the GPU backend, we measure execution times for chained element-wise operations and matrix multiplication comparing CPU execution with GPU-resident execution on an NVIDIA Tesla T4 GPU (16~GB VRAM, $f64$ precision).
+
+\begin{table}[h]
+\centering
+\caption{GPU Acceleration Benchmarks (NVIDIA T4, $f64$ precision)}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Workload / Operator} & \textbf{CPU (ms)} & \textbf{GPU (ms)} & \textbf{Speedup} \\
+\midrule
+elemwise\_128x128\_chain10 & 3.83 & 0.56 & \textbf{6.8x} \\
+elemwise\_256x256\_chain10 & 18.77 & 0.53 & \textbf{35.5x} \\
+elemwise\_512x512\_chain10 & 90.33 & 0.55 & \textbf{164.9x} \\
+elemwise\_256x256\_chain50 & 319.46 & 2.92 & \textbf{109.4x} \\
+matmul\_128x128\_x20 (cuBLAS) & 14.38 & 18.18 & 0.8x \\
+matmul\_256x256\_x20 (cuBLAS) & 67.06 & 50.46 & \textbf{1.3x} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+NEURON's GPU backend achieves up to \textbf{164.9x speedup} on large-scale element-wise operations through operator fusion (compiling chained operations into a single GPU kernel via NVRTC to minimize VRAM bandwidth bounds). The cuBLAS integration delivers a \textbf{1.3x speedup} on $256 \times 256$ matrix multiplication. Multi-device distributed GPU cluster scaling remains future work.
 
 % ═══════════════════════════════════════════════
 %  6. RELATED WORK
