@@ -10,9 +10,12 @@
   "categories": [
     "Programming Languages",
     "Machine Learning",
-    "Snippets"
+    "Linters"
   ],
-  "icon": "logo.png",
+  "activationEvents": [
+    "onLanguage:neuron"
+  ],
+  "main": "./extension.js",
   "contributes": {
     "languages": [
       {
@@ -34,6 +37,16 @@
         "scopeName": "source.neuron",
         "path": "./syntaxes/neuron.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "NEURON",
+      "properties": {
+        "neuron.compilerPath": {
+          "type": "string",
+          "default": "neuronc",
+          "description": "Path to the neuronc compiler binary"
+        }
+      }
+    }
   }
 }

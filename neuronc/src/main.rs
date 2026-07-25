@@ -14,6 +14,7 @@
 use std::env;
 use std::fs;
 use std::process;
+use std::io::{Read, Write, BufWriter};
 
 mod repl;
 mod pkg;
@@ -588,16 +589,315 @@ fn find_runtime_path() -> String {
 }
 
 fn cmd_lsp() {
-    use std::io::{self, BufRead};
-    let stdin = io::stdin();
-    let handle = stdin.lock();
-    eprintln!("[NEURON LSP] Language Server started (listening on stdio)...");
+    use serde_json::{json, Value};
 
-    for line in handle.lines() {
-        if let Ok(l) = line {
-            if l.contains("textDocument/didOpen") || l.contains("textDocument/didSave") || l.contains("textDocument/didChange") {
-                println!("{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{{\"uri\":\"file:///workspace\",\"diagnostics\":[]}}}}");
+    eprintln!("[NEURON LSP] Language Server starting (stdio)...");
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+
+    loop {
+        // ── Read LSP header (Content-Length: N\r\n\r\n) ──
+        let mut header = String::new();
+        loop {
+            let mut buf = [0u8; 1];
+            if stdin.lock().read_exact(&mut buf).is_err() {
+                return; // stdin closed
+            }
+            header.push(buf[0] as char);
+            if header.ends_with("\r\n\r\n") {
+                break;
+            }
+        }
+
+        // Parse content length
+        let content_length: usize = header
+            .lines()
+            .find_map(|line| {
+                if line.starts_with("Content-Length:") {
+                    line["Content-Length:".len()..].trim().parse().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        if content_length == 0 {
+            continue;
+        }
+
+        // Read body
+        let mut body = vec![0u8; content_length];
+        if stdin.lock().read_exact(&mut body).is_err() {
+            return;
+        }
+
+        let msg: Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned();
+
+        match method {
+            // ── Initialize ──
+            "initialize" => {
+                let result = json!({
+                    "capabilities": {
+                        "textDocumentSync": {
+                            "openClose": true,
+                            "change": 1,
+                            "save": { "includeText": true }
+                        },
+                        "diagnosticProvider": {
+                            "interFileDependencies": false,
+                            "workspaceDiagnostics": false
+                        },
+                        "hoverProvider": true
+                    },
+                    "serverInfo": {
+                        "name": "neuron-lsp",
+                        "version": "1.0.0"
+                    }
+                });
+                if let Some(req_id) = id {
+                    lsp_send_response(&stdout, req_id, result);
+                }
+                eprintln!("[NEURON LSP] Initialized.");
+            }
+
+            "initialized" => {
+                // Client acknowledged — no response needed
+                eprintln!("[NEURON LSP] Client connected.");
+            }
+
+            // ── Document opened / saved / changed — run diagnostics ──
+            "textDocument/didOpen" | "textDocument/didSave" | "textDocument/didChange" => {
+                let params = msg.get("params").cloned().unwrap_or(json!({}));
+
+                // Extract URI and text
+                let (uri, text) = if method == "textDocument/didChange" {
+                    let uri = params.get("textDocument")
+                        .and_then(|td| td.get("uri"))
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let text = params.get("contentChanges")
+                        .and_then(|cc| cc.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|change| change.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (uri, text)
+                } else {
+                    let uri = params.get("textDocument")
+                        .and_then(|td| td.get("uri"))
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let text_direct = params.get("textDocument")
+                        .and_then(|td| td.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    let text = if text_direct.is_empty() {
+                        // didSave with includeText
+                        params.get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        text_direct.to_string()
+                    };
+                    // If we still don't have text, try reading the file
+                    let text = if text.is_empty() {
+                        lsp_uri_to_path(&uri)
+                            .and_then(|p| std::fs::read_to_string(&p).ok())
+                            .unwrap_or_default()
+                    } else {
+                        text
+                    };
+                    (uri, text)
+                };
+
+                if text.is_empty() {
+                    continue;
+                }
+
+                let filepath = lsp_uri_to_path(&uri).unwrap_or_else(|| uri.clone());
+
+                // Run the NEURON type checker
+                let result = neuron_compiler::check_with_imports(&text, &filepath);
+
+                // Convert errors + warnings to LSP diagnostics
+                let mut diagnostics: Vec<Value> = Vec::new();
+
+                for err in &result.errors {
+                    diagnostics.push(json!({
+                        "range": {
+                            "start": { "line": err.span.line.saturating_sub(1), "character": err.span.col.saturating_sub(1) },
+                            "end": { "line": err.span.line.saturating_sub(1), "character": err.span.col.saturating_sub(1) + err.span.len }
+                        },
+                        "severity": 1, // Error
+                        "source": "neuronc",
+                        "code": format!("{:?}", err.code),
+                        "message": format_diagnostic_message(
+                            &err.message,
+                            err.expected.as_deref(),
+                            err.actual.as_deref(),
+                            err.fix.as_deref(),
+                            &err.notes,
+                        )
+                    }));
+                }
+
+                for warn in &result.warnings {
+                    diagnostics.push(json!({
+                        "range": {
+                            "start": { "line": warn.span.line.saturating_sub(1), "character": warn.span.col.saturating_sub(1) },
+                            "end": { "line": warn.span.line.saturating_sub(1), "character": warn.span.col.saturating_sub(1) + warn.span.len }
+                        },
+                        "severity": 2, // Warning
+                        "source": "neuronc",
+                        "code": format!("{:?}", warn.code),
+                        "message": format_diagnostic_message(
+                            &warn.message,
+                            None,
+                            None,
+                            warn.fix.as_deref(),
+                            &warn.notes,
+                        )
+                    }));
+                }
+
+                // Send diagnostics notification
+                let notification = json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": uri,
+                        "diagnostics": diagnostics
+                    }
+                });
+
+                lsp_send_notification(&stdout, notification);
+                eprintln!("[NEURON LSP] Published {} diagnostic(s) for {}", diagnostics.len(), filepath);
+            }
+
+            // ── Hover — show type info ──
+            "textDocument/hover" => {
+                // Return basic hover info
+                let hover_result = json!({
+                    "contents": {
+                        "kind": "markdown",
+                        "value": "**NEURON** — AI-native programming language\n\nHover details coming soon."
+                    }
+                });
+                if let Some(req_id) = id {
+                    lsp_send_response(&stdout, req_id, hover_result);
+                }
+            }
+
+            // ── Shutdown ──
+            "shutdown" => {
+                eprintln!("[NEURON LSP] Shutting down...");
+                if let Some(req_id) = id {
+                    lsp_send_response(&stdout, req_id, json!(null));
+                }
+            }
+
+            "exit" => {
+                eprintln!("[NEURON LSP] Exiting.");
+                process::exit(0);
+            }
+
+            // Unknown method — ignore notifications, respond to requests
+            _ => {
+                if let Some(req_id) = id {
+                    // It's a request — send method not found
+                    let err_response = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("Method not found: {}", method)
+                        }
+                    });
+                    let body = serde_json::to_string(&err_response).unwrap();
+                    let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+                    let mut out = BufWriter::new(stdout.lock());
+                    let _ = out.write_all(msg.as_bytes());
+                    let _ = out.flush();
+                }
             }
         }
     }
 }
+
+/// Convert an LSP file URI to a local filesystem path.
+fn lsp_uri_to_path(uri: &str) -> Option<String> {
+    if uri.starts_with("file:///") {
+        // Windows: file:///C:/path  →  C:/path
+        let path = &uri["file:///".len()..];
+        // URL-decode common sequences
+        let decoded = path
+            .replace("%20", " ")
+            .replace("%3A", ":")
+            .replace("%5C", "\\");
+        Some(decoded)
+    } else if uri.starts_with("file://") {
+        Some(uri["file://".len()..].to_string())
+    } else {
+        Some(uri.to_string())
+    }
+}
+
+/// Format a diagnostic message with expected/actual/fix/notes info.
+fn format_diagnostic_message(
+    message: &str,
+    expected: Option<&str>,
+    actual: Option<&str>,
+    fix: Option<&str>,
+    notes: &[String],
+) -> String {
+    let mut msg = message.to_string();
+    if let Some(exp) = expected {
+        msg.push_str(&format!("\n  expected: {}", exp));
+    }
+    if let Some(act) = actual {
+        msg.push_str(&format!("\n  got: {}", act));
+    }
+    for note in notes {
+        msg.push_str(&format!("\n  note: {}", note));
+    }
+    if let Some(f) = fix {
+        msg.push_str(&format!("\n  help: {}", f));
+    }
+    msg
+}
+
+/// Send an LSP JSON-RPC response.
+fn lsp_send_response(stdout: &std::io::Stdout, id: serde_json::Value, result: serde_json::Value) {
+    use serde_json::json;
+    let response = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    });
+    let body = serde_json::to_string(&response).unwrap();
+    let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let mut out = BufWriter::new(stdout.lock());
+    let _ = out.write_all(msg.as_bytes());
+    let _ = out.flush();
+}
+
+/// Send an LSP JSON-RPC notification (no id).
+fn lsp_send_notification(stdout: &std::io::Stdout, notification: serde_json::Value) {
+    let body = serde_json::to_string(&notification).unwrap();
+    let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let mut out = BufWriter::new(stdout.lock());
+    let _ = out.write_all(msg.as_bytes());
+    let _ = out.flush();
+}
+
