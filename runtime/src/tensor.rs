@@ -596,6 +596,31 @@ pub fn tensor_matmul(a: &Tensor, b: &Tensor) -> Tensor {
                 );
             }
         });
+    } else if m >= 64 && m * k_a * n >= 4096 {
+        use rayon::prelude::*;
+        let num_threads = rayon::current_num_threads().max(1);
+        let rows_per_chunk = (m + num_threads - 1) / num_threads;
+        let chunk_size = rows_per_chunk * n;
+        
+        result.par_chunks_mut(chunk_size).enumerate().for_each(|(chunk_idx, c_slice)| {
+            let start_row = chunk_idx * rows_per_chunk;
+            let current_rows = (m - start_row).min(rows_per_chunk);
+            if current_rows > 0 {
+                let a_ptr = unsafe { a.data.as_ptr().add(start_row * k_a) };
+                let b_ptr = b.data.as_ptr();
+                let c_ptr = c_slice.as_mut_ptr();
+                unsafe {
+                    matrixmultiply::dgemm(
+                        current_rows, k_a, n,
+                        1.0,
+                        a_ptr, k_a as isize, 1,
+                        b_ptr, n as isize, 1,
+                        0.0,
+                        c_ptr, n as isize, 1,
+                    );
+                }
+            }
+        });
     } else {
         let a_ptr = a.data.as_ptr();
         let b_ptr = b.data.as_ptr();
