@@ -13,3 +13,4 @@ pub mod causal;
 pub mod forget;
 pub mod neuron_lm;
 pub mod jit_helpers;
+pub mod distributed;

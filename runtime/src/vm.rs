@@ -247,6 +247,8 @@ pub struct VM {
     rng_counter: u64,
     /// Execution floating-point precision (F64 or F32).
     pub precision: crate::tensor::DType,
+    /// Distributed cluster training manager.
+    pub dist_manager: crate::distributed::DistributedManager,
 }
 
 pub struct CallFrame {
@@ -279,6 +281,9 @@ impl VM {
             compiled_functions: std::collections::HashSet::new(),
             rng_counter: 0,
             precision: crate::tensor::DType::F64,
+            dist_manager: crate::distributed::DistributedManager::new(
+                crate::distributed::DistributedConfig::single_node()
+            ),
         }
     }
 
