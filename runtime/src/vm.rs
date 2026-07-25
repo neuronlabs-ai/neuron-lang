@@ -1965,6 +1965,159 @@ impl VM {
                 };
                 res.map(|v| v.apply_wrappers(wraps))
             }
+            IROp::PythonCall { ref module, ref function } => {
+                // ── Python Interop Bridge ──
+                // Shells out to the system Python interpreter, passing input tensors
+                // as JSON and parsing the result back into NEURON values.
+                use std::process::Command;
+
+                // Collect input values as JSON arrays
+                let mut py_inputs = Vec::new();
+                for input_id in &node.inputs {
+                    let (val, _) = get_stripped(input_id);
+                    match &val {
+                        Value::Tensor(t) => {
+                            let data_str: Vec<String> = t.data.iter().map(|v| format!("{}", v)).collect();
+                            py_inputs.push(format!(
+                                "{{\"type\":\"tensor\",\"data\":[{}],\"shape\":[{}]}}",
+                                data_str.join(","),
+                                t.shape.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",")
+                            ));
+                        }
+                        Value::Int(i) => py_inputs.push(format!("{{\"type\":\"int\",\"value\":{}}}", i)),
+                        Value::Float(f) => py_inputs.push(format!("{{\"type\":\"float\",\"value\":{}}}", f)),
+                        Value::Bool(b) => py_inputs.push(format!("{{\"type\":\"bool\",\"value\":{}}}", b)),
+                        Value::Str(s) => py_inputs.push(format!("{{\"type\":\"str\",\"value\":\"{}\"}}", s)),
+                        _ => py_inputs.push(format!("{{\"type\":\"none\"}}")),
+                    }
+                }
+
+                // Generate Python script
+                let py_script = format!(
+r#"import json, sys
+import numpy as np
+try:
+    import {module}
+except ImportError:
+    print(json.dumps({{"error": "Module '{module}' not found. Install with: pip install {module}"}}))
+    sys.exit(0)
+
+# Parse inputs
+inputs_json = '{inputs_json}'
+inputs = json.loads(inputs_json)
+
+args = []
+for inp in inputs:
+    if inp["type"] == "tensor":
+        args.append(np.array(inp["data"], dtype=np.float64).reshape(inp["shape"]))
+    elif inp["type"] == "int":
+        args.append(inp["value"])
+    elif inp["type"] == "float":
+        args.append(inp["value"])
+    elif inp["type"] == "bool":
+        args.append(inp["value"])
+    elif inp["type"] == "str":
+        args.append(inp["value"])
+    else:
+        args.append(None)
+
+# Call the function
+fn = {module}.{function}
+try:
+    result = fn(*args)
+except TypeError:
+    # Some numpy functions expect a single tuple arg (e.g., np.zeros((3,3)) not np.zeros(3,3))
+    # Try packing integer args as a tuple
+    int_args = [a for a in args if isinstance(a, (int, float)) and not isinstance(a, bool)]
+    if len(int_args) == len(args) and len(args) > 1:
+        result = fn(tuple(int(a) for a in args))
+    else:
+        raise
+
+# Serialize result
+if isinstance(result, np.ndarray):
+    print(json.dumps({{"type":"tensor","data":result.flatten().tolist(),"shape":list(result.shape)}}))
+elif isinstance(result, (int, bool)):
+    print(json.dumps({{"type":"int","value":int(result)}}))
+elif isinstance(result, float):
+    print(json.dumps({{"type":"float","value":result}}))
+elif isinstance(result, str):
+    print(json.dumps({{"type":"str","value":result}}))
+elif hasattr(result, 'numpy'):
+    # PyTorch tensor
+    arr = result.detach().cpu().numpy()
+    print(json.dumps({{"type":"tensor","data":arr.flatten().tolist(),"shape":list(arr.shape)}}))
+else:
+    print(json.dumps({{"type":"str","value":str(result)}}))
+"#,
+                    module = module,
+                    function = function,
+                    inputs_json = format!("[{}]", py_inputs.join(",")),
+                );
+
+                // Execute Python
+                let output = Command::new("python")
+                    .arg("-c")
+                    .arg(&py_script)
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+
+                        if !stderr.is_empty() {
+                            eprintln!("[NEURON Python Bridge] stderr: {}", stderr.trim());
+                        }
+
+                        // Parse JSON result
+                        let trimmed = stdout.trim();
+                        if trimmed.is_empty() {
+                            Ok(Value::None)
+                        } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            if let Some(err) = parsed.get("error") {
+                                Err(format!("Python Error: {}", err.as_str().unwrap_or("unknown")))
+                            } else {
+                                let typ = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("none");
+                                match typ {
+                                    "tensor" => {
+                                        let data: Vec<f64> = parsed.get("data")
+                                            .and_then(|d| d.as_array())
+                                            .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
+                                            .unwrap_or_default();
+                                        let shape: Vec<usize> = parsed.get("shape")
+                                            .and_then(|s| s.as_array())
+                                            .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                                            .unwrap_or_default();
+                                        Ok(Value::Tensor(Tensor::new(data, shape)))
+                                    }
+                                    "int" => {
+                                        let v = parsed.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        Ok(Value::Int(v))
+                                    }
+                                    "float" => {
+                                        let v = parsed.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                        Ok(Value::Float(v))
+                                    }
+                                    "str" => {
+                                        let v = parsed.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                        Ok(Value::Str(v))
+                                    }
+                                    "bool" => {
+                                        let v = parsed.get("value").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        Ok(Value::Bool(v))
+                                    }
+                                    _ => Ok(Value::None),
+                                }
+                            }
+                        } else {
+                            // Raw string output
+                            Ok(Value::Str(trimmed.to_string()))
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to execute Python: {}. Is Python installed and in PATH?", e)),
+                }
+            }
             other => Err(format!("Unhandled IR operation: {:?}", other)),
         }
     }

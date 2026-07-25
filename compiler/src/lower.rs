@@ -13,6 +13,8 @@ pub struct Lowerer {
     env: Vec<std::collections::HashMap<String, ValueId>>,
     current_blocks: Vec<BasicBlock>,
     current_block_id: Option<BlockId>,
+    /// Maps Python import aliases to their real module names (e.g., "np" → "numpy")
+    python_modules: std::collections::HashMap<String, String>,
 }
 
 impl Lowerer {
@@ -23,6 +25,7 @@ impl Lowerer {
             env: vec![std::collections::HashMap::new()],
             current_blocks: Vec::new(),
             current_block_id: None,
+            python_modules: std::collections::HashMap::new(),
         }
     }
 
@@ -128,6 +131,14 @@ impl Lowerer {
 
     fn lower_top_level_into(&mut self, tl: &TopLevel, main_fn: &mut IRFunction) {
         match tl {
+            TopLevel::Import(imp) => {
+                // Track Python imports so calls to them emit PythonCall
+                if imp.is_python {
+                    let alias = imp.alias.as_ref().unwrap_or(&imp.module).clone();
+                    let real_module = imp.module.clone();
+                    self.python_modules.insert(alias, real_module);
+                }
+            }
             TopLevel::Fn(f) => {
                 let ir_fn = self.lower_fn_decl(f);
                 self.program.functions.push(ir_fn);
@@ -742,6 +753,26 @@ impl Lowerer {
                 let callee_name = match &c.callee {
                     Expr::Ident(n, _) => n.clone(),
                     Expr::Dot(d) => {
+                        // Check if this is a call on a Python-imported module
+                        // e.g., np.zeros(3, 3) or np.random.randn(2, 3)
+                        let root_module = Self::extract_python_root(&d.obj);
+                        if let Some(real_module) = root_module.as_ref().and_then(|r| self.python_modules.get(r)) {
+                                // Build the full dotted function path: module.submodule.function
+                                let full_path = Self::extract_dot_path(&c.callee);
+                                let module = real_module.clone();
+                                let root = root_module.as_ref().unwrap();
+                                let function = if full_path.starts_with(&format!("{}.", root)) {
+                                    full_path[root.len() + 1..].to_string()
+                                } else {
+                                    full_path
+                                };
+                                return self.emit(
+                                    func,
+                                    IROp::PythonCall { module, function },
+                                    arg_ids,
+                                    IRType::Any,
+                                );
+                        }
                         let receiver_id = self.lower_expr(func, &d.obj);
                         match d.field.as_str() {
                             "sum" => {
@@ -992,6 +1023,26 @@ impl Lowerer {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Extract the root identifier from a potentially nested dot expression.
+    /// e.g., `np.random` → Some("np"), `np` → Some("np"), `foo.bar.baz` → Some("foo")
+    fn extract_python_root(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(name, _) => Some(name.clone()),
+            Expr::Dot(d) => Self::extract_python_root(&d.obj),
+            _ => None,
+        }
+    }
+
+    /// Extract the full dotted path from an expression.
+    /// e.g., `np.random.randn` → "np.random.randn", `np.zeros` → "np.zeros"
+    fn extract_dot_path(expr: &Expr) -> String {
+        match expr {
+            Expr::Ident(name, _) => name.clone(),
+            Expr::Dot(d) => format!("{}.{}", Self::extract_dot_path(&d.obj), d.field),
+            _ => "__unknown__".to_string(),
         }
     }
 }
