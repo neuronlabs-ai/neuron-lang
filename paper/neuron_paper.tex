@@ -496,12 +496,12 @@ To evaluate the efficiency of the GPU backend, we measure execution times for ch
 \toprule
 \textbf{Workload / Operator} & \textbf{CPU (ms)} & \textbf{GPU (ms)} & \textbf{Speedup} \\
 \midrule
-elemwise\_128x128\_chain10 & 3.83 & 0.56 & \textbf{6.8x} \\
-elemwise\_256x256\_chain10 & 18.77 & 0.53 & \textbf{35.5x} \\
-elemwise\_512x512\_chain10 & 90.33 & 0.55 & \textbf{164.9x} \\
-elemwise\_256x256\_chain50 & 319.46 & 2.92 & \textbf{109.4x} \\
-matmul\_128x128\_x20 (cuBLAS) & 14.38 & 18.18 & 0.8x \\
-matmul\_256x256\_x20 (cuBLAS) & 67.06 & 50.46 & \textbf{1.3x} \\
+elemwise\_128x128\_chain10 & 2.84 & 0.56 & \textbf{5.1x} \\
+elemwise\_256x256\_chain10 & 12.93 & 0.53 & \textbf{24.4x} \\
+elemwise\_512x512\_chain10 & 69.82 & 0.55 & \textbf{126.9x} \\
+elemwise\_256x256\_chain50 & 308.67 & 2.92 & \textbf{105.7x} \\
+matmul\_128x128\_x20 (cuBLAS) & 11.43 & 18.18 & 0.6x \\
+matmul\_256x256\_x20 (cuBLAS) & 86.77 & 50.46 & \textbf{1.7x} \\
 \bottomrule
 \end{tabular}
 \end{table}

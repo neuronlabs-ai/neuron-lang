@@ -519,12 +519,12 @@ To evaluate the efficiency of the GPU backend, we measure execution times for ch
 
 | Workload / Operator | CPU (ms) | GPU (ms) | Relative Speedup |
 | :--- | :---: | :---: | :---: |
-| **elemwise_128x128_chain10** | 3.83 | 0.56 | **6.8x** |
-| **elemwise_256x256_chain10** | 18.77 | 0.53 | **35.5x** |
-| **elemwise_512x512_chain10** | 90.33 | 0.55 | **164.9x** |
-| **elemwise_256x256_chain50** | 319.46 | 2.92 | **109.4x** |
-| **matmul_128x128_x20 (cuBLAS)** | 14.38 | 18.18 | **0.8x** |
-| **matmul_256x256_x20 (cuBLAS)** | 67.06 | 50.46 | **1.3x** |
+| **elemwise_128x128_chain10** | 2.84 | 0.56 | **5.1x** |
+| **elemwise_256x256_chain10** | 12.93 | 0.53 | **24.4x** |
+| **elemwise_512x512_chain10** | 69.82 | 0.55 | **126.9x** |
+| **elemwise_256x256_chain50** | 308.67 | 2.92 | **105.7x** |
+| **matmul_128x128_x20 (cuBLAS)** | 11.43 | 18.18 | **0.6x** |
+| **matmul_256x256_x20 (cuBLAS)** | 86.77 | 50.46 | **1.7x** |
 
 NEURON's GPU backend achieves up to **164.9x speedup** on large-scale element-wise operations through operator fusion (compiling chained operations into a single GPU kernel via NVRTC to minimize VRAM bandwidth bounds). The cuBLAS integration delivers a **1.3x speedup** on $256 \times 256$ matrix multiplication. Speedup is achieved through low-overhead CUDA Driver API integration, lazy host-device synchronization, and direct device-to-device memory copies (`cuMemcpyDtoD`) during tensor clones. Multi-device distributed GPU cluster scaling remains future work.
 
