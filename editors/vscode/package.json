@@ -1,0 +1,39 @@
+{
+  "name": "neuron-lang-vscode",
+  "displayName": "NEURON Programming Language",
+  "description": "Official VS Code language support for NEURON — Differentiable & Causal AI Language",
+  "version": "1.0.0",
+  "publisher": "neuronlabs-ai",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Snippets"
+  ],
+  "icon": "logo.png",
+  "contributes": {
+    "languages": [
+      {
+        "id": "neuron",
+        "aliases": [
+          "NEURON",
+          "neuron",
+          "nr"
+        ],
+        "extensions": [
+          ".nr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "neuron",
+        "scopeName": "source.neuron",
+        "path": "./syntaxes/neuron.tmLanguage.json"
+      }
+    ]
+  }
+}

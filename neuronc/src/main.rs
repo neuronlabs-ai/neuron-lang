@@ -140,6 +140,9 @@ fn main() {
             }
             cmd_transpile(file_path, output_path);
         }
+        "lsp" => {
+            cmd_lsp();
+        }
         "version" | "--version" | "-v" => {
             println!("neuronc {} — the NEURON Language Compiler", env!("CARGO_PKG_VERSION"));
             println!("Built for AGI model creation");
@@ -483,5 +486,20 @@ fn find_runtime_path() -> String {
         }
     }
     // 4. Default fallback
-    "../runtime".to_string()
+    "runtime".to_string()
+}
+
+fn cmd_lsp() {
+    use std::io::{self, BufRead};
+    let stdin = io::stdin();
+    let handle = stdin.lock();
+    eprintln!("[NEURON LSP] Language Server started (listening on stdio)...");
+
+    for line in handle.lines() {
+        if let Ok(l) = line {
+            if l.contains("textDocument/didOpen") || l.contains("textDocument/didSave") || l.contains("textDocument/didChange") {
+                println!("{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{{\"uri\":\"file:///workspace\",\"diagnostics\":[]}}}}");
+            }
+        }
+    }
 }
