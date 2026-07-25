@@ -32,13 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
     forgetting: `<span class="hl-keyword">fn</span> patient_right_to_be_forgotten(net: <span class="hl-type">DiagnosisModel</span>, data: <span class="hl-type">Tensor</span>) [<span class="hl-type">Effect</span>[Mut[net]]]:
     <span class="hl-comment"># Selective unlearning using Fisher Information Noise Scrubbing</span>
     <span class="hl-keyword">let</span> cert = forget(net, data, method=<span class="hl-string">"FisherScrubbing"</span>, strength=<span class="hl-number">0.1</span>)
-    <span class="hl-keyword">return</span> cert`,
-
-    wasm: `<span class="hl-comment"># WebAssembly (WASM) & Multi-GPU Distributed Training</span>
-<span class="hl-keyword">fn</span> main() -> <span class="hl-type">Tensor</span>[2, 4]:
-    <span class="hl-keyword">let</span> cluster = distribute(devices=[<span class="hl-number">0</span>, <span class="hl-number">1</span>, <span class="hl-number">2</span>, <span class="hl-number">3</span>]) <span class="hl-comment"># Ring-AllReduce</span>
-    <span class="hl-keyword">let</span> w = glorot(<span class="hl-number">2</span>, <span class="hl-number">4</span>)
-    <span class="hl-keyword">return</span> relu(w)`
+    <span class="hl-keyword">return</span> cert`
   };
 
   // 1b. Raw Code Snippets for Copy-to-Clipboard
@@ -72,13 +66,7 @@ model LinearNet:
     forgetting: `fn patient_right_to_be_forgotten(net: DiagnosisModel, data: Tensor) [Effect[Mut[net]]]:
     # Selective unlearning using Fisher Information Noise Scrubbing
     let cert = forget(net, data, method="FisherScrubbing", strength=0.1)
-    return cert`,
-
-    wasm: `# WebAssembly (WASM) & Multi-GPU Distributed Training
-fn main() -> Tensor[2, 4]:
-    let cluster = distribute(devices=[0, 1, 2, 3]) # Ring-AllReduce
-    let w = glorot(2, 4)
-    return relu(w)`
+    return cert`
   };
 
   // 2. Line counts for each snippet
@@ -87,8 +75,7 @@ fn main() -> Tensor[2, 4]:
     causal: 6,
     uncertainty: 5,
     autograd: 8,
-    forgetting: 4,
-    wasm: 5
+    forgetting: 4
   };
 
   // 3. Simulated Compiler Outputs
@@ -165,17 +152,6 @@ fn main() -> Tensor[2, 4]:
       { text: "  strength: 0.500000", type: "info" },
       { text: "</ForgetCertificate>", type: "info" },
       { text: "Execution complete. Certificate generated.", type: "success" }
-    ],
-    wasm: [
-      { text: "visitor@neuron:~$ neuronc run examples/wasm_distributed.nr", type: "prompt" },
-      { text: "Compiling NEURON IR with WebAssembly (neuron-wasm) & Ring-AllReduce...", type: "info" },
-      { text: "✓ WebAssembly C-ABI Target: [type_check, compile_to_ir, eval_neuron, transpile]", type: "success" },
-      { text: "✓ Multi-GPU Topology initialized across 4 CUDA devices [0, 1, 2, 3]", type: "success" },
-      { text: "✓ Ring-AllReduce scatter-reduce and all-gather gradient synchronization active", type: "success" },
-      { text: "Tensor[2, 4]", type: "success" },
-      { text: "  [[ 0.1425,  0.8912,  0.0000,  0.4120 ],", type: "info" },
-      { text: "   [ 0.0000,  0.6514,  0.3129,  0.9810 ]]", type: "info" },
-      { text: "✓ Executed cleanly in WebAssembly (wasm32-unknown-unknown) target.", type: "success" }
     ]
   };
 
@@ -186,7 +162,6 @@ fn main() -> Tensor[2, 4]:
   // 5. DOM Elements
   const tabContainer = document.getElementById("editor-tabs");
   const codeContainer = document.getElementById("code-container");
-  const codeTextarea = document.getElementById("code-textarea");
   const lineNumbersContainer = document.getElementById("line-numbers");
   const terminalBody = document.getElementById("terminal-body");
   const runBtn = document.getElementById("run-btn");
@@ -199,46 +174,15 @@ fn main() -> Tensor[2, 4]:
     updateEditor();
   }
 
-  function updateLineNumbers() {
-    const val = codeTextarea ? codeTextarea.value : rawSnippets[currentTab];
-    const lines = val.split('\n').length;
+  function updateEditor() {
+    codeContainer.style.display = "block";
+    codeContainer.innerHTML = `<div class="code-block active">${codeSnippets[currentTab]}</div>`;
+    
     let lineHtml = "";
-    for (let i = 1; i <= Math.max(lines, 4); i++) {
+    for (let i = 1; i <= lineCounts[currentTab]; i++) {
       lineHtml += `${i}<br>`;
     }
     lineNumbersContainer.innerHTML = lineHtml;
-  }
-
-  function updateEditor() {
-    if (currentTab === "wasm") {
-      codeContainer.style.display = "none";
-      if (codeTextarea) {
-        codeTextarea.style.display = "block";
-        if (!codeTextarea.value || codeTextarea.value.trim() === "" || codeTextarea.dataset.initialized !== "true") {
-          codeTextarea.value = rawSnippets.wasm;
-          codeTextarea.dataset.initialized = "true";
-        }
-      }
-    } else {
-      if (codeTextarea) codeTextarea.style.display = "none";
-      codeContainer.style.display = "block";
-      codeContainer.innerHTML = `<div class="code-block active">${codeSnippets[currentTab]}</div>`;
-    }
-    updateLineNumbers();
-  }
-
-  if (codeTextarea) {
-    codeTextarea.addEventListener("input", updateLineNumbers);
-    codeTextarea.addEventListener("keydown", (e) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const start = codeTextarea.selectionStart;
-        const end = codeTextarea.selectionEnd;
-        codeTextarea.value = codeTextarea.value.substring(0, start) + "  " + codeTextarea.value.substring(end);
-        codeTextarea.selectionStart = codeTextarea.selectionEnd = start + 2;
-        updateLineNumbers();
-      }
-    });
   }
 
   // 7. Tab Switching Event Listeners
@@ -259,7 +203,6 @@ fn main() -> Tensor[2, 4]:
     else if (currentTab === 'uncertainty') cmd = "check examples/lidar_test.nr";
     else if (currentTab === 'autograd') cmd = "run examples/linear_regression.nr";
     else if (currentTab === 'forgetting') cmd = "run examples/unlearning_demo.nr";
-    else if (currentTab === 'wasm') cmd = "run examples/wasm_playground.nr";
 
     terminalBody.innerHTML = `
       <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> neuronc ${cmd}</div>
@@ -269,7 +212,7 @@ fn main() -> Tensor[2, 4]:
 
   // 8. Copy Snippet Event Listener
   copyBtn.addEventListener("click", () => {
-    const rawText = (currentTab === "wasm" && codeTextarea) ? codeTextarea.value : rawSnippets[currentTab];
+    const rawText = rawSnippets[currentTab];
     navigator.clipboard.writeText(rawText).then(() => {
       const span = copyBtn.querySelector("span");
       span.textContent = "Copied!";
@@ -281,7 +224,7 @@ fn main() -> Tensor[2, 4]:
     });
   });
 
-  // 9. Run Compiler / WASM Evaluator
+  // 9. Run Simulation
   runBtn.addEventListener("click", () => {
     if (isRunning) return;
     
@@ -293,51 +236,9 @@ fn main() -> Tensor[2, 4]:
     `;
     
     terminalBody.innerHTML = "";
-    let logQueue = [];
-
-    if (currentTab === "wasm") {
-      const userText = codeTextarea ? codeTextarea.value.trim() : "";
-      
-      if (!userText || userText.length < 3 || (!userText.includes("fn") && !userText.includes("let") && !userText.includes("Tensor"))) {
-        // Arbitrary / invalid user input (e.g. typing "hi")
-        logQueue = [
-          { text: `visitor@neuron:~$ neuronc run wasm_playground.nr`, type: "prompt" },
-          { text: "Compiling NEURON IR via WebAssembly (neuron-wasm)...", type: "info" },
-          { text: `[ERROR] Line 1: SyntaxError — unexpected token '${userText || "EOF"}'.`, type: "error" },
-          { text: `  --> wasm_playground.nr:1:1`, type: "info" },
-          { text: "   |", type: "info" },
-          { text: ` 1 | ${userText}`, type: "info" },
-          { text: "   | ^ Invalid NEURON expression. Expected 'fn', 'let', or statement.", type: "error" },
-          { text: "Compilation failed: 1 syntax error.", type: "error" }
-        ];
-      } else if (userText.includes(".after(")) {
-        const lineNo = userText.split("\n").findIndex(l => l.includes(".after(")) + 1;
-        logQueue = [
-          { text: `visitor@neuron:~$ neuronc check wasm_playground.nr`, type: "prompt" },
-          { text: "Analyzing temporal data dependencies...", type: "info" },
-          { text: `[ERROR] Line ${lineNo}: TemporalLeak detected.`, type: "error" },
-          { text: `  --> wasm_playground.nr:${lineNo}:21`, type: "info" },
-          { text: "   | Lookahead violation: reading future timestamps.", type: "error" },
-          { text: "Type check failed: 1 error found.", type: "error" }
-        ];
-      } else {
-        logQueue = [
-          { text: `visitor@neuron:~$ neuronc run wasm_playground.nr`, type: "prompt" },
-          { text: "Compiling NEURON IR via WebAssembly (neuron-wasm)...", type: "info" },
-          { text: "✓ WebAssembly C-ABI [type_check, compile_to_ir, eval_neuron]: 0 errors", type: "success" },
-          { text: "✓ Generated IR SSA Basic Blocks (1 func, 4 ops)", type: "info" },
-          { text: "Tensor[2, 4]", type: "success" },
-          { text: "  [[ 0.1425,  0.8912,  0.0000,  0.4120 ],", type: "info" },
-          { text: "   [ 0.0000,  0.6514,  0.3129,  0.9810 ]]", type: "info" },
-          { text: "✓ WebAssembly Execution completed in 0.42 ms.", type: "success" }
-        ];
-      }
-    } else {
-      // Showcase tabs play their designated compiler demonstration logs
-      logQueue = compilerLogs[currentTab];
-    }
-
+    let logQueue = compilerLogs[currentTab];
     let logIndex = 0;
+    
     function printNextLine() {
       if (logIndex >= logQueue.length) {
         isRunning = false;
@@ -369,7 +270,14 @@ fn main() -> Tensor[2, 4]:
       terminalBody.scrollTop = terminalBody.scrollHeight;
       
       logIndex++;
-      setTimeout(printNextLine, 120);
+      
+      let delay = 120;
+      if (log.type === "prompt") delay = 300;
+      if (log.text.includes("Executing") || log.text.includes("allocating")) delay = 500;
+      if (log.text.includes("Iter 000")) delay = 400;
+      if (log.text.includes("Iter 0") && !log.text.includes("Iter 000")) delay = 100;
+      
+      setTimeout(printNextLine, delay);
     }
     
     printNextLine();
@@ -378,124 +286,33 @@ fn main() -> Tensor[2, 4]:
   // 10. Mobile Navbar Toggle
   if (navToggle) {
     navToggle.addEventListener("click", () => {
-      navLinks.classList.toggle("open");
-      navToggle.classList.toggle("active");
+      navLinks.classList.toggle("active");
     });
   }
 
-  // 11. FAQ Accordion Event Listeners
-  const faqItems = document.querySelectorAll(".faq-item");
-  faqItems.forEach(item => {
-    const question = item.querySelector(".faq-question");
-    question.addEventListener("click", () => {
-      const isActive = item.classList.contains("active");
+  // 11. Smooth Scroll for Anchor Links
+  document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+      const href = this.getAttribute('href');
+      if (href === "#") return;
       
-      // Close other items
-      faqItems.forEach(el => el.classList.remove("active"));
-      
-      // Toggle clicked item
-      if (!isActive) {
-        item.classList.add("active");
+      e.preventDefault();
+      const targetElement = document.querySelector(href);
+      if (targetElement) {
+        if (navLinks.classList.contains("active")) {
+          navLinks.classList.remove("active");
+        }
+        targetElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
       }
     });
   });
 
-  // 12. SaaS Pricing Billing Toggle Switch (Removed in public launch)
-
-  // 13. Waitlist Modal Handling
-  const waitlistModal = document.getElementById("waitlist-modal");
-  const openWaitlistBtn = document.getElementById("open-waitlist-btn");
-  const closeWaitlistBtn = document.getElementById("close-waitlist-btn");
-  const successCloseBtn = document.getElementById("success-close-btn");
-  const waitlistForm = document.getElementById("waitlist-form");
-  const waitlistEmailInput = document.getElementById("waitlist-email");
-  const waitlistSubmitBtn = document.getElementById("waitlist-submit-btn");
-  const waitlistFormContainer = document.getElementById("waitlist-form-container");
-  const waitlistSuccessContainer = document.getElementById("waitlist-success-container");
-  const waitlistSuccessEmail = document.getElementById("waitlist-success-email");
-
-  function openModal() {
-    if (waitlistModal) {
-      waitlistFormContainer.style.display = "block";
-      waitlistSuccessContainer.style.display = "none";
-      waitlistEmailInput.value = "";
-      waitlistModal.classList.add("active");
-    }
-  }
-
-  function closeModal() {
-    if (waitlistModal) {
-      waitlistModal.classList.remove("active");
-    }
-  }
-
-  if (openWaitlistBtn) {
-    openWaitlistBtn.addEventListener("click", openModal);
-  }
-
-  if (closeWaitlistBtn) {
-    closeWaitlistBtn.addEventListener("click", closeModal);
-  }
-
-  if (successCloseBtn) {
-    successCloseBtn.addEventListener("click", closeModal);
-  }
-
-  if (waitlistModal) {
-    waitlistModal.addEventListener("click", (e) => {
-      if (e.target === waitlistModal) {
-        closeModal();
-      }
-    });
-  }
-
-  if (waitlistForm) {
-    waitlistForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      
-      const email = waitlistEmailInput.value;
-      if (!email) return;
-      
-      const originalBtnText = waitlistSubmitBtn.textContent;
-      waitlistSubmitBtn.disabled = true;
-      waitlistSubmitBtn.textContent = "Joining...";
-      waitlistSubmitBtn.style.opacity = "0.7";
-      
-      fetch("https://formsubmit.co/ajax/contact@neuron-lab.org", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
-        body: JSON.stringify({
-          email: email,
-          _subject: "New NEURON Cloud Platform Waitlist Signup!",
-          _message: `Developer email: ${email} registered for the NEURON SaaS Cloud Beta.`
-        })
-      })
-      .then(response => response.json())
-      .then(data => {
-        waitlistSuccessEmail.textContent = email;
-        waitlistFormContainer.style.display = "none";
-        waitlistSuccessContainer.style.display = "block";
-      })
-      .catch(error => {
-        console.error("Waitlist submission error:", error);
-        waitlistSuccessEmail.textContent = email;
-        waitlistFormContainer.style.display = "none";
-        waitlistSuccessContainer.style.display = "block";
-      })
-      .finally(() => {
-        waitlistSubmitBtn.disabled = false;
-        waitlistSubmitBtn.textContent = originalBtnText;
-        waitlistSubmitBtn.style.opacity = "1";
-      });
-    });
-  }
-
-  // 14. Scroll Reveal Observer
+  // 12. Reveal Animations on Scroll
   const revealElements = document.querySelectorAll(".reveal");
-  if (revealElements.length > 0 && 'IntersectionObserver' in window) {
+  if ('IntersectionObserver' in window) {
     const revealObserver = new IntersectionObserver((entries, observer) => {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
@@ -512,7 +329,7 @@ fn main() -> Tensor[2, 4]:
     revealElements.forEach(el => el.classList.add("revealed"));
   }
 
-  // 15. Premium Cursor-Tracking Hover Effect
+  // 13. Premium Cursor-Tracking Hover Effect
   const cards = document.querySelectorAll(".feature-card, .pricing-card, .benchmark-card, .cta-card");
   cards.forEach(card => {
     card.addEventListener("mousemove", (e) => {
@@ -524,7 +341,7 @@ fn main() -> Tensor[2, 4]:
     });
   });
 
-  // 16. Stats Count-Up Animation
+  // 14. Stats Count-Up Animation
   const statsElements = document.querySelectorAll(".hero-stat-value");
   if (statsElements.length > 0 && 'IntersectionObserver' in window) {
     const statsObserver = new IntersectionObserver((entries, observer) => {

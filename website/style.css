@@ -486,24 +486,7 @@ img { max-width: 100%; display: block; }
   min-width: 1.5rem;
   opacity: 0.4;
 }
-.code-content { flex: 1; white-space: pre-wrap; display: block; }
-.code-textarea {
-  display: none;
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  line-height: 1.9;
-  resize: none;
-  width: 100%;
-  min-height: 260px;
-  white-space: pre;
-  tab-size: 2;
-  caret-color: var(--violet-light);
-}
+.code-content { flex: 1; white-space: pre-wrap; }
 .terminal-dots { display: flex; align-items: center; gap: 7px; }
 .terminal-body {
   padding: 1.25rem;
