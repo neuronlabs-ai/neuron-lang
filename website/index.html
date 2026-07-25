@@ -54,14 +54,14 @@
     <div class="container">
       <div class="hero-badge">
         <span class="hero-badge-dot"></span>
-        <span>v1.0.0 — WebAssembly WASM, AOT Native Binary &amp; Multi-GPU Engine</span>
+        <span>v1.0.0 — Now with CUDA GPU Acceleration &amp; JIT Fusion</span>
       </div>
       <h1>The language that makes<br><span class="gradient-text">AI think differently.</span></h1>
-      <p class="hero-lead">NEURON integrates automatic differentiation, temporal safety, causal do-calculus, WebAssembly in-browser execution, and multi-GPU cluster training directly into the type system.</p>
+      <p class="hero-lead">NEURON integrates automatic differentiation, temporal safety, causal do-calculus, and uncertainty tracking directly into the type system. No more silent bugs at 3 AM.</p>
       <div class="hero-actions">
         <a href="#playground" class="btn btn-primary">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          Try WASM Playground
+          Try the Playground
         </a>
         <a href="https://github.com/neuronlabs-ai/neuron-lang" target="_blank" class="btn btn-ghost">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
@@ -175,13 +175,6 @@
           <h3>Dynamic JIT Compiler</h3>
           <p>Compiles math kernels directly into native assembly or CUDA code at runtime. Sub-millisecond compilation scaling for deep networks, bypassing the interpreter.</p>
         </div>
-        <div class="feature-card reveal reveal-delay-3">
-          <div class="feature-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-          </div>
-          <h3>WebAssembly (WASM) Engine</h3>
-          <p>Client-side in-browser compilation, evaluation, and transpilation via lightweight C-ABI WASM bindings (<code>neuron-wasm</code>). Enables zero-installation web playgrounds and private edge compute.</p>
-        </div>
         <div class="feature-card reveal reveal-delay-1">
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
@@ -210,7 +203,6 @@
               <button class="tab-btn" data-tab="uncertainty">Uncertainty</button>
               <button class="tab-btn" data-tab="autograd">Autograd</button>
               <button class="tab-btn" data-tab="forgetting">Forgetting</button>
-              <button class="tab-btn" data-tab="wasm">WebAssembly &amp; Multi-GPU</button>
             </div>
             <div class="panel-actions">
               <button class="copy-btn" id="copy-btn">
@@ -225,7 +217,6 @@
           </div>
           <div class="editor-body">
             <div class="line-numbers" id="line-numbers"></div>
-            <textarea class="code-textarea" id="code-textarea" spellcheck="false" style="display:none;"></textarea>
             <div class="code-content" id="code-container"></div>
           </div>
         </div>
