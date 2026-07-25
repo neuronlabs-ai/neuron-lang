@@ -32,7 +32,13 @@ document.addEventListener("DOMContentLoaded", () => {
     forgetting: `<span class="hl-keyword">fn</span> patient_right_to_be_forgotten(net: <span class="hl-type">DiagnosisModel</span>, data: <span class="hl-type">Tensor</span>) [<span class="hl-type">Effect</span>[Mut[net]]]:
     <span class="hl-comment"># Selective unlearning using Fisher Information Noise Scrubbing</span>
     <span class="hl-keyword">let</span> cert = forget(net, data, method=<span class="hl-string">"FisherScrubbing"</span>, strength=<span class="hl-number">0.1</span>)
-    <span class="hl-keyword">return</span> cert`
+    <span class="hl-keyword">return</span> cert`,
+
+    wasm: `<span class="hl-comment"># WebAssembly (WASM) & Multi-GPU Distributed Training</span>
+<span class="hl-keyword">fn</span> main() -> <span class="hl-type">Tensor</span>[2, 4]:
+    <span class="hl-keyword">let</span> cluster = distribute(devices=[<span class="hl-number">0</span>, <span class="hl-number">1</span>, <span class="hl-number">2</span>, <span class="hl-number">3</span>]) <span class="hl-comment"># Ring-AllReduce</span>
+    <span class="hl-keyword">let</span> w = glorot(<span class="hl-number">2</span>, <span class="hl-number">4</span>)
+    <span class="hl-keyword">return</span> relu(w)`
   };
 
   // 1b. Raw Code Snippets for Copy-to-Clipboard
@@ -66,7 +72,13 @@ model LinearNet:
     forgetting: `fn patient_right_to_be_forgotten(net: DiagnosisModel, data: Tensor) [Effect[Mut[net]]]:
     # Selective unlearning using Fisher Information Noise Scrubbing
     let cert = forget(net, data, method="FisherScrubbing", strength=0.1)
-    return cert`
+    return cert`,
+
+    wasm: `# WebAssembly (WASM) & Multi-GPU Distributed Training
+fn main() -> Tensor[2, 4]:
+    let cluster = distribute(devices=[0, 1, 2, 3]) # Ring-AllReduce
+    let w = glorot(2, 4)
+    return relu(w)`
   };
 
   // 2. Line counts for each snippet
@@ -75,7 +87,8 @@ model LinearNet:
     causal: 6,
     uncertainty: 5,
     autograd: 8,
-    forgetting: 4
+    forgetting: 4,
+    wasm: 5
   };
 
   // 3. Simulated Compiler Outputs
@@ -152,6 +165,17 @@ model LinearNet:
       { text: "  strength: 0.500000", type: "info" },
       { text: "</ForgetCertificate>", type: "info" },
       { text: "Execution complete. Certificate generated.", type: "success" }
+    ],
+    wasm: [
+      { text: "visitor@neuron:~$ neuronc run examples/wasm_distributed.nr", type: "prompt" },
+      { text: "Compiling NEURON IR with WebAssembly (neuron-wasm) & Ring-AllReduce...", type: "info" },
+      { text: "✓ WebAssembly C-ABI Target: [type_check, compile_to_ir, eval_neuron, transpile]", type: "success" },
+      { text: "✓ Multi-GPU Topology initialized across 4 CUDA devices [0, 1, 2, 3]", type: "success" },
+      { text: "✓ Ring-AllReduce scatter-reduce and all-gather gradient synchronization active", type: "success" },
+      { text: "Tensor[2, 4]", type: "success" },
+      { text: "  [[ 0.1425,  0.8912,  0.0000,  0.4120 ],", type: "info" },
+      { text: "   [ 0.0000,  0.6514,  0.3129,  0.9810 ]]", type: "info" },
+      { text: "✓ Executed cleanly in WebAssembly (wasm32-unknown-unknown) target.", type: "success" }
     ]
   };
 
