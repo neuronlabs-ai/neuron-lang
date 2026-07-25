@@ -75,7 +75,8 @@ def temporal_check_dir(tensor, expected):
 
 def causal_check_mode(tensor, expected):
     if isinstance(tensor, dict) and tensor.get('mode') != expected:
-        raise RuntimeError(f"Causal Type Error: Mode mismatch! Expected '{expected}', got '{tensor.get(\"mode\")}'. Causal violation detected!")
+        mode_val = tensor.get('mode')
+        raise RuntimeError(f"Causal Type Error: Mode mismatch! Expected '{expected}', got '{mode_val}'. Causal violation detected!")
 
 def update_row(tensor, row_idx, new_row):
     if row_idx < 0:
