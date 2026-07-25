@@ -8,6 +8,7 @@
 ///   neuronc aot       <file.nr>   — compile to standalone native executable binary
 ///   neuronc transpile <file.nr>   — transpile to PyTorch Python script
 ///   neuronc lsp                   — run Language Server Protocol engine over stdio
+///   neuronc pycheck  <file.py>     — scan Python scripts for temporal, causal & uncertainty bugs
 ///
 /// Exit codes: 0 = success, 1 = errors, 2 = warnings only
 
@@ -166,6 +167,14 @@ fn main() {
         "lsp" => {
             cmd_lsp();
         }
+        "pycheck" => {
+            if args.len() < 3 {
+                eprintln!("error: neuronc pycheck requires a Python file argument");
+                eprintln!("usage: neuronc pycheck <file.py>");
+                process::exit(1);
+            }
+            cmd_pycheck(&args[2]);
+        }
         "version" | "--version" | "-v" => {
             println!("neuronc {} — the NEURON Language Compiler", env!("CARGO_PKG_VERSION"));
             println!("Built for AGI model creation");
@@ -195,6 +204,7 @@ COMMANDS:
     aot      Compile to a standalone native binary
     transpile Transpile NEURON code to PyTorch Python script
     lsp      Run Language Server Protocol engine over stdio
+    pycheck  Scan Python scripts for temporal, causal & uncertainty bugs
     repl     Start interactive NEURON REPL
     add      Add a local or git dependency to neuron.toml
     version  Print version information
@@ -586,6 +596,80 @@ fn find_runtime_path() -> String {
         }
     }
     "runtime".to_string()
+}
+
+/// Scan a Python file for temporal leaks, causal confusion, and uncertainty bugs.
+fn cmd_pycheck(file_path: &str) {
+    use std::process::Command;
+
+    // Verify the file exists and is a .py file
+    let path = std::path::Path::new(file_path);
+    if !path.exists() {
+        eprintln!("error: file '{}' not found", file_path);
+        process::exit(1);
+    }
+    if path.extension().map_or(true, |e| e != "py") {
+        eprintln!("error: neuronc pycheck only supports Python (.py) files");
+        eprintln!("  got: {}", file_path);
+        process::exit(1);
+    }
+
+    // Find the analyzer script relative to the neuronc binary
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+
+    // Try multiple locations for the analyzer
+    let analyzer_candidates = vec![
+        std::path::PathBuf::from("pycheck/analyzer.py"),
+        exe_dir.join("../../pycheck/analyzer.py"),
+        exe_dir.join("../../../pycheck/analyzer.py"),
+        exe_dir.join("pycheck/analyzer.py"),
+    ];
+
+    let analyzer_path = analyzer_candidates.iter()
+        .find(|p| p.exists())
+        .cloned();
+
+    let analyzer = match analyzer_path {
+        Some(p) => p,
+        None => {
+            eprintln!("error: could not find pycheck/analyzer.py");
+            eprintln!("  searched in:");
+            for c in &analyzer_candidates {
+                eprintln!("    {}", c.display());
+            }
+            process::exit(1);
+        }
+    };
+
+    // Run the analyzer via Python
+    let output = Command::new("python")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg(analyzer.to_str().unwrap())
+        .arg(file_path)
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stdout.is_empty() {
+                print!("{}", stdout);
+            }
+            if !stderr.is_empty() {
+                eprint!("{}", stderr);
+            }
+            // Exit with the same code as the analyzer
+            if !out.status.success() {
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to run Python: {}", e);
+            eprintln!("  Is Python installed and in your PATH?");
+            process::exit(1);
+        }
+    }
 }
 
 fn cmd_lsp() {
