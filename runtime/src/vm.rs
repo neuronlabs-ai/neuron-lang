@@ -245,6 +245,8 @@ pub struct VM {
     pub compiled_functions: std::collections::HashSet<String>,
     /// RNG counter for sample_categorical.
     rng_counter: u64,
+    /// Execution floating-point precision (F64 or F32).
+    pub precision: crate::tensor::DType,
 }
 
 pub struct CallFrame {
@@ -276,7 +278,13 @@ impl VM {
             cuda_kernels: HashMap::new(),
             compiled_functions: std::collections::HashSet::new(),
             rng_counter: 0,
+            precision: crate::tensor::DType::F64,
         }
+    }
+
+    pub fn with_precision(mut self, precision: crate::tensor::DType) -> Self {
+        self.precision = precision;
+        self
     }
 
     /// Load an IR program into the VM.

@@ -103,7 +103,9 @@ fn main() {
                 eprintln!("error: neuronc run requires a file argument");
                 process::exit(1);
             }
-            cmd_run(&args[2]);
+            let precision = parse_precision(&args[2..]);
+            let file_arg = args[2..].iter().find(|a| !a.starts_with('-') && *a != "f32" && *a != "f64").unwrap_or(&args[2]);
+            cmd_run(file_arg, precision);
         }
         "jit" => {
             if args.len() < 3 {
@@ -263,7 +265,26 @@ fn cmd_build(path: &str) {
     }
 }
 
-fn cmd_run(path: &str) {
+fn parse_precision(args: &[String]) -> neuron_runtime::tensor::DType {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--f32" {
+            return neuron_runtime::tensor::DType::F32;
+        } else if args[i] == "--f64" {
+            return neuron_runtime::tensor::DType::F64;
+        } else if args[i] == "--precision" && i + 1 < args.len() {
+            if args[i + 1].to_lowercase() == "f32" {
+                return neuron_runtime::tensor::DType::F32;
+            } else if args[i + 1].to_lowercase() == "f64" {
+                return neuron_runtime::tensor::DType::F64;
+            }
+        }
+        i += 1;
+    }
+    neuron_runtime::tensor::DType::F64
+}
+
+fn cmd_run(path: &str, precision: neuron_runtime::tensor::DType) {
     let source = read_source(path);
 
     match neuron_compiler::compile_with_imports(&source, path) {
@@ -274,7 +295,7 @@ fn cmd_run(path: &str) {
             }
 
             // Execute via VM
-            let mut vm = neuron_runtime::vm::VM::new();
+            let mut vm = neuron_runtime::vm::VM::new().with_precision(precision);
             vm.load(&output.ir);
 
             match vm.run_main() {
