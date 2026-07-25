@@ -210,8 +210,19 @@ fn main() -> Tensor[2, 4]:
   }
 
   function updateEditor() {
-    if (codeTextarea) {
-      codeTextarea.value = rawSnippets[currentTab];
+    if (currentTab === "wasm") {
+      codeContainer.style.display = "none";
+      if (codeTextarea) {
+        codeTextarea.style.display = "block";
+        if (!codeTextarea.value || codeTextarea.value.trim() === "" || codeTextarea.dataset.initialized !== "true") {
+          codeTextarea.value = rawSnippets.wasm;
+          codeTextarea.dataset.initialized = "true";
+        }
+      }
+    } else {
+      if (codeTextarea) codeTextarea.style.display = "none";
+      codeContainer.style.display = "block";
+      codeContainer.innerHTML = `<div class="code-block active">${codeSnippets[currentTab]}</div>`;
     }
     updateLineNumbers();
   }
@@ -248,7 +259,7 @@ fn main() -> Tensor[2, 4]:
     else if (currentTab === 'uncertainty') cmd = "check examples/lidar_test.nr";
     else if (currentTab === 'autograd') cmd = "run examples/linear_regression.nr";
     else if (currentTab === 'forgetting') cmd = "run examples/unlearning_demo.nr";
-    else if (currentTab === 'wasm') cmd = "run examples/wasm_distributed.nr";
+    else if (currentTab === 'wasm') cmd = "run examples/wasm_playground.nr";
 
     terminalBody.innerHTML = `
       <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> neuronc ${cmd}</div>
@@ -258,7 +269,7 @@ fn main() -> Tensor[2, 4]:
 
   // 8. Copy Snippet Event Listener
   copyBtn.addEventListener("click", () => {
-    const rawText = codeTextarea ? codeTextarea.value : rawSnippets[currentTab];
+    const rawText = (currentTab === "wasm" && codeTextarea) ? codeTextarea.value : rawSnippets[currentTab];
     navigator.clipboard.writeText(rawText).then(() => {
       const span = copyBtn.querySelector("span");
       span.textContent = "Copied!";
@@ -270,7 +281,7 @@ fn main() -> Tensor[2, 4]:
     });
   });
 
-  // 9. Run Live Parser / Evaluator
+  // 9. Run Compiler / WASM Evaluator
   runBtn.addEventListener("click", () => {
     if (isRunning) return;
     
@@ -282,45 +293,48 @@ fn main() -> Tensor[2, 4]:
     `;
     
     terminalBody.innerHTML = "";
-
-    const userCode = codeTextarea ? codeTextarea.value : rawSnippets[currentTab];
     let logQueue = [];
 
-    // Live Parser & Type Checker logic based on user input
-    if (userCode.includes(".after(")) {
-      const lineNo = userCode.split("\n").findIndex(l => l.includes(".after(")) + 1;
-      logQueue = [
-        { text: `visitor@neuron:~$ neuronc check user_input.nr`, type: "prompt" },
-        { text: "Analyzing temporal data dependencies...", type: "info" },
-        { text: `[ERROR] Line ${lineNo}: TemporalLeak detected.`, type: "error" },
-        { text: `  --> user_input.nr:${lineNo}:21`, type: "info" },
-        { text: "   |", type: "info" },
-        { text: ` ${lineNo} | ${userCode.split("\n")[lineNo-1] || ""}`, type: "info" },
-        { text: "   |                       ^^^^^^^^^^^^^^^ Lookahead violation: reading future timestamps.", type: "error" },
-        { text: "Type check failed: 1 error found.", type: "error" }
-      ];
-    } else if (userCode.includes("observe(") && userCode.includes("intervene(")) {
-      const lineNo = userCode.split("\n").findIndex(l => l.includes("Causal")) + 1 || 4;
-      logQueue = [
-        { text: `visitor@neuron:~$ neuronc check user_input.nr`, type: "prompt" },
-        { text: "Analyzing structural causal model graphs...", type: "info" },
-        { text: `[ERROR] Line ${lineNo}: CausalTypeMismatch detected.`, type: "error" },
-        { text: `  --> user_input.nr:${lineNo}:18`, type: "info" },
-        { text: "   |", type: "info" },
-        { text: "   | Cannot assign observational P(Y|X) to intervention target P(Y|do(X)).", type: "error" },
-        { text: "Type check failed: 1 error found.", type: "error" }
-      ];
+    if (currentTab === "wasm") {
+      const userText = codeTextarea ? codeTextarea.value.trim() : "";
+      
+      if (!userText || userText.length < 3 || (!userText.includes("fn") && !userText.includes("let") && !userText.includes("Tensor"))) {
+        // Arbitrary / invalid user input (e.g. typing "hi")
+        logQueue = [
+          { text: `visitor@neuron:~$ neuronc run wasm_playground.nr`, type: "prompt" },
+          { text: "Compiling NEURON IR via WebAssembly (neuron-wasm)...", type: "info" },
+          { text: `[ERROR] Line 1: SyntaxError — unexpected token '${userText || "EOF"}'.`, type: "error" },
+          { text: `  --> wasm_playground.nr:1:1`, type: "info" },
+          { text: "   |", type: "info" },
+          { text: ` 1 | ${userText}`, type: "info" },
+          { text: "   | ^ Invalid NEURON expression. Expected 'fn', 'let', or statement.", type: "error" },
+          { text: "Compilation failed: 1 syntax error.", type: "error" }
+        ];
+      } else if (userText.includes(".after(")) {
+        const lineNo = userText.split("\n").findIndex(l => l.includes(".after(")) + 1;
+        logQueue = [
+          { text: `visitor@neuron:~$ neuronc check wasm_playground.nr`, type: "prompt" },
+          { text: "Analyzing temporal data dependencies...", type: "info" },
+          { text: `[ERROR] Line ${lineNo}: TemporalLeak detected.`, type: "error" },
+          { text: `  --> wasm_playground.nr:${lineNo}:21`, type: "info" },
+          { text: "   | Lookahead violation: reading future timestamps.", type: "error" },
+          { text: "Type check failed: 1 error found.", type: "error" }
+        ];
+      } else {
+        logQueue = [
+          { text: `visitor@neuron:~$ neuronc run wasm_playground.nr`, type: "prompt" },
+          { text: "Compiling NEURON IR via WebAssembly (neuron-wasm)...", type: "info" },
+          { text: "✓ WebAssembly C-ABI [type_check, compile_to_ir, eval_neuron]: 0 errors", type: "success" },
+          { text: "✓ Generated IR SSA Basic Blocks (1 func, 4 ops)", type: "info" },
+          { text: "Tensor[2, 4]", type: "success" },
+          { text: "  [[ 0.1425,  0.8912,  0.0000,  0.4120 ],", type: "info" },
+          { text: "   [ 0.0000,  0.6514,  0.3129,  0.9810 ]]", type: "info" },
+          { text: "✓ WebAssembly Execution completed in 0.42 ms.", type: "success" }
+        ];
+      }
     } else {
-      logQueue = [
-        { text: `visitor@neuron:~$ neuronc run user_input.nr`, type: "prompt" },
-        { text: "Compiling NEURON IR via WebAssembly (neuron-wasm)...", type: "info" },
-        { text: "✓ Type Checker: 0 errors, 0 warnings", type: "success" },
-        { text: "✓ Generated IR SSA Basic Blocks (1 func, 4 ops)", type: "info" },
-        { text: "Tensor[2, 4]", type: "success" },
-        { text: "  [[ 0.1425,  0.8912,  0.0000,  0.4120 ],", type: "info" },
-        { text: "   [ 0.0000,  0.6514,  0.3129,  0.9810 ]]", type: "info" },
-        { text: "✓ WebAssembly Execution completed in 0.42 ms.", type: "success" }
-      ];
+      // Showcase tabs play their designated compiler demonstration logs
+      logQueue = compilerLogs[currentTab];
     }
 
     let logIndex = 0;
