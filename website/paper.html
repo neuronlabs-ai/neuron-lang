@@ -324,6 +324,15 @@
         });
       }
     });
+
+    // Mobile Navbar Toggle for Paper Page
+    const navToggleBtn = document.getElementById("nav-toggle-btn");
+    const navLinksMenu = document.getElementById("nav-links");
+    if (navToggleBtn && navLinksMenu) {
+      navToggleBtn.addEventListener("click", () => {
+        navLinksMenu.classList.toggle("open");
+      });
+    }
   </script>
 </body>
 </html>
