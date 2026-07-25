@@ -486,8 +486,9 @@ img { max-width: 100%; display: block; }
   min-width: 1.5rem;
   opacity: 0.4;
 }
-.code-content { flex: 1; white-space: pre-wrap; display: none; }
+.code-content { flex: 1; white-space: pre-wrap; display: block; }
 .code-textarea {
+  display: none;
   flex: 1;
   background: transparent;
   border: none;
