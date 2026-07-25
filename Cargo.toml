@@ -4,6 +4,7 @@ members = [
     "runtime",
     "neuronc",
     "gpu_bench",
+    "wasm",
 ]
 resolver = "2"
 
