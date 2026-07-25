@@ -1,9 +1,13 @@
 /// neuronc — the NEURON Language Compiler CLI.
 ///
 /// Usage:
-///   neuronc check  <file.nr>   — type-check, print errors/warnings
-///   neuronc build  <file.nr>   — compile to NEURON IR
-///   neuronc run    <file.nr>   — compile and execute
+///   neuronc check     <file.nr>   — type-check, print errors/warnings
+///   neuronc build     <file.nr>   — compile to NEURON IR
+///   neuronc run       <file.nr>   — compile and execute
+///   neuronc jit       <file.nr>   — compile and execute using native Rust JIT compilation
+///   neuronc aot       <file.nr>   — compile to standalone native executable binary
+///   neuronc transpile <file.nr>   — transpile to PyTorch Python script
+///   neuronc lsp                   — run Language Server Protocol engine over stdio
 ///
 /// Exit codes: 0 = success, 1 = errors, 2 = warnings only
 
@@ -114,6 +118,24 @@ fn main() {
             }
             cmd_jit(&args[2]);
         }
+        "aot" => {
+            if args.len() < 3 {
+                eprintln!("error: neuronc aot requires a file argument");
+                process::exit(1);
+            }
+            let file_path = &args[2];
+            let mut output_path = None;
+            let mut i = 3;
+            while i < args.len() {
+                if (args[i] == "-o" || args[i] == "--output") && i + 1 < args.len() {
+                    output_path = Some(args[i + 1].as_str());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            cmd_aot(file_path, output_path);
+        }
         "transpile" => {
             if args.len() < 3 {
                 eprintln!("error: neuronc transpile requires a file argument");
@@ -138,7 +160,7 @@ fn main() {
                 eprintln!("error: unsupported target '{}' (only 'python' is supported)", target);
                 process::exit(1);
             }
-            cmd_transpile(file_path, output_path);
+            cmd_transpile(file_path, output_path.map(|s| s.as_str()));
         }
         "lsp" => {
             cmd_lsp();
@@ -169,7 +191,9 @@ COMMANDS:
     build    Compile to NEURON IR (produces .nir file, or builds package)
     run      Compile and execute a NEURON program
     jit      Compile and execute using native Rust JIT compilation
+    aot      Compile to a standalone native binary
     transpile Transpile NEURON code to PyTorch Python script
+    lsp      Run Language Server Protocol engine over stdio
     repl     Start interactive NEURON REPL
     add      Add a local or git dependency to neuron.toml
     version  Print version information
@@ -181,12 +205,8 @@ FLAGS:
 EXAMPLES:
     neuronc check  examples/transformer.nr
     neuronc run    examples/simple_shapes.nr
-    neuronc build  examples/bayesian_nn.nr
-
-NEURON is a statically typed, natively differentiable language
-designed for AGI model creation. Every function is differentiable
-unless marked @opaque. Tensor shapes are verified at compile time.
-Uncertainty, temporality, and causality are first-class type constructs."#
+    neuronc aot    examples/colab_mlp.nr -o mlp_bin
+"#
     );
 }
 
@@ -221,7 +241,7 @@ fn cmd_check(path: &str) {
             eprintln!("  {}", warn);
             eprintln!();
         }
-        if exit_code == 0 { exit_code = 0; } // Warnings don't fail
+        if exit_code == 0 { exit_code = 0; }
     }
 
     if exit_code == 0 {
@@ -236,7 +256,6 @@ fn cmd_build(path: &str) {
 
     match neuron_compiler::compile_with_imports(&source, path) {
         Ok(output) => {
-            // Print warnings if any
             if output.result.has_warnings() {
                 for warn in &output.result.warnings {
                     eprintln!("  {}", warn);
@@ -250,7 +269,6 @@ fn cmd_build(path: &str) {
             eprintln!("✓ {} — compiled to NEURON IR", path);
             eprintln!("  {} function(s), {} global(s), {} IR node(s)", n_funcs, n_globals, total_ops);
 
-            // Print IR summary
             for func in &output.ir.functions {
                 let func_ops: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
                 eprintln!("  fn {}({} params) → {} nodes",
@@ -292,12 +310,10 @@ fn cmd_run(path: &str, precision: neuron_runtime::tensor::DType) {
 
     match neuron_compiler::compile_with_imports(&source, path) {
         Ok(output) => {
-            // Print warnings
             for warn in &output.result.warnings {
                 eprintln!("  {}", warn);
             }
 
-            // Execute via VM
             let mut vm = neuron_runtime::vm::VM::new().with_precision(precision);
             vm.load(&output.ir);
 
@@ -330,15 +346,12 @@ fn cmd_jit(path: &str) {
 
     match neuron_compiler::compile_with_imports(&source, path) {
         Ok(output) => {
-            // Print warnings
             for warn in &output.result.warnings {
                 eprintln!("  {}", warn);
             }
 
-            // 1. Transpile IR to optimized Rust source
             let rust_code = neuron_compiler::transpiler::Transpiler::transpile(&output.ir);
 
-            // 2. Setup temporary Cargo project
             let temp_dir = std::env::temp_dir().join(format!("neuron_jit_{}", std::process::id()));
             let src_dir = temp_dir.join("src");
             std::fs::create_dir_all(&src_dir).unwrap();
@@ -358,7 +371,6 @@ neuron-runtime = {{ path = "{}" }}
             std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
             std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
 
-            // 3. Compile the JIT library using cargo build --release
             eprintln!("Compiling JIT library with cargo build --release...");
             let compile_start = std::time::Instant::now();
             let compile_status = std::process::Command::new("cargo")
@@ -376,8 +388,6 @@ neuron-runtime = {{ path = "{}" }}
             let compile_dur = compile_start.elapsed().as_secs_f64() * 1000.0;
             eprintln!("✓ JIT compilation completed in {:.2} ms", compile_dur);
 
-            // 4. Load the compiled library
-            eprintln!("Loading JIT dynamic library...");
             let lib_path = if cfg!(target_os = "windows") {
                 temp_dir.join("target").join("release").join("neuron_jit.dll")
             } else if cfg!(target_os = "macos") {
@@ -389,7 +399,6 @@ neuron-runtime = {{ path = "{}" }}
             let lib = unsafe { libloading::Library::new(lib_path) }
                 .expect("Failed to load compiled JIT library");
 
-            // 5. Resolve and execute run_main
             let run_main: libloading::Symbol<fn(&mut neuron_runtime::vm::VM) -> neuron_runtime::vm::Value> = unsafe {
                 lib.get(b"run_main")
             }.expect("Failed to resolve JIT run_main symbol");
@@ -420,19 +429,113 @@ neuron-runtime = {{ path = "{}" }}
     }
 }
 
-fn cmd_transpile(path: &str, output_path: Option<&String>) {
+fn cmd_aot(path: &str, output_path: Option<&str>) {
     let source = read_source(path);
 
     match neuron_compiler::compile_with_imports(&source, path) {
         Ok(output) => {
-            // Print warnings if any
+            for warn in &output.result.warnings {
+                eprintln!("  {}", warn);
+            }
+
+            let rust_code = neuron_compiler::transpiler::Transpiler::transpile(&output.ir);
+
+            let temp_dir = std::env::temp_dir().join(format!("neuron_aot_{}", std::process::id()));
+            let src_dir = temp_dir.join("src");
+            std::fs::create_dir_all(&src_dir).unwrap();
+
+            let runtime_path = find_runtime_path();
+            let cargo_toml_content = format!(r#"[package]
+name = "neuron_aot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+neuron-runtime = {{ path = "{}" }}
+"#, runtime_path);
+
+            let main_rs_content = format!(r#"
+mod user_code {{
+{}
+}}
+
+fn main() {{
+    let mut vm = neuron_runtime::vm::VM::new();
+    let res = user_code::main(&mut vm, vec![]);
+    match res {{
+        neuron_runtime::vm::Value::Void => {{}},
+        _ => println!("{{}}", res.display()),
+    }}
+}}
+"#, rust_code);
+
+            std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
+            std::fs::write(src_dir.join("main.rs"), main_rs_content).unwrap();
+
+            eprintln!("Compiling Ahead-Of-Time (AOT) native binary with target-cpu=native...");
+            let compile_start = std::time::Instant::now();
+            let compile_status = std::process::Command::new("cargo")
+                .arg("build")
+                .arg("--release")
+                .env("RUSTFLAGS", "-C target-cpu=native")
+                .current_dir(&temp_dir)
+                .status()
+                .expect("Failed to run cargo build for AOT");
+
+            if !compile_status.success() {
+                eprintln!("error: AOT compilation failed");
+                std::process::exit(1);
+            }
+            let compile_dur = compile_start.elapsed().as_secs_f64() * 1000.0;
+
+            let built_bin = if cfg!(target_os = "windows") {
+                temp_dir.join("target").join("release").join("neuron_aot.exe")
+            } else {
+                temp_dir.join("target").join("release").join("neuron_aot")
+            };
+
+            let dest_path = match output_path {
+                Some(p) => std::path::PathBuf::from(p),
+                None => {
+                    let file_name = std::path::Path::new(path).file_stem().unwrap_or_default().to_string_lossy();
+                    if cfg!(target_os = "windows") {
+                        std::path::PathBuf::from(format!("{}.exe", file_name))
+                    } else {
+                        std::path::PathBuf::from(file_name.to_string())
+                    }
+                }
+            };
+
+            if let Err(e) = std::fs::copy(&built_bin, &dest_path) {
+                eprintln!("error: failed to save output binary: {}", e);
+                std::process::exit(1);
+            }
+
+            eprintln!("✓ AOT compilation completed in {:.2} ms", compile_dur);
+            eprintln!("✓ Native binary written to {:?}", dest_path);
+        }
+        Err(result) => {
+            eprintln!("\n{} — {} error(s) found:\n", path, result.errors.len());
+            for err in &result.errors {
+                eprintln!("  {}", err);
+                eprintln!();
+            }
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_transpile(path: &str, output_path: Option<&str>) {
+    let source = read_source(path);
+
+    match neuron_compiler::compile_with_imports(&source, path) {
+        Ok(output) => {
             if output.result.has_warnings() {
                 for warn in &output.result.warnings {
                     eprintln!("  {}", warn);
                 }
             }
 
-            // Transpile to PyTorch Python code
             let py_code = neuron_compiler::py_transpiler::PyTranspiler::transpile(&output.ir);
 
             match output_path {
@@ -460,14 +563,11 @@ fn cmd_transpile(path: &str, output_path: Option<&String>) {
 }
 
 fn find_runtime_path() -> String {
-    // 1. Check environment variable
     if let Ok(p) = std::env::var("NEURON_RUNTIME_PATH") {
         return p.replace("\\", "/");
     }
-    // 2. Check relative to executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            // target/release or target/debug
             if let Some(target) = parent.parent() {
                 if let Some(root) = target.parent() {
                     let path = root.join("runtime");
@@ -478,14 +578,12 @@ fn find_runtime_path() -> String {
             }
         }
     }
-    // 3. Check relative to current working directory
     let local_path = std::path::Path::new("runtime");
     if local_path.exists() {
         if let Ok(abs) = std::fs::canonicalize(local_path) {
             return abs.to_string_lossy().replace("\\", "/");
         }
     }
-    // 4. Default fallback
     "runtime".to_string()
 }
 
