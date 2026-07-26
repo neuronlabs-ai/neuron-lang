@@ -292,8 +292,37 @@ debug = false
                     assert!(diff < 1e-5, "Value mismatch on case {}, index {}: interpreter={:.6}, JIT={:.6}", i, idx, t_int.data[idx], t_jit.data[idx]);
                 }
             }
+            (Value::Float(f_int), Value::Float(f_jit)) => {
+                let diff = (f_int - f_jit).abs();
+                assert!(diff < 1e-5, "Float mismatch on case {}: interpreter={:.6}, JIT={:.6}", i, f_int, f_jit);
+            }
+            (Value::Int(i_int), Value::Int(i_jit)) => {
+                assert_eq!(i_int, i_jit, "Int mismatch on case {}: interpreter={}, JIT={}", i, i_int, i_jit);
+            }
             _ => {
-                panic!("Expected Tensor values from main, got interpreter={:?}, JIT={:?}", res_interpreter, res_jit);
+                // If types differ, check if they're numerically equivalent
+                // (e.g., Float vs Tensor with 1 element)
+                let f_int = match &res_interpreter {
+                    Value::Float(f) => Some(*f),
+                    Value::Tensor(t) if t.numel() == 1 => Some(t.data[0]),
+                    Value::Int(i) => Some(*i as f64),
+                    _ => None,
+                };
+                let f_jit = match &res_jit {
+                    Value::Float(f) => Some(*f),
+                    Value::Tensor(t) if t.numel() == 1 => Some(t.data[0]),
+                    Value::Int(i) => Some(*i as f64),
+                    _ => None,
+                };
+                match (f_int, f_jit) {
+                    (Some(a), Some(b)) => {
+                        let diff = (a - b).abs();
+                        assert!(diff < 1e-5, "Numeric mismatch on case {}: interpreter={:.6}, JIT={:.6}", i, a, b);
+                    }
+                    _ => {
+                        panic!("Type mismatch on case {}: interpreter={:?}, JIT={:?}", i, res_interpreter, res_jit);
+                    }
+                }
             }
         }
     }

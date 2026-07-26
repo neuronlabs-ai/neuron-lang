@@ -37,8 +37,8 @@ fn validate_shape(inputs: &[ValueId], get: impl Fn(ValueId) -> Value) -> Result<
             .ok_or_else(|| "Runtime Error: Shape size overflow".to_string())?;
         shape.push(dim);
     }
-    if product > 10_000_000 {
-        return Err(format!("Runtime Error: Tensor size too large: {} elements", product));
+    if product > 100_000_000 {
+        return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));
     }
     Ok(shape)
 }
@@ -58,8 +58,8 @@ fn validate_static_shape(shape: &[i64]) -> Result<Vec<usize>, String> {
             .ok_or_else(|| "Runtime Error: Shape size overflow".to_string())?;
         s.push(dim);
     }
-    if product > 10_000_000 {
-        return Err(format!("Runtime Error: Tensor size too large: {} elements", product));
+    if product > 100_000_000 {
+        return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));
     }
     Ok(s)
 }
@@ -1694,7 +1694,7 @@ impl VM {
                                 let d_total: usize = tensors.iter().map(|t| t.shape[1]).sum();
                                 let total_elements = b.checked_mul(d_total)
                                     .ok_or_else(|| "Runtime Error: Concat shape size overflow".to_string())?;
-                                if total_elements > 10_000_000 {
+                                if total_elements > 100_000_000 {
                                     return Err(format!("Runtime Error: Tensor size too large in Concat: {} elements", total_elements));
                                 }
                                 let mut data = vec![0.0; b * d_total];
@@ -1712,7 +1712,7 @@ impl VM {
                                 return Ok(Value::Tensor(Tensor::new(data, vec![b, d_total])).apply_wrappers(wraps));
                             } else {
                                 let total_len: usize = tensors.iter().map(|t| t.numel()).sum();
-                                if total_len > 10_000_000 {
+                                if total_len > 100_000_000 {
                                     return Err(format!("Runtime Error: Tensor size too large in Concat: {} elements", total_len));
                                 }
                                 let mut data = Vec::with_capacity(total_len);
