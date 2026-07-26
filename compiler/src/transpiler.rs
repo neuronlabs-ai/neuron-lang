@@ -1025,11 +1025,20 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
 
                             IROp::Nop => {
-                                let items: Vec<String> = node.inputs.iter().map(|id| format!("v{}.clone()", id)).collect();
-                                match &node.output_type {
-                                    IRType::List(_) => format!("Value::List(vec![{}])", items.join(", ")),
-                                    IRType::Tuple(_) => format!("Value::Tuple(vec![{}])", items.join(", ")),
-                                    _ => "Value::Void".to_string(),
+                                if let Some(first) = node.inputs.first() {
+                                    match &node.output_type {
+                                        IRType::List(_) => {
+                                            let items: Vec<String> = node.inputs.iter().map(|id| format!("v{}.clone()", id)).collect();
+                                            format!("Value::List(vec![{}])", items.join(", "))
+                                        }
+                                        IRType::Tuple(_) => {
+                                            let items: Vec<String> = node.inputs.iter().map(|id| format!("v{}.clone()", id)).collect();
+                                            format!("Value::Tuple(vec![{}])", items.join(", "))
+                                        }
+                                        _ => format!("v{}.clone()", first),
+                                    }
+                                } else {
+                                    "Value::Void".to_string()
                                 }
                             }
 

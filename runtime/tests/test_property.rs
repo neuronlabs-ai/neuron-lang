@@ -128,6 +128,7 @@ fn jit_obj_call(vm: &mut VM, fn_name: &str, args: Vec<Value>) -> Value {
 "#);
 
     let mut ir_programs = Vec::new();
+    let mut rust_programs = Vec::new();
 
     // Compile and transpile each case
     for i in 0..num_cases {
@@ -143,6 +144,7 @@ fn jit_obj_call(vm: &mut VM, fn_name: &str, args: Vec<Value>) -> Value {
         
         // Transpile to Rust code
         let raw_rust = Transpiler::transpile(&compile_res.ir);
+        rust_programs.push(raw_rust.clone());
         
         // Post-process the JIT code to rename functions uniquely for index `i`
         // Extract only initialize_globals and user functions, skip the jit_obj_call dispatcher
@@ -267,6 +269,7 @@ debug = false
     println!("Running property tests comparison...");
     for i in 0..num_cases {
         let ir = &ir_programs[i];
+        let src = generate_random_program(i); // regenerate for debug printing
         
         // 1. Run Interpreter
         let mut vm_interpreter = VM::new();
@@ -320,7 +323,7 @@ debug = false
                         assert!(diff < 1e-5, "Numeric mismatch on case {}: interpreter={:.6}, JIT={:.6}", i, a, b);
                     }
                     _ => {
-                        panic!("Type mismatch on case {}: interpreter={:?}, JIT={:?}", i, res_interpreter, res_jit);
+                        panic!("Type mismatch on case {}:\n  interpreter={:?}\n  JIT={:?}\n\nSource:\n{}\n\nTranspiled Rust:\n{}", i, res_interpreter, res_jit, src, rust_programs[i]);
                     }
                 }
             }
