@@ -347,6 +347,11 @@ fn pass_cse(func: &mut IRFunction) -> bool {
                 continue;
             }
 
+            // Skip loads (state-dependent reads that change across store/update operations)
+            if matches!(&node.op, IROp::Load { .. }) {
+                continue;
+            }
+
             // Skip ops with no inputs (tensor creators like Zeros, Glorot depend on randomness)
             if node.inputs.is_empty() {
                 continue;
@@ -592,7 +597,7 @@ fn pass_licm(func: &mut IRFunction) -> bool {
 
             for node in block.instructions.drain(..) {
                 let all_inputs_outside = node.inputs.iter().all(|id| !loop_defined.contains(id));
-                let is_pure = !has_side_effects(&node.op, &node.effects) && !matches!(&node.op, IROp::Nop);
+                let is_pure = !has_side_effects(&node.op, &node.effects) && !matches!(&node.op, IROp::Nop | IROp::Load { .. });
 
                 if all_inputs_outside && is_pure && !node.inputs.is_empty() {
                     to_hoist.push(node);

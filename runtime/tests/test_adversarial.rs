@@ -451,16 +451,16 @@ fn main() -> Tensor:
 
 #[test]
 fn adversarial_concat_exceeds_ceiling() {
-    // Each tensor is 10M elements, concatenating two should exceed the 10M ceiling
+    // Each tensor is 60M elements, concatenating two should exceed the 100M ceiling (120M total)
     let src = r#"
 fn main() -> Tensor:
-  let a = zeros(10000, 1000)
-  let b = zeros(10000, 1000)
+  let a = zeros(10000, 6000)
+  let b = zeros(10000, 6000)
   let c = concat([a, b])
   return c
 "#;
     let res = run(src);
-    // Should either fail at tensor creation (10M limit) or at concat
+    // Should either fail at tensor creation or at concat
     assert!(res.is_err(), "concat exceeding element ceiling should error");
 }
 
