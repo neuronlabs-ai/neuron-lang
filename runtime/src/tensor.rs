@@ -55,6 +55,11 @@ pub struct Tensor {
 }
 
 impl Tensor {
+    /// Ensure the tensor has a valid VRAM device pointer.
+    pub fn ensure_vram(&mut self) -> u64 {
+        self.data.ensure_vram()
+    }
+
     /// Create a new tensor from data and shape.
     pub fn new<B: Into<Buffer>>(data: B, shape: Vec<usize>) -> Self {
         let data = data.into();

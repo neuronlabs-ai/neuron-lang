@@ -149,6 +149,17 @@ impl Value {
     pub fn as_tensor(&self) -> Option<&Tensor> {
         if let Value::Tensor(t) = self.unwrap_ref() { Some(t) } else { None }
     }
+    pub fn as_tensor_mut(&mut self) -> Option<&mut Tensor> {
+        let mut curr = self;
+        loop {
+            match curr {
+                Value::Temporal { data, .. } => curr = data.as_mut(),
+                Value::Causal { data, .. } => curr = data.as_mut(),
+                Value::Tensor(t) => return Some(t),
+                _ => return None,
+            }
+        }
+    }
     pub fn as_float(&self) -> f64 {
         match self.unwrap_ref() {
             Value::Float(f) => *f,
@@ -2479,21 +2490,20 @@ else:
             // clone was dropped at the end of the loop iteration, returning the VRAM
             // pointer to the pool. The next iteration's clone could reuse (and zero) 
             // the same pointer, causing all inputs to alias the last cloned buffer.
-            let input_vals: Vec<Value> = kernel.inputs.iter().map(|&id| get_val(id)).collect();
+            let mut input_vals: Vec<Value> = kernel.inputs.iter().map(|&id| get_val(id)).collect();
             
             let mut any_input_missing = false;
-            for (idx, val) in input_vals.iter().enumerate() {
+            for (idx, val) in input_vals.iter_mut().enumerate() {
                 if kernel.input_is_tensor[idx] {
-                    let tensor = match val.as_tensor() {
+                    let tensor = match val.as_tensor_mut() {
                         Some(t) => t,
                         None => {
                             any_input_missing = true;
                             break;
                         }
                     };
-                    // ensure_device() handles both VRAM (no-op if already there) and UVM (prefetch)
-                    tensor.data.ensure_device();
-                    let ptr = tensor.device_ptr();
+                    // ensure_vram() promotes Host buffers to VRAM storage if CUDA is available
+                    let ptr = tensor.ensure_vram();
                     if ptr == 0 {
                         any_input_missing = true;
                         break;

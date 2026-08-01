@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycheck"
+version = "0.1.0"
+description = "A 15ms static AST analyzer that catches temporal lookahead bias in Python ML scripts."
+readme = "README.md"
+authors = [{ name = "NEURON Team" }]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.7"
+dependencies = []
+
+[project.scripts]
+pycheck = "pycheck.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

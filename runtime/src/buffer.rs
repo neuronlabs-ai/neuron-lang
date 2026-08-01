@@ -341,6 +341,49 @@ impl Buffer {
         }
     }
 
+    /// Ensure the buffer has a valid VRAM device pointer.
+    /// Promotes Host buffers to VRAM if CUDA is available.
+    pub fn ensure_vram(&mut self) -> u64 {
+        match &mut self.storage {
+            BufferStorage::Vram { device_ptr, size, host_mirror, dirty } => {
+                let current_dirty = *dirty.borrow();
+                if current_dirty == DirtyFlag::HostCurrent {
+                    let mirror = host_mirror.borrow();
+                    if let Some(data) = mirror.as_ref() {
+                        if let Some(ctx) = crate::device::get_cuda_context() {
+                            let byte_size = data.len().min(*size) * std::mem::size_of::<f64>();
+                            unsafe {
+                                (ctx.cuda.cuMemcpyHtoD_v2)(
+                                    *device_ptr,
+                                    data.as_ptr() as *const std::ffi::c_void,
+                                    byte_size,
+                                );
+                            }
+                        }
+                    }
+                    *dirty.borrow_mut() = DirtyFlag::Clean;
+                }
+                *device_ptr
+            }
+            BufferStorage::Uvm { device_ptr, .. } => *device_ptr,
+            BufferStorage::Host(vec) => {
+                if !crate::device::is_force_cpu() && crate::device::get_cuda_context().is_some() {
+                    let len = vec.len();
+                    if let Some(mut vram_buf) = Self::try_new_vram(len) {
+                        vram_buf.upload_host_data(vec);
+                        let ptr = match &vram_buf.storage {
+                            BufferStorage::Vram { device_ptr, .. } => *device_ptr,
+                            _ => 0,
+                        };
+                        std::mem::swap(&mut self.storage, &mut vram_buf.storage);
+                        return ptr;
+                    }
+                }
+                0
+            }
+        }
+    }
+
     /// Get the device pointer for kernel launch arguments.
     /// For Vram: returns the dedicated VRAM pointer (uploads if needed).
     /// For Uvm: returns the UVM pointer.
