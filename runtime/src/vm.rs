@@ -2575,6 +2575,7 @@ else:
             crate::device::set_force_cpu(true);
             let mut local_ssa = self.call_stack[frame_idx].ssa_values.clone();
             let mut cpu_res = Ok(());
+            let effect_log_len = self.effect_log.len();
             for node in &group.instructions {
                 match self.exec_node(node, &local_ssa) {
                     Ok(res) => {
@@ -2588,6 +2589,7 @@ else:
                 }
             }
             crate::device::set_force_cpu(old_force);
+            self.effect_log.truncate(effect_log_len);
             cpu_res?;
             
             // Swap the CPU-computed tensor's buffer with the GPU-computed one, preserving the tape ID
