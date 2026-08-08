@@ -704,6 +704,20 @@ impl Lowerer {
                             }
                             return self.emit(func, IROp::Zeros(vec![]), shape_ids, IRType::Tensor(vec![]));
                         }
+                        "ones" => {
+                            let mut shape_ids = Vec::new();
+                            for arg in &c.args {
+                                shape_ids.push(self.lower_expr(func, &arg.value));
+                            }
+                            return self.emit(func, IROp::Ones(vec![]), shape_ids, IRType::Tensor(vec![]));
+                        }
+                        "randn" => {
+                            let mut shape_ids = Vec::new();
+                            for arg in &c.args {
+                                shape_ids.push(self.lower_expr(func, &arg.value));
+                            }
+                            return self.emit(func, IROp::Randn(vec![]), shape_ids, IRType::Tensor(vec![]));
+                        }
                         "glorot" => {
                             let mut shape_ids = Vec::new();
                             for arg in &c.args {
@@ -747,6 +761,19 @@ impl Lowerer {
                         "embed_string" => return self.emit(func, IROp::EmbedString, arg_ids, IRType::Tensor(vec![1, 8])),
                         "generate_reply" => return self.emit(func, IROp::GenerateReply, arg_ids, IRType::String),
                         "search" => return self.emit(func, IROp::Search { strategy: "default".into(), max_iter: 100 }, arg_ids, IRType::Any),
+                        "println" => return self.emit(func, IROp::Print, arg_ids, IRType::Void),
+                        "nll_loss" => return self.emit(func, IROp::NLLLoss, arg_ids, IRType::F64),
+                        "kl_divergence" => return self.emit(func, IROp::KLDivergence, arg_ids, IRType::F64),
+                        "explain" => return self.emit(func, IROp::Explain, arg_ids, IRType::String),
+                        "stop_grad" => return self.emit(func, IROp::StopGrad, arg_ids, IRType::Tensor(vec![])),
+                        "reshape" => {
+                            // reshape(tensor, dim1, dim2, ...)
+                            let tensor_id = arg_ids[0];
+                            let shape_dims: Vec<i64> = c.args.iter().skip(1).filter_map(|a| {
+                                if let Expr::IntLit(v, _) = &a.value { Some(*v) } else { None }
+                            }).collect();
+                            return self.emit(func, IROp::Reshape(shape_dims), vec![tensor_id], IRType::Tensor(vec![]));
+                        }
                         _ => {}
                     }
                 }

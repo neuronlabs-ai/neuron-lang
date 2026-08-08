@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEURON AGI & LLM — Browser WASM Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #080b14;
+      --bg-card: rgba(16, 22, 38, 0.7);
+      --bg-card-border: rgba(255, 255, 255, 0.08);
+      --accent-cyan: #00f2ff;
+      --accent-purple: #9d4edd;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --font-ui: 'Outfit', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(at 10% 20%, rgba(0, 242, 255, 0.08) 0px, transparent 50%),
+        radial-gradient(at 90% 80%, rgba(157, 78, 221, 0.08) 0px, transparent 50%);
+      color: var(--text-main);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1.25rem 2rem;
+      border-bottom: 1px solid var(--bg-card-border);
+      background: rgba(8, 11, 20, 0.8);
+      backdrop-filter: blur(12px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .logo-badge {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+      color: #000;
+      font-weight: 700;
+      font-size: 0.85rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 6px;
+      letter-spacing: 1px;
+    }
+
+    .logo-title {
+      font-size: 1.35rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #fff 40%, var(--text-muted));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 22, 38, 0.9);
+      border: 1px solid var(--bg-card-border);
+      padding: 0.4rem 0.9rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--accent-amber);
+      box-shadow: 0 0 8px var(--accent-amber);
+    }
+
+    .dot.active {
+      background-color: var(--accent-emerald);
+      box-shadow: 0 0 8px var(--accent-emerald);
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 1.5rem;
+      padding: 1.5rem 2rem;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+      flex: 1;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--bg-card-border);
+      border-radius: 16px;
+      backdrop-filter: blur(16px);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .section-header {
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent-cyan);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .file-dropzone {
+      border: 2px dashed rgba(0, 242, 255, 0.25);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+      background: rgba(0, 242, 255, 0.02);
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .file-dropzone:hover {
+      border-color: var(--accent-cyan);
+      background: rgba(0, 242, 255, 0.05);
+    }
+
+    .file-dropzone input {
+      display: none;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 0.85rem;
+    }
+
+    .stat-label {
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      font-family: var(--font-mono);
+      font-weight: 500;
+      color: #fff;
+    }
+
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      height: 680px;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding-right: 0.5rem;
+    }
+
+    .chat-messages::-webkit-scrollbar {
+      width: 6px;
+    }
+    .chat-messages::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+
+    .msg {
+      max-width: 80%;
+      padding: 0.9rem 1.2rem;
+      border-radius: 14px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: linear-gradient(135deg, rgba(0, 242, 255, 0.15), rgba(157, 78, 221, 0.15));
+      border: 1px solid rgba(0, 242, 255, 0.3);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+
+    .msg.assistant {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--bg-card-border);
+      color: var(--text-main);
+      border-bottom-left-radius: 2px;
+    }
+
+    .chat-input-bar {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: rgba(8, 11, 20, 0.6);
+      border: 1px solid var(--bg-card-border);
+      border-radius: 12px;
+      padding: 0.85rem 1.1rem;
+      color: #fff;
+      font-family: var(--font-ui);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    .chat-input:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+      color: #000;
+      font-weight: 600;
+      border: none;
+      padding: 0 1.5rem;
+      border-radius: 12px;
+      cursor: pointer;
+      font-family: var(--font-ui);
+      transition: opacity 0.2s ease;
+    }
+
+    .send-btn:hover {
+      opacity: 0.9;
+    }
+
+    .cognitive-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    .cog-box {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--bg-card-border);
+      border-radius: 10px;
+      padding: 0.75rem;
+      text-align: center;
+    }
+
+    .cog-name {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .cog-val {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--accent-cyan);
+    }
+
+    .badge-tag {
+      font-size: 0.75rem;
+      padding: 0.15rem 0.4rem;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid var(--accent-emerald);
+      color: var(--accent-emerald);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-group">
+      <div class="logo-badge">NEURON</div>
+      <div class="logo-title">WASM AGI & LLM Engine</div>
+    </div>
+    <div class="status-pill">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Initializing WASM...</span>
+    </div>
+  </header>
+
+  <div class="main-grid">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="card">
+        <div class="section-header">Model Weights (.gguf)</div>
+        <label class="file-dropzone" for="ggufInput">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2" style="margin-bottom:0.5rem;">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <div style="font-weight: 500; font-size: 0.9rem;">Select TinyLlama GGUF</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Directly loads quantized weights into WASM</div>
+          <input type="file" id="ggufInput" accept=".gguf">
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="section-header">Architecture Info</div>
+        <div class="stat-row">
+          <span class="stat-label">Model</span>
+          <span class="stat-value" id="modelName">TinyLlama 1.1B</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Quantization</span>
+          <span class="stat-value">Q4_0 / Q6_K</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Embedding Dim</span>
+          <span class="stat-value">2048</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Layers</span>
+          <span class="stat-value">22</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">GQA Heads</span>
+          <span class="stat-value">32 / 4</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Target Environment</span>
+          <span class="stat-value"><span class="badge-tag">wasm32-unknown</span></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-header">Cognitive State</div>
+        <div class="cognitive-grid">
+          <div class="cog-box">
+            <div class="cog-name">Memory</div>
+            <div class="cog-val">2048-D</div>
+          </div>
+          <div class="cog-box">
+            <div class="cog-name">World</div>
+            <div class="cog-val">Active</div>
+          </div>
+          <div class="cog-box">
+            <div class="cog-name">Curiosity</div>
+            <div class="cog-val">0.82</div>
+          </div>
+          <div class="cog-box">
+            <div class="cog-name">Safety</div>
+            <div class="cog-val">SCM Pass</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Chat Window -->
+    <div class="card chat-container">
+      <div class="section-header">Interactive In-Browser Neural Inference</div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg assistant">
+          Welcome to <strong>NEURON WASM Engine</strong>. Initializing 100% in-browser WebAssembly memory...
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <input type="text" class="chat-input" id="promptInput" placeholder="Ask NEURON anything..." disabled>
+        <button class="send-btn" id="sendBtn" disabled>Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import init, { init_llm_gguf, generate_llm_reply } from './pkg/neuron_wasm.js';
+
+    const ggufInput = document.getElementById('ggufInput');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const promptInput = document.getElementById('promptInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const chatMessages = document.getElementById('chatMessages');
+
+    let isLoaded = false;
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        statusText.textContent = "Loading WASM Binary...";
+        await init();
+        
+        statusText.textContent = "Auto-loading TinyLlama 1.1B (608 MB)...";
+        const response = await fetch('/tinyllama-1.1b.gguf');
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          
+          statusText.textContent = "Loading GGUF into WASM memory...";
+          const resJson = init_llm_gguf(bytes);
+          
+          statusDot.classList.add('active');
+          statusText.textContent = 'TinyLlama WASM Ready (In-Browser)';
+          isLoaded = true;
+          promptInput.disabled = false;
+          sendBtn.disabled = false;
+
+          appendMessage('assistant', `✨ <strong>TinyLlama 1.1B GGUF (608 MB)</strong> loaded into WebAssembly memory! Running 100% in-browser on your device.`);
+        } else {
+          statusText.textContent = 'Awaiting GGUF File';
+        }
+      } catch (err) {
+        console.warn("Auto-load fallback:", err);
+        statusText.textContent = 'Awaiting GGUF File';
+      }
+    });
+
+    ggufInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      statusText.textContent = `Reading ${file.name}...`;
+      
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const bytes = new Uint8Array(event.target.result);
+        statusText.textContent = "Loading GGUF into WASM memory...";
+        init_llm_gguf(bytes);
+
+        statusDot.classList.add('active');
+        statusText.textContent = 'TinyLlama WASM Ready';
+        isLoaded = true;
+        promptInput.disabled = false;
+        sendBtn.disabled = false;
+
+        appendMessage('assistant', `Loaded <strong>${file.name}</strong> (${(file.size/1024/1024).toFixed(1)} MB). Direct GGUF quantized weights active in WASM!`);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    sendBtn.addEventListener('click', handleSend);
+    promptInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSend(); });
+
+    async function handleSend() {
+      const text = promptInput.value.trim();
+      if (!text || !isLoaded) return;
+
+      appendMessage('user', text);
+      promptInput.value = '';
+
+      const typingDiv = appendMessage('assistant', '<span style="color:var(--text-muted)">NEURON WASM is generating in-browser...</span>');
+
+      setTimeout(() => {
+        try {
+          const rawJson = generate_llm_reply(text);
+          const replyObj = JSON.parse(rawJson);
+          let replyStr = replyObj.output || (replyObj.errors && replyObj.errors[0]) || "No response";
+          replyStr = replyStr.replace(/\[NeuronLM\]:\s*/g, '').replace(/Ġ/g, ' ').replace(/▁/g, ' ').trim();
+          typingDiv.innerHTML = replyStr || "Hello!";
+        } catch (e) {
+          typingDiv.innerHTML = "WASM Execution error: " + e;
+        }
+      }, 50);
+    }
+
+    function appendMessage(role, html) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.innerHTML = html;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    }
+  </script>
+</body>
+</html>

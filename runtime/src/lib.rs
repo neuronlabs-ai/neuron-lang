@@ -12,5 +12,6 @@ pub mod effect;
 pub mod causal;
 pub mod forget;
 pub mod neuron_lm;
+pub mod gguf;
 pub mod jit_helpers;
 pub mod distributed;

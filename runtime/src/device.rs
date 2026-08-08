@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+#[allow(unused_imports)]
 use libloading::Library;
 
 thread_local! {
@@ -83,7 +85,16 @@ impl std::fmt::Display for Device {
 //  Dynamic CUDA & NVRTC Bindings via libloading
 // ══════════════════════════════════════════════════════════════════════════════
 
-pub struct CudaApi {
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+pub use cuda_native::*;
+
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+mod cuda_native {
+    #[allow(unused_imports)]
+    use super::*;
+    use libloading::Library;
+
+    pub struct CudaApi {
     _lib: Library,
     pub cuInit: unsafe extern "C" fn(flags: u32) -> u32,
     pub cuDeviceGet: unsafe extern "C" fn(device: *mut i32, ordinal: i32) -> u32,
@@ -563,13 +574,15 @@ impl Drop for CudaContext {
         }
     }
 }
+} // mod cuda_native
 
 
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 static CUDA_CONTEXT: OnceLock<Option<CudaContext>> = OnceLock::new();
 
 // ── VRAM Usage Tracking ──
 static VRAM_USED: AtomicUsize = AtomicUsize::new(0);
-static VRAM_LIMIT: AtomicUsize = AtomicUsize::new(4096 * 1024 * 1024); // 4 GB default
+static VRAM_LIMIT: AtomicUsize = AtomicUsize::new(1024 * 1024 * 1024); // 1 GB default
 
 /// Record a VRAM allocation.
 pub fn vram_alloc_track(bytes: usize) {
@@ -599,6 +612,7 @@ pub fn set_vram_limit(bytes: usize) {
 }
 
 /// Retrieve reference to initialized dynamic CUDA context.
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub fn get_cuda_context() -> Option<&'static CudaContext> {
     if is_force_cpu() || is_simulate_cuda() {
         return None;
@@ -619,4 +633,70 @@ pub fn get_cuda_context() -> Option<&'static CudaContext> {
         }
     }
     context
+}
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_free(_dptr: u64) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_sync() -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_memcpy_dtoh(_dst: *mut std::ffi::c_void, _src: u64, _bytes: usize) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_alloc_mrg(_dptr: *mut u64, _bytes: usize, _flags: u32) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_alloc(_dptr: *mut u64, _bytes: usize) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_memset(_dst: u64, _uc: u8, _n: usize) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_memcpy_htod(_dst: u64, _src: *const std::ffi::c_void, _bytes: usize) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_prefetch(_dptr: u64, _count: usize, _dev: i32, _st: *mut std::ffi::c_void) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_memcpy_dtod(_dst: u64, _src: u64, _bytes: usize) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_launch(_f: *mut std::ffi::c_void, _gx: u32, _gy: u32, _gz: u32, _bx: u32, _by: u32, _bz: u32, _sm: u32, _st: *mut std::ffi::c_void, _kp: *mut *mut std::ffi::c_void, _ex: *mut *mut std::ffi::c_void) -> u32 { 0 }
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+unsafe fn dummy_cu_err_str(_err: u32, _pstr: *mut *const std::os::raw::c_char) -> u32 { 0 }
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+pub struct CudaApiDummy {
+    pub cuMemFree_v2: unsafe fn(u64) -> u32,
+    pub cuCtxSynchronize: unsafe fn() -> u32,
+    pub cuMemcpyDtoH_v2: unsafe fn(*mut std::ffi::c_void, u64, usize) -> u32,
+    pub cuMemAllocManaged: unsafe fn(*mut u64, usize, u32) -> u32,
+    pub cuMemAlloc_v2: unsafe fn(*mut u64, usize) -> u32,
+    pub cuMemsetD8: unsafe fn(u64, u8, usize) -> u32,
+    pub cuMemcpyHtoD_v2: unsafe fn(u64, *const std::ffi::c_void, usize) -> u32,
+    pub cuMemPrefetchAsync: unsafe fn(u64, usize, i32, *mut std::ffi::c_void) -> u32,
+    pub cuMemcpyDtoD_v2: unsafe fn(u64, u64, usize) -> u32,
+    pub cuLaunchKernel: unsafe fn(*mut std::ffi::c_void, u32, u32, u32, u32, u32, u32, u32, *mut std::ffi::c_void, *mut *mut std::ffi::c_void, *mut *mut std::ffi::c_void) -> u32,
+    pub cuGetErrorString: unsafe fn(u32, *mut *const std::os::raw::c_char) -> u32,
+}
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+pub struct CublasApiDummy {
+    pub cublasDgemm_v2: unsafe fn(*mut std::ffi::c_void, u32, u32, i32, i32, i32, *const f64, *const f64, i32, *const f64, i32, *const f64, *mut f64, i32) -> i32,
+}
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+pub struct CudaContext {
+    pub device: i32,
+    pub cuda: CudaApiDummy,
+    pub cublas: Option<CublasApiDummy>,
+    pub cublas_handle: *mut std::ffi::c_void,
+}
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+impl CudaContext {
+    pub fn compile_to_ptx(&self, _name: &str, _code: &str) -> Result<Vec<u8>, String> {
+        Err("CUDA not supported on WASM".to_string())
+    }
+    pub fn load_module_and_get_function(&self, _ptx: &[u8], _name: &str) -> Result<(*mut std::ffi::c_void, *mut std::ffi::c_void), String> {
+        Err("CUDA not supported on WASM".to_string())
+    }
+}
+
+#[cfg(not(all(feature = "native", not(target_arch = "wasm32"))))]
+pub fn get_cuda_context() -> Option<&'static CudaContext> {
+    None
 }

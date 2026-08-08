@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pycheck"
-version = "0.1.0"
-description = "A 15ms static AST analyzer that catches temporal lookahead bias in Python ML scripts."
+name = "pycheck-neuron"
+version = "0.2.0"
+description = "30-rule static AST analyzer that catches temporal lookahead bias, causal confusion, and uncertainty bugs in Python ML scripts."
 readme = "README.md"
 authors = [{ name = "NEURON Team" }]
 license = { text = "MIT" }
@@ -15,9 +15,22 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Development Status :: 4 - Beta",
+]
+keywords = [
+    "machine-learning", "data-leakage", "temporal-bias", "lookahead",
+    "backtesting", "trading", "linter", "static-analysis", "causal",
+    "uncertainty", "neuron"
 ]
 requires-python = ">=3.7"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/neuron-lang/pycheck"
+Documentation = "https://github.com/neuron-lang/pycheck#readme"
+Repository = "https://github.com/neuron-lang/pycheck"
 
 [project.scripts]
 pycheck = "pycheck.cli:main"

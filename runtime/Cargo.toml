@@ -3,11 +3,15 @@ name = "neuron-runtime"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["native"]
+native = ["rayon", "libloading"]
+
 [dependencies]
 neuron-compiler = { path = "../compiler" }
-rayon = "1.8"
+rayon = { version = "1.8", optional = true }
 matrixmultiply = "0.3"
-libloading = "0.8"
+libloading = { version = "0.8", optional = true }
 serde_json = "1.0"
 
 [dev-dependencies]

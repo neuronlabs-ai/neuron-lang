@@ -305,6 +305,46 @@ NEURON is in **technical preview**. The core language is complete and tested:
 
 ---
 
+## Ecosystem
+
+### PyCheck — ML Safety Linter
+
+A 30-rule static analyzer that catches temporal leaks, causal confusion, and uncertainty bugs in **existing Python** ML scripts. Zero dependencies.
+
+```bash
+pip install pycheck-neuron
+pycheck my_strategy.py
+```
+
+PyCheck detects bugs that Python can't — including taint propagation across assignments:
+```
+ERROR[F001]: Tainted data flows into .fit():
+  derived from 'features' → derived from 'signal' → shift(-1) future access
+```
+
+See [`pycheck/README.md`](pycheck/README.md) for the full 30-rule reference.
+
+### py2nr — Python → NEURON Transpiler
+
+Converts PyTorch/numpy Python code to NEURON `.nr` source:
+
+```bash
+python tools/py2nr.py my_model.py
+neuronc run my_model.nr
+```
+
+Handles classes → models, tensor ops, type inference, and reserved keyword renaming.
+
+### VSCode Extension
+
+Real-time PyCheck diagnostics in your editor:
+```bash
+cd pycheck/pycheck-vscode
+npm install && npm run compile
+```
+
+---
+
 ## Building from Source
 
 Requirements: Rust 1.70+ and Cargo.

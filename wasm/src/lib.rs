@@ -119,6 +119,66 @@ pub fn transpile_to_python(source: &str) -> String {
     }
 }
 
+// ─────────────────────────────────────────────
+// WASM LLM Direct Inference
+// ─────────────────────────────────────────────
+
+use std::sync::Mutex;
+use neuron_runtime::neuron_lm::NeuronLM;
+
+static WASM_LLM: Mutex<Option<NeuronLM>> = Mutex::new(None);
+
+/// Load a GGUF model from a Uint8Array into WASM memory.
+#[wasm_bindgen]
+pub fn init_llm_gguf(model_bytes: &[u8]) -> String {
+    match NeuronLM::new_from_gguf_bytes(model_bytes.to_vec()) {
+        Ok(lm) => {
+            let mut global = WASM_LLM.lock().unwrap();
+            *global = Some(lm);
+            let res = WasmResult {
+                success: true,
+                output: "TinyLlama GGUF model loaded cleanly into WASM memory.".to_string(),
+                errors: vec![],
+                warnings: vec![],
+            };
+            serde_json::to_string(&res).unwrap_or_default()
+        }
+        Err(e) => {
+            let res = WasmResult {
+                success: false,
+                output: "".to_string(),
+                errors: vec![format!("Failed to load GGUF model: {}", e)],
+                warnings: vec![],
+            };
+            serde_json::to_string(&res).unwrap_or_default()
+        }
+    }
+}
+
+/// Generate reply for a prompt using the loaded WASM LLM model.
+#[wasm_bindgen]
+pub fn generate_llm_reply(prompt: &str) -> String {
+    let global = WASM_LLM.lock().unwrap();
+    if let Some(ref lm) = *global {
+        let reply = lm.generate_reply(prompt);
+        let res = WasmResult {
+            success: true,
+            output: reply,
+            errors: vec![],
+            warnings: vec![],
+        };
+        serde_json::to_string(&res).unwrap_or_default()
+    } else {
+        let res = WasmResult {
+            success: false,
+            output: "".to_string(),
+            errors: vec!["LLM model not initialized. Call init_llm_gguf first.".to_string()],
+            warnings: vec![],
+        };
+        serde_json::to_string(&res).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

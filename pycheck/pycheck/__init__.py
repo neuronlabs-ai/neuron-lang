@@ -1,10 +1,10 @@
 """
-PyCheck — NEURON Python Safety Analyzer
-Scans Python ML and trading scripts for temporal lookahead bias,
-causal confusion, and unguarded uncertainty bugs.
+PyCheck — NEURON ML Safety Analyzer
+Catches temporal leaks, causal confusion, and uncertainty bugs in Python ML scripts.
 """
 
-from pycheck.analyzer import NeuronAnalyzer, analyze_file, format_output
+__version__ = "0.2.0"
 
-__version__ = "0.1.0"
-__all__ = ["NeuronAnalyzer", "analyze_file", "format_output"]
+from pycheck.analyzer import analyze_file, format_output
+from pycheck.rules import ALL_RULES, RULES_BY_CODE
+from pycheck.flow import TaintTracker

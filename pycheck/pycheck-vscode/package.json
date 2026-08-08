@@ -1,0 +1,61 @@
+{
+  "name": "pycheck-neuron",
+  "displayName": "PyCheck — NEURON ML Safety Analyzer",
+  "description": "Real-time detection of temporal leaks, causal confusion, and uncertainty bugs in Python ML scripts",
+  "version": "0.2.0",
+  "publisher": "neuron-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Data Science"
+  ],
+  "keywords": [
+    "python",
+    "machine-learning",
+    "data-leakage",
+    "temporal-bias",
+    "trading",
+    "backtesting",
+    "linter",
+    "neuron"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "PyCheck",
+      "properties": {
+        "pycheck.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python interpreter"
+        },
+        "pycheck.showInfo": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show info-level diagnostics"
+        },
+        "pycheck.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable PyCheck analysis"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

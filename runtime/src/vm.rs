@@ -1675,7 +1675,53 @@ impl VM {
                 if let Some(first) = node.inputs.first() {
                     let val = get(first);
                     if let Value::Str(s) = val {
-                        let model = crate::neuron_lm::NeuronLM::new();
+                        // Use cached model or load fresh
+                        use std::sync::OnceLock;
+                        static LM_MODEL: OnceLock<crate::neuron_lm::NeuronLM> = OnceLock::new();
+                        let model = LM_MODEL.get_or_init(|| {
+                            // Try GGUF files first (Ollama blobs)
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                // Check for GGUF model file specified by env var or known paths
+                                let gguf_paths = vec![
+                                    std::env::var("NEURON_GGUF_MODEL").unwrap_or_default(),
+                                    "data/model.gguf".to_string(),
+                                ];
+                                // Also scan Ollama blobs for GGUF files
+                                let home = std::env::var("USERPROFILE")
+                                    .or_else(|_| std::env::var("HOME"))
+                                    .unwrap_or_default();
+                                let blobs_dir = format!("{}/.ollama/models/blobs", home);
+                                if let Ok(entries) = std::fs::read_dir(&blobs_dir) {
+                                    let mut blob_files: Vec<_> = entries
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.metadata().map(|m| m.len() > 100_000_000).unwrap_or(false))
+                                        .collect();
+                                    // Sort by size ascending — prefer smaller models
+                                    blob_files.sort_by_key(|e| e.metadata().map(|m| m.len()).unwrap_or(u64::MAX));
+                                    for entry in &blob_files {
+                                        let path = entry.path();
+                                        let path_str = path.to_string_lossy().to_string();
+                                        eprintln!("[NeuronLM] Trying GGUF blob: {} ({} MB)",
+                                            path_str, entry.metadata().map(|m| m.len() / 1024 / 1024).unwrap_or(0));
+                                        match crate::neuron_lm::NeuronLM::new_from_gguf_file(&path_str) {
+                                            Ok(m) => return m,
+                                            Err(e) => eprintln!("[NeuronLM] Skipping: {}", e),
+                                        }
+                                    }
+                                }
+                                for p in &gguf_paths {
+                                    if !p.is_empty() && std::path::Path::new(p).exists() {
+                                        match crate::neuron_lm::NeuronLM::new_from_gguf_file(p) {
+                                            Ok(m) => return m,
+                                            Err(e) => eprintln!("[NeuronLM] GGUF load failed: {}", e),
+                                        }
+                                    }
+                                }
+                            }
+                            // Fallback to f32 disk weights or demo model
+                            crate::neuron_lm::NeuronLM::new()
+                        });
                         let reply = model.generate_reply(&s);
                         return Ok(Value::Str(reply));
                     }

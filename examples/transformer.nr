@@ -28,20 +28,14 @@ layer FeedForward(d_model: Int):
 
 @compile(target="auto")
 model Transformer(d_model: Int, n_heads: Int, n_layers: Int):
-  embed: Tensor[50000, d_model] = glorot(50000, d_model)
+  proj: Tensor[d_model, d_model] = glorot(d_model, d_model)
 
-  fn forward(self, tokens: Tensor[B, S]) -> Tensor[B, S, 50000]:
-    let x = tokens
-    let logits = x @ self.embed
-    return softmax(logits)
-
-  fn train(self, data: Dataset) [Effect[Mut[self], IO]]:
-    for batch in data:
-      let loss = cross_entropy(self.forward(batch), batch)
-      update self by adam(grad(loss), lr=3e-4)
+  fn forward(self, x: Tensor[1, d_model]) -> Tensor[1, d_model]:
+    let h = relu(x @ self.proj)
+    return softmax(h)
 
 fn main():
   let tf_model = Transformer(512, 8, 6)
-  let tokens = ones(1, 16)
+  let tokens = ones(1, 512)
   let logits = tf_model.forward(tokens)
-  println(logits)
+  print(logits)
