@@ -69,9 +69,52 @@ model QwenMiniLM(d_model: Int, d_ff: Int, vocab_size: Int):
     return logits
 
 
-fn main():
-  print("Initializing QwenMiniLM Transformer...")
+fn main() [Effect[Mut[model_]]]:
+  print("=== NEURON Machine Unlearning: Real Transformer Demo ===")
+  print("")
+
+  // 1. Initialize the QwenMiniLM (5 models: RMSNorm, AttentionHead, SwiGLU, 2x TransformerBlocks)
   let model_ = QwenMiniLM(64, 256, 128)
-  let input_data = zeros(1, 128)
-  let output = model_.forward(input_data)
-  print("Generation complete!")
+  print("Initialized QwenMiniLM: 64-dim, 256-ff, 128-vocab (120,832 parameters)")
+
+  // 2. Create training data (simulating copyrighted text embeddings)
+  let copyrighted_data = glorot(1, 128)
+  let target = glorot(1, 128)
+
+  // 3. Train the model on copyrighted data (3 epochs)
+  print("")
+  print("--- Training on copyrighted dataset ---")
+  let pred1 = model_.forward(copyrighted_data)
+  let loss1 = mse(pred1, target)
+  print(loss1)
+  update model_.embed by sgd(grad(loss1), lr=0.1)
+
+  let pred2 = model_.forward(copyrighted_data)
+  let loss2 = mse(pred2, target)
+  print(loss2)
+  update model_.embed by sgd(grad(loss1), lr=0.1)
+
+  let pred3 = model_.forward(copyrighted_data)
+  let loss3 = mse(pred3, target)
+  print(loss3)
+  update model_.embed by sgd(grad(loss1), lr=0.1)
+
+  print("Model has learned the copyrighted data.")
+
+  // 4. FORGET: erase the copyrighted data from the model
+  print("")
+  print("--- Court orders: DELETE copyrighted data from model ---")
+  // Compute forward & grad for the target dataset to populate gradient tape
+  let loss_target = mse(model_.forward(copyrighted_data), target)
+  let g = grad(loss_target)
+  let cert = forget(model_, copyrighted_data, "GradientAscent", 0.3)
+  print("")
+  print("ForgetCertificate issued:")
+  print(cert)
+
+  // 5. Verify: run inference again — output should be degraded
+  let pred_after = model_.forward(copyrighted_data)
+  let loss_after = mse(pred_after, target)
+  print("")
+  print("Loss AFTER forgetting (should be higher than before):")
+  print(loss_after)
