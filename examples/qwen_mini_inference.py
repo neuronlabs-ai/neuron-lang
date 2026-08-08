@@ -22,6 +22,7 @@ class AttentionHead:
         self.wq = np.random.randn(d_model, head_dim)
         self.wk = np.random.randn(d_model, head_dim)
         self.wv = np.random.randn(d_model, head_dim)
+        self.wo = np.random.randn(head_dim, d_model)
 
     def forward(self, x):
         q = np.matmul(x, self.wq)
@@ -31,7 +32,8 @@ class AttentionHead:
         scale = 1.0 / np.sqrt(16.0)
         scaled = scores * scale
         attn = torch.softmax(scaled)
-        return np.matmul(attn, v)
+        context = np.matmul(attn, v)
+        return np.matmul(context, self.wo)
 
 
 class SwiGLU_FFN:

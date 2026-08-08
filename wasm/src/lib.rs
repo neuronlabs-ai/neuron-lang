@@ -205,4 +205,11 @@ mod tests {
         assert!(json_res.contains("import torch"));
         assert!(json_res.contains("\"success\":true"));
     }
+
+    #[test]
+    fn test_wasm_qwen_mini_eval() {
+        let src = include_str!("../../examples/qwen_mini_transpiled.nr");
+        let json_res = eval_neuron(src);
+        assert!(json_res.contains("\"success\":true"));
+    }
 }

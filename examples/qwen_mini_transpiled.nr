@@ -6,7 +6,7 @@ model RMSNorm(dim: Int):
   eps: Float = 1e-06
 
   fn forward(self, x: Tensor) -> Tensor:
-    let norm = sqrt(np.mean(x * x) + self.eps)
+    let norm = sqrt(mean(x * x) + self.eps)
     return x / norm * self.weight
 
 
@@ -14,16 +14,18 @@ model AttentionHead(d_model: Int, head_dim: Int):
   wq: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
   wk: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
   wv: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
+  wo: Tensor[head_dim, d_model] = glorot(head_dim, d_model)
 
   fn forward(self, x: Tensor) -> Tensor:
     let q = x @ self.wq
     let k = x @ self.wk
     let v = x @ self.wv
-    let scores = q @ transpose(k)
+    let scores = q @ transpose(k, 0, 1)
     let scale = 1.0 / sqrt(16.0)
     let scaled = scores * scale
     let attn = softmax(scaled)
-    return attn @ v
+    let context = attn @ v
+    return context @ self.wo
 
 
 model SwiGLU_FFN(d_model: Int, d_ff: Int):
@@ -69,7 +71,7 @@ model QwenMiniLM(d_model: Int, d_ff: Int, vocab_size: Int):
 
 fn main():
   print("Initializing QwenMiniLM Transformer...")
-  let model = QwenMiniLM(64, 256, 128)
+  let model_ = QwenMiniLM(64, 256, 128)
   let input_data = zeros(1, 128)
-  let output = model.forward(input_data)
+  let output = model_.forward(input_data)
   print("Generation complete!")

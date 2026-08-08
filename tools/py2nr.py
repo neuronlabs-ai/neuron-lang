@@ -63,6 +63,9 @@ class NeuronTranspiler(ast.NodeVisitor):
         'torch.log': 'log',
         'np.sqrt': 'sqrt',
         'torch.sqrt': 'sqrt',
+        'np.mean': 'mean',
+        'numpy.mean': 'mean',
+        'torch.mean': 'mean',
         'np.abs': 'abs',
         'torch.abs': 'abs',
         'np.tanh': 'tanh',
@@ -505,6 +508,8 @@ class NeuronTranspiler(ast.NodeVisitor):
 
         # Map to NEURON builtin
         if nr_func:
+            if nr_func == 'transpose' and len(args) == 1:
+                return f"transpose({args[0]}, 0, 1)"
             return f"{nr_func}({', '.join(args)})"
 
         # Method calls: obj.method(args) → obj.method(args)
