@@ -597,10 +597,19 @@ async function initWasm() {
     document.getElementById('loadingOverlay').classList.add('hidden');
   } catch (e) {
     document.getElementById('statusDot').classList.add('error');
-    document.getElementById('statusText').textContent = 'WASM: Failed to load';
+    document.getElementById('statusText').textContent = 'WASM: Local Server Required';
     document.getElementById('loadingOverlay').classList.add('hidden');
     console.error('WASM init error:', e);
-    // Still allow UI interaction — output will show error
+    
+    if (window.location.protocol === 'file:') {
+      addOutput('error', 'Browser Security Notice (file:// protocol)', 
+        'Chrome blocks ES6 WebAssembly module imports when opening html files directly via file://\n\n' +
+        '▶ SOLUTION: Run "python run_desktop.py" in your terminal.\n' +
+        'This opens http://localhost:8080/desktop/ where WASM loads instantly!'
+      );
+    } else {
+      addOutput('error', 'WASM Init Error', e.message);
+    }
   }
 }
 
