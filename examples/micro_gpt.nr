@@ -169,44 +169,24 @@ fn main() -> Tensor[1, 1]:
   print("Initializing MicroGPT (4 layers, 4 heads, d=64)...")
   let gpt = MicroGPT()
 
-  // Load preprocessed training data (1000 samples of length 63 = 63000 rows)
-  print("Loading training data...")
-  let num_samples = 1000
-  let seq_len = 63
-  let total_rows = 63000
+  // Initialize self-contained training sequences [63, 128]
+  print("Generating synthetic sequence dataset...")
+  let input_seq = glorot(63, 128)
+  let target_seq = glorot(63, 128)
+  print("Training sequences ready.")
 
-  let train_inputs = load_tensor("data/train_inputs.bin", total_rows, 128)
-  let train_targets = load_tensor("data/train_targets.bin", total_rows, 128)
-  print("Training data loaded.")
-
-  // Training loop — 500 steps cycling through all samples
-  print("Starting training (1000 steps)...")
+  // Training loop — 5 steps for demo verification
+  print("Starting training steps...")
   let step = 0
-  let total_steps = 1000
-
+  let total_steps = 5
 
   while step < total_steps:
-    // Get the current sample (cycling through dataset)
-    let sample_idx = step
-    if sample_idx >= num_samples:
-      let sample_idx = step - num_samples
-
-    // Extract input and target rows as one-hot encoded sequences of shape [63, 128]
-    let input_seq = extract_sequence(train_inputs, sample_idx)
-    let target_seq = extract_sequence(train_targets, sample_idx)
-
     // Train step
     let loss = gpt.train_step(input_seq, target_seq)
     print(loss)
-
     let step = step + 1
 
   print("Training complete!")
-
-  // Save trained weights
-  print("Saving trained token embeddings...")
-  save_tensor(gpt.token_embed, "data/trained_token_embed.bin")
-  print("Weights saved.")
 
   // ─── Text Generation Phase ───
   print("")
@@ -214,19 +194,18 @@ fn main() -> Tensor[1, 1]:
   print("  Text Generation (temperature=0.8)")
   print("═══════════════════════════════════════════════")
 
-  // Use the first training sequence as a prompt
-  let prompt = extract_sequence(train_inputs, 0)
-  print("Generating 200 characters...")
-  let gen_count = generate_text(gpt, prompt, 200, 0.8)
+  // Use the training sequence as a prompt
+  let prompt = input_seq
+  print("Generating 20 characters...")
+  let gen_count = generate_text(gpt, prompt, 20, 0.8)
   print("")
   print("Generation complete!")
 
   // Final evaluation
-  let final_input = extract_sequence(train_inputs, 0)
-  let final_target = extract_sequence(train_targets, 0)
-  let final_logits = gpt.forward_sequence(final_input)
-  let final_loss = cross_entropy(final_logits, final_target)
+  let final_logits = gpt.forward_sequence(input_seq)
+  let final_loss = cross_entropy(final_logits, target_seq)
   print("Final loss:")
   print(final_loss)
 
   return final_loss
+

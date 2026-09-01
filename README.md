@@ -1,17 +1,18 @@
 <p align="center">
-  <h1 align="center">NEURON</h1>
-  <p align="center"><strong>The language that makes AI think differently.</strong></p>
+  <h1 align="center">◈ NEURON</h1>
+  <p align="center"><strong>The world's first AI-native programming language.</strong></p>
   <p align="center">
-    A statically typed, natively differentiable programming language<br>
-    designed from the ground up for AGI model creation.
+    A statically typed, natively differentiable programming language with compile-time temporal safety,<br>
+    causal inference, uncertainty tracking, and built-in verifiable machine unlearning.
   </p>
 </p>
 
 <p align="center">
-  <a href="#quickstart">Quickstart</a> •
   <a href="#why-neuron">Why NEURON?</a> •
+  <a href="#quickstart">Quickstart</a> •
   <a href="#language-tour">Language Tour</a> •
-  <a href="#installation">Installation</a> •
+  <a href="#pycheck">PyCheck Linter</a> •
+  <a href="#execution-backends">Backends</a> •
   <a href="#examples">Examples</a>
 </p>
 
@@ -19,357 +20,286 @@
 
 ## Why NEURON?
 
-Every existing ML framework bolts gradients onto a general-purpose language as an afterthought. **NEURON makes differentiation a first-class citizen of the type system.** Every function is differentiable unless you explicitly say otherwise. Tensor shapes are verified at compile time, not at 3 AM when your training run crashes.
+Existing ML frameworks bolt differentiation and safety onto Python as runtime libraries. When things break — whether it's a silent dimension mismatch, a $100M lookahead bias leak, or an inability to legally prove model unlearning — they fail silently in production.
+
+**NEURON makes differentiation, temporal safety, causality, and forgetting first-class citizens of the compiler and type system.**
 
 ```python
-# NEURON — this is the entire language you need to build a transformer
-model Transformer(d_model: Int, n_heads: Int):
-  wq: Tensor[d_model, d_model] = glorot(d_model, d_model)
-  wk: Tensor[d_model, d_model] = glorot(d_model, d_model)
-  wv: Tensor[d_model, d_model] = glorot(d_model, d_model)
+# NEURON — A self-attention transformer in pure, differentiable syntax
+model Attention(d_model: Int, head_dim: Int):
+  wq: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
+  wk: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
+  wv: Tensor[d_model, head_dim] = glorot(d_model, head_dim)
+  wo: Tensor[head_dim, d_model] = glorot(head_dim, d_model)
 
-  fn forward(self, x: Tensor[B, S, d_model]) -> Tensor[B, S, d_model]:
+  fn forward(self, x: Tensor) -> Tensor:
     let q = x @ self.wq
     let k = x @ self.wk
     let v = x @ self.wv
-    let scores = softmax(q @ transpose(k))
-    return scores @ v
+    let scores = q @ transpose(k, 0, 1)
+    let attn = softmax(scores * (1.0 / sqrt(16.0)))
+    return (attn @ v) @ self.wo
 
-  fn train(self, data: Dataset) [Effect[Mut[self]]]:
-    for batch in data:
-      let loss = cross_entropy(self.forward(batch.x), batch.y)
-      update self by adam(grad(loss), lr=3e-4)
+fn main() [Effect[Mut[model]]]:
+  let model = Attention(64, 16)
+  let x = randn(1, 64)
+  let target = randn(1, 64)
+  
+  let loss = mse(model.forward(x), target)
+  update model by adam(grad(loss), lr=0.001)
 ```
 
-**No `torch.nn.Module`. No `@tf.function`. No `.backward()` calls.** Just math, expressed directly.
+**No `torch.nn.Module`. No `@tf.function`. No `.backward()` boilerplate.** Just clean mathematical expressions verified at compile time.
 
-### What makes NEURON different
+---
 
-| Feature | PyTorch/JAX | NEURON |
+## What Makes NEURON Different
+
+| Feature | Python / PyTorch / JAX | NEURON |
 |---|---|---|
-| Gradients | Library call (`.backward()`) | **Built into the language** — every `fn` is differentiable |
-| Tensor shapes | Runtime crash | **Compile-time verification** |
-| Temporal data | You manage it | **Type-tracked** — compiler catches lookahead bias |
-| Uncertainty | Manual | **First-class type** — `Uncertain[Tensor]` propagates |
-| Causality | Separate library | **Built-in** — `observe`, `intervene`, `counterfactual` |
-| Training loop | Boilerplate | **One line** — `update self by adam(grad(loss))` |
+| **Gradients** | Library runtime call (`.backward()`) | **Built into type system** — every `fn` is differentiable |
+| **Temporal Data Leakage** | Silent runtime failure (fake 99% accuracy) | **Compile-time rejection** (`error[TemporalLeak]`) |
+| **Machine Unlearning** | Full retraining required ($$$) | **Built-in `forget()` primitive** with `ForgetCertificate` |
+| **Causality** | Separate libraries (DoWhy) | **First-class causal types** (`observe`, `intervene`) |
+| **Uncertainty** | Manual propagation | **Type-tracked** (`Uncertain[Tensor]`) |
+| **Execution Targets** | Python runtime only | **Interpreter, Rust JIT, Native AOT Binary, WASM, Python** |
 
 ---
 
 ## Quickstart
 
+### 1. Build from Source (Rust 1.70+)
+
 ```bash
-# Build from source (requires Rust 1.70+)
 git clone https://github.com/neuronlabs-ai/neuron-lang
 cd neuron-lang
 cargo build --release
-
-# Run your first program
-./target/release/neuronc run examples/simple_shapes.nr
-
-# Start the interactive REPL
-./target/release/neuronc repl
 ```
 
-### Hello, Gradient World
+The `neuronc` compiler binary will be at `target/release/neuronc`.
 
-Create `hello.nr`:
-
-```python
-fn main() -> Tensor[1, 1]:
-  let w = glorot(2, 1)
-  let x = zeros(2, 2) + 1.0
-  let y = zeros(2, 1) + 3.0
-  let pred = x @ w
-  let loss = mse(pred, y)
-  return loss
-```
+### 2. Run Interactive REPL Terminal
 
 ```bash
-neuronc run hello.nr
-# => Tensor([1, 1]) data=[2.847...]
+neuronc repl
 ```
 
-That's it. Tensor created, matmul computed, loss calculated — all with automatic differentiation tracking, zero boilerplate.
+```
+  ╔══════════════════════════════════════════════════╗
+  ║   ◈ NEURON  Interactive Terminal                 ║
+  ║   v1.0.0 — The AI-Native Programming Language    ║
+  ╚══════════════════════════════════════════════════╝
+
+  nr │ randn(3, 3)
+  Tensor[3, 3]
+
+  nr │ softmax(randn(1, 5))
+  [0.0462, 0.5159, 0.0513, 0.1799, 0.2066]
+
+  nr │ :load examples/transformer.nr
+  ✓ Loaded and executed examples/transformer.nr
+```
+
+### 3. Launch Desktop Terminal / Web IDE
+
+NEURON comes with a standalone Web IDE powered by client-side WebAssembly:
+
+```bash
+python run_desktop.py
+```
+Opens `http://localhost:8080/desktop/` with syntax highlighting, live execution, and built-in examples.
 
 ---
 
 ## Language Tour
 
-### Tensors and Shapes
+### 1. Compile-Time Temporal Safety (Lookahead Bias Prevention)
 
-Tensor shapes are part of the type system. The compiler catches mismatches before your code ever runs:
+In time-series forecasting and sequence modeling, lookahead bias is fatal. NEURON's type checker verifies temporal data flow at compile time:
 
 ```python
-fn matmul_example(a: Tensor[3, 4], b: Tensor[4, 5]) -> Tensor[3, 5]:
-  return a @ b  # shapes match: [3,4] @ [4,5] = [3,5]
+temporal fn predict_signal(data: Temporal[Tensor, past_to_future]) -> Tensor:
+  return sigmoid(data @ glorot(10, 1))
 
-fn broken(a: Tensor[3, 4], b: Tensor[6, 5]) -> Tensor[3, 5]:
-  return a @ b  # COMPILE ERROR: dimension 4 != 6
+fn main():
+  let future_prices = Temporal[randn(100, 10), future_to_past]
+  return predict_signal(future_prices)  # COMPILE ERROR: lookahead bias detected
 ```
 
-### Automatic Differentiation
-
-Every function is differentiable by default. Use `grad()` to compute gradients and `update` to apply optimizers:
-
-```python
-model LinearRegression:
-  w: Tensor[4, 1] = glorot(4, 1)
-
-  fn predict(self, x: Tensor[B, 4]) -> Tensor[B, 1]:
-    return x @ self.w
-
-  fn train_step(self, x: Tensor[B, 4], y: Tensor[B, 1]) [Effect[Mut[self]]]:
-    let loss = mse(self.predict(x), y)
-    update self.w by adam(grad(loss), lr=0.001)
-```
-
-Want to exclude something from gradients? Use `stop_grad()` or mark with `@opaque`:
-
-```python
-@opaque
-fn preprocessing(x: Tensor[B, D]) -> Tensor[B, D]:
-  return relu(x)  # no gradient tracked through this
-```
-
-### Temporal Types
-
-NEURON tracks data flow through time at the type level:
-
-```python
-fn safe_strategy(prices: Temporal[Tensor, past_to_future]) -> Tensor:
-  let ma = prices.before(20)   # uses only past data
-  return ma
-
-fn buggy_strategy(prices: Temporal[Tensor, past_to_future]) -> Tensor:
-  let future = prices.after(5)  # COMPILE ERROR: temporal leak detected
-  return future
-```
-
-### Causal Inference
-
-```python
-fn treatment_effect(model, patient_data):
-  let observed = observe(model, treatment=1, data=patient_data)
-  let intervened = intervene(model, treatment=1)  # do-calculus
-  let cf = counterfactual(model, treatment=0, evidence=patient_data)
-  return intervened - cf  # individual treatment effect
-```
-
-### Uncertainty
-
-```python
-fn bayesian_predict(w: Uncertain[Tensor], x: Tensor) -> Uncertain[Tensor]:
-  let pred = x @ w            # uncertainty propagates through matmul
-  if pred.confidence < 0.8:   # compiler warns if you forget this check
-    return fallback(x)
-  return pred
-```
-
-### Effect System
-
-Side effects (mutation, I/O) must be declared in the type signature:
-
-```python
-fn pure_fn(x: Tensor[2]) -> Tensor[2]:
-  return relu(x)  # no effects needed
-
-fn train(self, data) [Effect[Mut[self], IO]]:
-  # must declare mutations and I/O
-  update self.w by adam(grad(loss))
+```text
+error[TemporalLeak]: Temporal direction violation: data flows future_to_past
+but context expects past_to_future — lookahead bias detected
+  --> demo_million_dollar_bug.nr:23:10
+23 |   return predict_signal(future_prices)
+             ^^^^^^^^^^^^^^
+  expected: past_to_future
+  got:      future_to_past
+  help: Use .before(t) to restrict temporal data to the past
 ```
 
 ---
 
-## CLI Reference
+### 2. Machine Unlearning (`forget()`) with Verifiable Certificates
 
+Erase specific training data representations from model weights on command:
+
+```python
+// Erase copyrighted or sensitive dataset using Fisher Scrubbing or Gradient Ascent
+let cert = forget(model, sensitive_data, "FisherScrubbing", 0.5)
+print(cert)
 ```
-neuronc - the NEURON Language Compiler
 
-COMMANDS:
-    check    Type-check a source file (no execution)
-    build    Compile to NEURON IR
-    run      Compile and execute via interpreter
-    jit      Compile and execute via native Rust JIT
-    repl     Interactive REPL with :type and :explain
-    add      Add dependency to neuron.toml
-    version  Print version
+**Output on a 120,832-parameter Transformer:**
+```text
+<ForgetCertificate>
+  certificate_id:          CERT-75A0D2BFBE344562
+  method:                  FisherScrubbing
+  strength:                0.500000
+  params_modified:         120832
+  task_alignment_before:   0.991036
+  task_alignment_after:    0.990978
+  forgotten_loss_before:   0.008964
+  forgotten_loss_after:    0.009022
+  bounds_satisfied:        true
+  forgetting_successful:   true
 ```
 
 ---
 
-## Examples
+### 3. Causal Inference (Observation vs. Intervention)
 
-| File | Description |
-|---|---|
-| `simple_shapes.nr` | Basic tensor operations and shape verification |
-| `training_demo.nr` | Linear regression with SGD optimizer |
-| `transformer.nr` | Multi-head attention transformer model |
-| `agi_model.nr` | Full AGI agent architecture |
-| `stress_test.nr` | Compiler stress test with complex programs |
-| `advanced_data_pipeline.nr` | Type-safe, lookahead-free time-series feature engineering |
-| `advanced_causal_rl.nr` | Causal RL policy using SCM observe/intervene do-calculus |
-| `advanced_uncertainty_routing.nr` | Confidence-aware cascade model routing under compile-time checks |
+```python
+causal fn estimate_ate(x: Causal[Tensor]) -> Tensor:
+  let obs = observe(x, condition=1.0)
+  let act = intervene(x, do_value=1.0)  // do-calculus
+  return act - obs
+```
+
+---
+
+### 4. Uncertainty Propagation
+
+```python
+fn prescribe_dosage(patient_weight: Uncertain[Float]) -> Uncertain[Float]:
+  let dose = patient_weight * 0.12  // Uncertainty automatically propagates
+  return dose
+```
+
+---
+
+## PyCheck — Python ML Safety Analyzer
+
+NEURON ships with **PyCheck** (`pycheck-neuron` on PyPI), an AST static analyzer and 2-pass taint engine that scans **existing Python ML & quant code** for temporal leaks, causal confusion, and uncertainty bugs:
+
+```bash
+pip install pycheck-neuron
+pycheck examples/leaky_transformer_pipeline.py
+```
+
+```text
+=================================================================
+  PyCheck — NEURON ML Safety Analyzer
+  Scanning: leaky_transformer_pipeline.py
+  Rules: 30 active
+=================================================================
+
+  ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
+  ERROR[T014]: .diff(-5) computes difference using future data
+  ERROR[T010]: .fit_transform() on full dataset leaks test statistics into training
+  ERROR[T012]: KFold() shuffles time-series data across folds, leaking future into training
+
+  Summary: 4 error(s), 0 warning(s)
+  These 4 error(s) would be COMPILE-TIME ERRORS in NEURON
+```
+
+- **30 Specialized Rules**: 15 Temporal (`T001`–`T015`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
+- **Data Flow Taint Engine**: Traces how future data propagates through variable assignments into `.fit()` sinks.
+- **VS Code Extension**: Real-time inline red/yellow squiggles on temporal leaks as you write Python.
+
+---
+
+## Execution Backends
+
+NEURON compiles a single Intermediate Representation (IR) to 5 backends:
+
+```bash
+neuronc run       file.nr   # 1. Stack-based VM Interpreter with autograd tape
+neuronc jit       file.nr   # 2. Native Rust JIT compiler (cdylib dynamic loading)
+neuronc aot       file.nr   # 3. Ahead-Of-Time standalone native binary (.exe)
+neuronc transpile file.nr   # 4. PyTorch Python transpiler
+wasm-pack build   wasm/     # 5. In-browser WebAssembly target
+```
+
+---
+
+## 6-Pass Compiler Optimizer
+
+NEURON includes an enterprise-grade IR optimization pipeline:
+
+1. **Constant Folding**: Evaluates constant tensor and scalar sub-trees at compile time.
+2. **Algebraic Simplification**: Identity elimination ($X + 0 \to X$, $X \times 1 \to X$, $X \times 0 \to 0$).
+3. **Common Subexpression Elimination (CSE)**: Eliminates redundant matrix multiplications and tensor passes.
+4. **Dead Code Elimination (DCE)**: Prunes unreferenced IR nodes and side-effect-free instructions.
+5. **Loop-Invariant Code Motion (LICM)**: Hoists static loop expressions outside loop bodies.
+6. **Tensor Operator Fusion**: Fuses element-wise chains (e.g. `relu(matmul(x, w) + b)`) to minimize memory allocation.
 
 ---
 
 ## Standard Library
 
-| Module | Contents |
-|---|---|
-| `nn` | Linear, LayerNorm, MultiHeadAttention, FeedForward, Embedding, Dropout, Transformer |
-| `optim` | Adam, SGD, AdamW, learning rate schedulers |
-| `distributions` | Normal, Bernoulli, Categorical, sampling, conditioning |
-| `data` | DataLoader, Dataset, batching utilities |
-| `causal` | Causal graph discovery, intervention, counterfactuals |
-| `rl` | PPO, DQN, environment abstractions |
-| `finance` | OHLCV data, rolling statistics, temporal analysis |
-| `agi` | AGI agent primitives, memory, planning |
-
----
-
-## Architecture
-
 ```
-neuron-lang/
-  compiler/           # Frontend
-    src/
-      lexer.rs            Tokenization
-      parser.rs           Recursive descent parser
-      types.rs            Type checker (shapes, temporal, causal, uncertainty)
-      lower.rs            AST to IR with basic block CFG
-      optimize.rs         Constant folding optimization pass
-      transpiler.rs       IR to Rust (JIT compilation)
-      py_transpiler.rs    IR to PyTorch Python
-      cuda_codegen.rs     Fused CUDA kernel generation
-      errors.rs           Rust-style error display
-  runtime/             # Backend
-    src/
-      vm.rs               Block-based interpreter with call stack
-      autograd.rs         Gradient tape, backward pass, Adam/SGD
-      tensor.rs           N-dimensional tensor operations
-      causal.rs           Causal inference (observe/intervene/counterfactual)
-      device.rs           GPU device management (CUDA/UVM)
-      memory.rs           Memory pool allocator
-      effect.rs           Effect tracking
-      jit_helpers.rs      Shared runtime for JIT-compiled code
-  neuronc/             # CLI tool
-  stdlib/              # Standard library (.nr files)
-  examples/            # Example programs
+stdlib/
+├── nn.nr            # Linear, LayerNorm, RMSNorm, MultiHeadAttention, Transformer
+├── optim.nr         # Adam, SGD, AdamW, learning rate schedulers
+├── causal.nr        # Causal graphs, observe, intervene, counterfactuals
+├── distributions.nr # Gaussian, Bernoulli, Dirichlet, Categorical sampling
+├── data.nr          # DataLoader, Dataset, sequence batching
+├── rl.nr            # PPO, DQN, GAE, replay buffers
+└── agi.nr           # Working memory, episodic memory, planning primitives
 ```
 
 ---
 
-## Testing
+## Verification & Testing
 
-NEURON has been battle-tested:
+NEURON is backed by a rigorous multi-tier test suite:
 
 ```bash
-cargo test                    # Run all tests
+# Run all end-to-end example verifications
+powershell -ExecutionPolicy Bypass -File .\test_all.ps1
 
-# Individual suites:
-cargo test --test test_property    # 100 random programs: VM == JIT parity
-cargo test --test test_endurance   # 100,000 training iterations, zero memory leaks
-cargo test --test test_fuzz        # 1,000 malformed inputs, zero compiler panics
-cargo test --test test_training    # Gradient descent convergence
-cargo test --test test_causal      # Causal inference operations
+# Run core Rust test suite
+cargo test
+
+# Run PyCheck test suite
+cd pycheck && pytest
 ```
 
-| Suite | Cases | Result |
+| Test Suite | Total Tests | Pass Rate |
 |---|---|---|
-| Property tests (VM == JIT) | 100 | All pass |
-| Endurance (100k iterations) | 100,000 | 0 NaN, 0 Inf, constant memory |
-| Compiler fuzzing | 1,000 | 0 panics |
-| Integration tests | 47 | All pass |
+| **Core Rust Test Suite** (Compiler, Runtime, WASM) | 120 tests | **100% PASS** |
+| **PyCheck Linter Test Suite** | 73 unit tests | **100% PASS** |
+| **End-to-End Example Suite** (`test_all.ps1`) | 18 verifications | **100% PASS** |
+| **Endurance Suite** | 100,000 iterations | **0 memory leaks, 0 NaN** |
+| **Property Tests (VM == JIT parity)** | 100 random programs | **100% Parity** |
 
 ---
 
-## Current Status: Alpha
+## Tools & Integrations
 
-NEURON is in **technical preview**. The core language is complete and tested:
-
-- Full compiler pipeline (lex, parse, typecheck, lower, JIT)
-- Working interpreter and JIT compiler with verified parity
-- Automatic differentiation with tape-based autograd (supporting Div, CrossEntropy, MSE, Sqrt, Sum, Mean, and more)
-- GPU acceleration (natively compiled CUDA JIT kernels via NVRTC with element-wise operator fusion and a high-performance persistent VRAM architecture featuring dedicated memory allocation, caching pool, and zero-copy host-device tracking)
-- Type-safe tensor shapes, temporal types, causal types, uncertainty types
-- Effect system for mutation tracking
-- Multi-file module imports with `import` and `from ... import` syntax
-- Standard library (nn with Layer/RMS/BatchNorm, optim, distributions with Gaussian/Dirichlet/KL/MI, data, causal, rl with ReplayBuffers/DQN/GAE, finance, agi with Episodic/Semantic/Working memory)
-- CLI with REPL, check, build, run, jit commands
-- Comprehensive test suite (100k+ test iterations)
-
-**Coming soon:**
-- Model serialization (save/load)
-- Package registry
-
----
-
-## Ecosystem
-
-### PyCheck — ML Safety Linter
-
-A 30-rule static analyzer that catches temporal leaks, causal confusion, and uncertainty bugs in **existing Python** ML scripts. Zero dependencies.
-
-```bash
-pip install pycheck-neuron
-pycheck my_strategy.py
-```
-
-PyCheck detects bugs that Python can't — including taint propagation across assignments:
-```
-ERROR[F001]: Tainted data flows into .fit():
-  derived from 'features' → derived from 'signal' → shift(-1) future access
-```
-
-See [`pycheck/README.md`](pycheck/README.md) for the full 30-rule reference.
-
-### py2nr — Python → NEURON Transpiler
-
-Converts PyTorch/numpy Python code to NEURON `.nr` source:
-
-```bash
-python tools/py2nr.py my_model.py
-neuronc run my_model.nr
-```
-
-Handles classes → models, tensor ops, type inference, and reserved keyword renaming.
-
-### VSCode Extension
-
-Real-time PyCheck diagnostics in your editor:
-```bash
-cd pycheck/pycheck-vscode
-npm install && npm run compile
-```
-
----
-
-## Building from Source
-
-Requirements: Rust 1.70+ and Cargo.
-
-```bash
-git clone https://github.com/neuronlabs-ai/neuron-lang
-cd neuron-lang
-cargo build --release
-```
-
-The `neuronc` binary will be at `target/release/neuronc`.
-
----
-
-## Contact
-
-For commercial inquiries, licensing questions, or support requests, please contact:
-📩 [contact@neuron-lab.org](mailto:contact@neuron-lab.org)
+- **`tools/py2nr.py`**: Python → NEURON transpiler converting PyTorch/numpy scripts into `.nr` source.
+- **`editors/vscode`**: Language Server Protocol (LSP) client for `.nr` syntax, diagnostics, and hover types.
+- **`pycheck/pycheck-vscode`**: VS Code extension for Python ML safety diagnostics.
+- **`desktop/`**: Standalone browser IDE with WebAssembly runtime.
 
 ---
 
 ## License
 
-This project is licensed under the Business Source License 1.1 (BSL 1.1) - see the [LICENSE](LICENSE) file for details.
+Licensed under the [Business Source License 1.1 (BSL 1.1)](LICENSE).
 
 ---
 
-**NEURON** — Because the language you think in shapes the intelligence you create.
+<p align="center">
+  <strong>NEURON</strong> — <em>Because the language you think in shapes the intelligence you create.</em>
+</p>
