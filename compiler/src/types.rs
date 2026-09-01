@@ -20,7 +20,7 @@ pub enum NType {
     Uncertain(Box<NType>),                 // Uncertain[T]
     Random(Box<NType>),                    // Random[T]
     Prob(Box<NType>),                      // Prob[T]
-    Temporal(Box<NType>, String),          // Temporal[T, direction]
+    Temporal(Box<NType>, TemporalSpec),    // Temporal[T, direction/offset]
     Causal(Box<NType>, String),            // Causal[T, mode]
     Learnable(String, Option<Box<NType>>), // Learnable[FnType]
     Effect(Vec<EffectEntry>),              // Effect[IO, Rand, Mut[x]]
@@ -74,7 +74,7 @@ impl NType {
             }
             NType::Uncertain(inner) => format!("Uncertain[{}]", inner.display()),
             NType::Random(inner) => format!("Random[{}]", inner.display()),
-            NType::Temporal(inner, dir) => format!("Temporal[{}, {}]", inner.display(), dir),
+            NType::Temporal(inner, spec) => format!("Temporal[{}, {}]", inner.display(), spec),
             NType::Causal(inner, mode) => format!("Causal[{}, {}]", inner.display(), mode),
             NType::List(inner) => format!("List[{}]", inner.display()),
             NType::Model(name, _, _) => format!("Model[{}]", name),
@@ -96,7 +96,7 @@ impl NType {
 
 #[derive(Debug, Clone, PartialEq)]
 enum TypeWrapper {
-    Temporal(String),
+    Temporal(TemporalSpec),
     Causal(String),
     Uncertain,
     Random,
@@ -106,8 +106,8 @@ fn strip_wrappers(mut ty: NType) -> (NType, Vec<TypeWrapper>) {
     let mut wrappers = Vec::new();
     loop {
         match ty {
-            NType::Temporal(inner, dir) => {
-                wrappers.push(TypeWrapper::Temporal(dir));
+            NType::Temporal(inner, spec) => {
+                wrappers.push(TypeWrapper::Temporal(spec));
                 ty = *inner;
             }
             NType::Causal(inner, mode) => {
@@ -131,7 +131,7 @@ fn strip_wrappers(mut ty: NType) -> (NType, Vec<TypeWrapper>) {
 fn apply_wrappers(mut ty: NType, wrappers: Vec<TypeWrapper>) -> NType {
     for w in wrappers.into_iter().rev() {
         match w {
-            TypeWrapper::Temporal(dir) => ty = NType::Temporal(Box::new(ty), dir),
+            TypeWrapper::Temporal(spec) => ty = NType::Temporal(Box::new(ty), spec),
             TypeWrapper::Causal(mode) => ty = NType::Causal(Box::new(ty), mode),
             TypeWrapper::Uncertain => ty = NType::Uncertain(Box::new(ty)),
             TypeWrapper::Random => ty = NType::Random(Box::new(ty)),
@@ -147,7 +147,29 @@ fn types_compatible(a: &NType, b: &NType) -> bool {
         (NType::Tensor(_), NType::Tensor(_)) => true, // Shape checked separately
         (NType::Uncertain(x), NType::Uncertain(y)) => types_compatible(x, y),
         (NType::Random(x), NType::Random(y)) => types_compatible(x, y),
-        (NType::Temporal(x, d1), NType::Temporal(y, d2)) => d1 == d2 && types_compatible(x, y),
+        (NType::Temporal(x, s1), NType::Temporal(y, s2)) => {
+            let spec_compat = match (s1, s2) {
+                (TemporalSpec::Direction(d1), TemporalSpec::Direction(d2)) => d1 == d2,
+                (TemporalSpec::Offset(o1), TemporalSpec::Offset(o2)) => {
+                    if *o1 <= 0 && *o2 <= 0 {
+                        true // Both represent safe past / zero-lookahead data
+                    } else {
+                        o1 == o2
+                    }
+                }
+                (TemporalSpec::Direction(d), TemporalSpec::Offset(o)) => {
+                    if d == "past_to_future" { *o <= 0 }
+                    else if d == "future_to_past" { *o > 0 }
+                    else { false }
+                }
+                (TemporalSpec::Offset(o), TemporalSpec::Direction(d)) => {
+                    if d == "past_to_future" { *o <= 0 }
+                    else if d == "future_to_past" { *o > 0 }
+                    else { false }
+                }
+            };
+            spec_compat && types_compatible(x, y)
+        }
         (NType::Causal(x, m1), NType::Causal(y, m2)) => m1 == m2 && types_compatible(x, y),
         (NType::List(x), NType::List(y)) => types_compatible(x, y),
         (NType::Model(a, _, _), NType::Model(b, _, _)) => a == b,
@@ -180,7 +202,7 @@ fn type_from_ast(te: &TypeExpr) -> NType {
         TypeExpr::Uncertain(inner, _) => NType::Uncertain(Box::new(type_from_ast(inner))),
         TypeExpr::Random(inner, _) => NType::Random(Box::new(type_from_ast(inner))),
         TypeExpr::Prob(inner, _) => NType::Prob(Box::new(type_from_ast(inner))),
-        TypeExpr::Temporal(inner, dir, _) => NType::Temporal(Box::new(type_from_ast(inner)), dir.clone()),
+        TypeExpr::Temporal(inner, spec, _) => NType::Temporal(Box::new(type_from_ast(inner)), spec.clone()),
         TypeExpr::Causal(inner, mode, _) => NType::Causal(Box::new(type_from_ast(inner)), mode.clone()),
         TypeExpr::Learnable(fn_type, _, _) => NType::Learnable(fn_type.clone(), None),
         TypeExpr::ListType(inner, _) => NType::List(Box::new(type_from_ast(inner))),
@@ -951,11 +973,24 @@ impl TypeChecker {
         let mut has_temporal_conflict = false;
         for rw in &right_wrappers {
             match rw {
-                TypeWrapper::Temporal(ref rdir) => {
-                    if let Some(lw) = left_wrappers.iter().find(|w| matches!(w, TypeWrapper::Temporal(_))) {
-                        if let TypeWrapper::Temporal(ref ldir) = lw {
-                            if ldir != rdir {
-                                has_temporal_conflict = true;
+                TypeWrapper::Temporal(ref rspec) => {
+                    if let Some(lw) = combined_wrappers.iter_mut().find(|w| matches!(w, TypeWrapper::Temporal(_))) {
+                        if let TypeWrapper::Temporal(ref mut lspec) = lw {
+                            match (&lspec, &rspec) {
+                                (TemporalSpec::Offset(n1), TemporalSpec::Offset(n2)) => {
+                                    // Conservative alignment takes the minimum offset (furthest past required)
+                                    *lspec = TemporalSpec::Offset(std::cmp::min(*n1, *n2));
+                                }
+                                (TemporalSpec::Direction(d1), TemporalSpec::Direction(d2)) => {
+                                    if d1 != d2 {
+                                        has_temporal_conflict = true;
+                                    }
+                                }
+                                (TemporalSpec::Direction(d), TemporalSpec::Offset(o)) | (TemporalSpec::Offset(o), TemporalSpec::Direction(d)) => {
+                                    if (d == "past_to_future" && *o > 0) || (d == "future_to_past" && *o <= 0) {
+                                        has_temporal_conflict = true;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1049,11 +1084,48 @@ impl TypeChecker {
         }
     }
 
+    fn extract_int_lit(&self, expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::IntLit(v, _) => Some(*v),
+            Expr::UnaryOp(u) => {
+                if matches!(u.op, UnaryOp::Neg) {
+                    if let Expr::IntLit(v, _) = &u.operand {
+                        return Some(-v);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn infer_fn_call(&mut self, c: &FnCallExpr) -> NType {
         let callee_ty = self.infer_expr(&c.callee);
         if let Expr::Dot(ref d) = c.callee {
-            if d.field == "before" || d.field == "after" || d.field == "snapshot" {
-                return callee_ty;
+            let obj_ty = self.infer_expr(&d.obj);
+            if let NType::Temporal(ref inner, ref spec) = obj_ty {
+                if d.field == "before" {
+                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
+                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(-k.abs()));
+                } else if d.field == "after" {
+                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
+                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(k.abs().max(1)));
+                } else if d.field == "shift" || d.field == "lag" || d.field == "lead" {
+                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(0);
+                    let current_offset = match spec {
+                        TemporalSpec::Offset(n) => *n,
+                        TemporalSpec::Direction(dir) => if dir == "past_to_future" { 0 } else { 1 },
+                    };
+                    let new_offset = match d.field.as_str() {
+                        "shift" => current_offset + k,
+                        "lag" => current_offset - k,
+                        "lead" => current_offset + k,
+                        _ => current_offset,
+                    };
+                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(new_offset));
+                } else if d.field == "snapshot" {
+                    return *inner.clone();
+                }
             }
         }
         let callee_name = match &c.callee {
@@ -1109,14 +1181,51 @@ impl TypeChecker {
                                 ).with_expected(&param_ty.display()).with_actual(&arg_ty.display()));
                             }
                             
-                            // Rule 2: Temporal direction track check on calls
-                            if let (NType::Temporal(_, ref expected_dir), NType::Temporal(_, ref found_dir)) = (param_ty, &arg_ty) {
-                                if expected_dir == "past_to_future" && found_dir == "future_to_past" {
-                                    self.result.add_error(temporal_leak_error(
-                                        c.span.clone(),
-                                        found_dir,
-                                        expected_dir,
-                                    ));
+                            // Temporal direction and offset validation on calls
+                            if let (NType::Temporal(_, ref expected_spec), NType::Temporal(_, ref found_spec)) = (param_ty, &arg_ty) {
+                                match (expected_spec, found_spec) {
+                                    (TemporalSpec::Direction(exp_dir), TemporalSpec::Direction(found_dir)) => {
+                                        if exp_dir == "past_to_future" && found_dir == "future_to_past" {
+                                            self.result.add_error(temporal_leak_error(
+                                                c.span.clone(),
+                                                found_dir,
+                                                exp_dir,
+                                            ));
+                                        }
+                                    }
+                                    (TemporalSpec::Direction(exp_dir), TemporalSpec::Offset(found_offset)) => {
+                                        if exp_dir == "past_to_future" && *found_offset > 0 {
+                                            self.result.add_error(temporal_offset_leak_error(
+                                                c.span.clone(),
+                                                *found_offset,
+                                                0,
+                                            ));
+                                        }
+                                    }
+                                    (TemporalSpec::Offset(expected_max), TemporalSpec::Offset(found_offset)) => {
+                                        if *expected_max <= 0 && *found_offset > *expected_max {
+                                            self.result.add_error(temporal_offset_leak_error(
+                                                c.span.clone(),
+                                                *found_offset,
+                                                *expected_max,
+                                            ));
+                                        } else if *expected_max > 0 && *found_offset != *expected_max {
+                                            self.result.add_error(NeuronError::new(
+                                                ErrorCode::TypeMismatch,
+                                                format!("Temporal horizon mismatch: expected Temporal[..., +{}] but got Temporal[..., {}]", expected_max, found_offset),
+                                                c.span.clone(),
+                                            ).with_expected(&format!("Temporal[..., +{}]", expected_max)).with_actual(&format!("Temporal[..., {}]", found_offset)));
+                                        }
+                                    }
+                                    (TemporalSpec::Offset(expected_max), TemporalSpec::Direction(found_dir)) => {
+                                        if *expected_max <= 0 && found_dir == "future_to_past" {
+                                            self.result.add_error(temporal_leak_error(
+                                                c.span.clone(),
+                                                found_dir,
+                                                &format!("offset <= {}", expected_max),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1132,13 +1241,28 @@ impl TypeChecker {
     fn infer_dot(&mut self, d: &DotExpr) -> NType {
         let obj_ty = self.infer_expr(&d.obj);
 
-        // Temporal direction checking
-        if let NType::Temporal(ref inner, ref dir) = obj_ty {
+        // Temporal direction and offset checking
+        if let NType::Temporal(ref inner, ref spec) = obj_ty {
             match d.field.as_str() {
-                "before" => return NType::Temporal(inner.clone(), dir.clone()),
+                "before" => {
+                    let new_spec = match spec {
+                        TemporalSpec::Offset(n) => TemporalSpec::Offset(-n.abs().max(1)),
+                        TemporalSpec::Direction(_) => TemporalSpec::Direction("past_to_future".into()),
+                    };
+                    return NType::Temporal(inner.clone(), new_spec);
+                }
                 "after" => {
-                    let new_dir = if dir == "past_to_future" { "future_to_past" } else { "past_to_future" };
-                    return NType::Temporal(inner.clone(), new_dir.into());
+                    let new_spec = match spec {
+                        TemporalSpec::Offset(n) => TemporalSpec::Offset(n.abs().max(1)),
+                        TemporalSpec::Direction(dir) => {
+                            let nd = if dir == "past_to_future" { "future_to_past" } else { "past_to_future" };
+                            TemporalSpec::Direction(nd.into())
+                        }
+                    };
+                    return NType::Temporal(inner.clone(), new_spec);
+                }
+                "shift" | "lag" | "lead" => {
+                    return NType::Fn_(vec![NType::Base("Int".into())], Box::new(obj_ty.clone()), None);
                 }
                 "snapshot" => return *inner.clone(),
                 _ => {}

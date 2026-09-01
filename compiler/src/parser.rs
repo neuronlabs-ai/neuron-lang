@@ -1239,9 +1239,9 @@ impl Parser {
                 self.expect("LBRACKET")?;
                 let inner = self.parse_type()?;
                 self.expect("COMMA")?;
-                let dir = self.parse_temporal_direction()?;
+                let spec = self.parse_temporal_spec()?;
                 self.expect("RBRACKET")?;
-                Ok(TypeExpr::Temporal(Box::new(inner), dir, span))
+                Ok(TypeExpr::Temporal(Box::new(inner), spec, span))
             }
             TokenType::CausalKw => {
                 self.advance();
@@ -1395,19 +1395,55 @@ impl Parser {
         }
     }
 
-    fn parse_temporal_direction(&mut self) -> Result<String, NeuronError> {
-        // past→future or future→past
+    fn parse_temporal_spec(&mut self) -> Result<TemporalSpec, NeuronError> {
+        // Integer offset: e.g. 0, 1, 5
+        if let TokenType::IntLit(val) = self.peek_type() {
+            let n = *val;
+            self.advance();
+            return Ok(TemporalSpec::Offset(n));
+        }
+        // Negative integer offset: e.g. -1, -5
+        if matches!(self.peek_type(), TokenType::Minus) {
+            self.advance();
+            if let TokenType::IntLit(val) = self.peek_type() {
+                let n = *val;
+                self.advance();
+                return Ok(TemporalSpec::Offset(-n));
+            } else {
+                return Err(self.error("Expected integer after '-' in temporal offset"));
+            }
+        }
+        // Positive integer offset with explicit +: e.g. +1, +5
+        if matches!(self.peek_type(), TokenType::Plus) {
+            self.advance();
+            if let TokenType::IntLit(val) = self.peek_type() {
+                let n = *val;
+                self.advance();
+                return Ok(TemporalSpec::Offset(n));
+            } else {
+                return Err(self.error("Expected integer after '+' in temporal offset"));
+            }
+        }
+
+        // Directional spec: past→future, future→past, past_to_future, etc.
         let first_tok = self.expect("IDENT")?;
         let first = Self::ident_str(&first_tok)?;
+
+        // Try parsing string as integer (e.g. "0")
+        if let Ok(parsed_int) = first.parse::<i64>() {
+            return Ok(TemporalSpec::Offset(parsed_int));
+        }
+
         if matches!(self.peek_type(), TokenType::Arrow | TokenType::UnicodeArrow) {
             self.advance();
             let second_tok = self.expect("IDENT")?;
             let second = Self::ident_str(&second_tok)?;
-            Ok(format!("{}_to_{}", first, second))
+            Ok(TemporalSpec::Direction(format!("{}_to_{}", first, second)))
         } else {
-            Ok(first)
+            Ok(TemporalSpec::Direction(first))
         }
     }
+
 }
 
 #[cfg(test)]

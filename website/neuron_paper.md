@@ -7,7 +7,7 @@
 
 ## Abstract
 
-We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 149 source files with 120 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
+We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction/offset]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 150 source files with 126 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
 
 ---
 
@@ -137,21 +137,18 @@ $$\frac{\Gamma \vdash e : \texttt{Temporal}[T, d]}{\Gamma \vdash e.\texttt{snaps
 **Rule T-LEAK** (rejects temporal mismatches at call sites):
 $$\frac{\Gamma \vdash f : \texttt{Temporal}[T, \texttt{past}] \to T' \quad \Gamma \vdash e : \texttt{Temporal}[T, \texttt{future}]}{\Gamma \vdash f(e) : \textbf{error}[\texttt{TemporalLeak}]}$$
 
-#### 3.1.1 Design Discussion: Binary Direction vs. Integer Offsets
+#### 3.1.1 Integer Offsets and Algebraic Composition
 
-The current type system uses a binary direction tag (`past` / `future`). An alternative design would use integer offsets:
+NEURON supports both coarse binary direction tags (`past_to_future` / `future_to_past`) and exact **signed integer offsets**:
 
 $$\texttt{Temporal}[T, \Delta] \quad \text{where } \Delta \in \mathbb{Z}$$
 
-Under this model, `prices.after(k)` would produce `Temporal[T, Δ+k]`, and the safety rule would reject any expression where $\Delta > 0$ flows into a context expecting $\Delta \leq 0$. Offsets would compose algebraically: `.after(3).before(1)` would yield $\Delta = +2$, still unsafe.
+Under this model, calling `prices.shift(k)` or `prices.lead(k)` produces $\texttt{Temporal}[T, \Delta+k]$, while `prices.lag(k)` produces $\texttt{Temporal}[T, \Delta-k]$. Offsets compose algebraically at compile time:
+* Calling `.shift(-5).shift(2)` on `Temporal[T, 0]` evaluates algebraically to $\Delta = -3$ (safe past data).
+* Binary operations combining two temporal streams $a : \texttt{Temporal}[T, \Delta_1]$ and $b : \texttt{Temporal}[T, \Delta_2]$ yield a conservative alignment boundary $\Delta_{\text{res}} = \min(\Delta_1, \Delta_2)$.
+* The safety rule enforces bounded subtyping: when a function expects $\Delta_{\text{req}} \leq 0$, passing any $\Delta_{\text{arg}} \leq 0$ is permitted, while passing $\Delta_{\text{arg}} > 0$ triggers $\textbf{error}[\texttt{TemporalLeak}]$ with exact violation diagnostics (reporting the number of leaked forward steps).
+* For multi-horizon predictive modeling (e.g. forecasting $t+5$ steps ahead), functions returning $\texttt{Temporal}[T, +k]$ guarantee compile-time alignment between prediction horizons and loss target timestamps ($t+k \equiv t+k$).
 
-We chose the binary model for two reasons:
-
-1. **Coverage of the dominant error pattern.** The most common temporal error in practice is using *any* future data where *only* past data is permitted. The binary model catches this directly. Finer-grained offset tracking would detect additional errors (e.g., using data from $t+2$ where only $t+1$ is allowed) but these are less frequent in practice.
-
-2. **Simplicity of implementation.** The binary model requires only a string comparison at call sites. The offset model would require an integer arithmetic system in the type checker, constraint propagation across function boundaries, and potentially subtyping ($\Delta = 0$ is a subtype of $\Delta \leq 0$).
-
-The offset model is a natural extension. We consider it future work, and note that the binary model abstracts all future offsets into a single category and therefore sacrifices precision for simplicity. The offset model would reject strictly more programs in some cases (e.g., distinguishing $\Delta = +1$ from $\Delta = +5$), while the binary model collapses all positive offsets into `future`. The two models are not in a strict subset relationship; rather, the binary model is a coarser abstraction that trades granularity for implementability.
 
 ### 3.2 Causal Types
 
@@ -606,16 +603,14 @@ NEURON's GPU backend achieves up to **164.9x speedup** on large-scale element-wi
 ### What this system does not do
 
 - It does not verify that a causal graph is *correct* — only that the program uses `observed` and `intervened` values consistently with the declared graph.
-- It does not prove that a temporal annotation is *accurate* — only that the program does not pass `future_to_past` data where `past_to_future` is expected.
+- It does not prove that a temporal annotation is *accurate* — only that the program does not pass future data where past data is expected.
 - It does not guarantee that uncertainty bounds are *calibrated* — only that the program checks confidence before using uncertain values.
-- It has not been benchmarked on large-scale distributed clusters (we present single-device CPU benchmarks in §5.6).
-- The temporal type system uses a binary direction model that does not compose offsets algebraically (see §3.1.1 for discussion).
+- It has not been benchmarked on large-scale distributed multi-node clusters (we present single-device benchmarks in §5.6).
 
 These are deliberate design boundaries. The type system enforces *structural* correctness — whether the right kinds of values flow to the right places — not *semantic* correctness — whether the values themselves are accurate.
 
 ### Future work
 
-- **Offset-based temporal types** (§3.1.1): Extending the binary model to integer offsets with algebraic composition.
 - **Multi-device and Distributed GPU execution**: While the JIT compiler now supports single-device CUDA generation with operator fusion, scaling memory management and coordination to multi-GPU clusters is future work.
 - **Formal soundness proof**: Proving type safety for the temporal and causal rules.
 

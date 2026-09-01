@@ -137,6 +137,26 @@ but context expects past_to_future — lookahead bias detected
   help: Use .before(t) to restrict temporal data to the past
 ```
 
+#### Offset-Based Temporal Algebra & Multi-Horizon Alignment (§3.1.1)
+
+NEURON also tracks exact signed integer step horizons with compile-time algebraic composition:
+
+```python
+fn safe_strategy(x: Temporal[Tensor, 0]) -> Tensor:
+  return x
+
+fn main():
+  let prices: Temporal[Tensor, 0] = randn(20, 4)
+  
+  // Lookback 5 periods, then forward shift by 2 -> (-5) + 2 = -3 (Safe past data)
+  let signal = prices.shift(-5).shift(2)
+  safe_strategy(signal) # PASS: -3 <= 0 (Zero lookahead)
+
+  // Unsafe forward shift: (-5) + 8 = +3 (Leaking 3 steps into future)
+  let bad = signal.shift(6)
+  safe_strategy(bad)    # COMPILE ERROR: Temporal offset violation (+3 > 0)
+```
+
 ---
 
 ### 2. Machine Unlearning (`forget()`) with Verifiable Certificates
@@ -277,9 +297,9 @@ cd pycheck && pytest
 
 | Test Suite | Total Tests | Pass Rate |
 |---|---|---|
-| **Core Rust Test Suite** (Compiler, Runtime, WASM) | 120 tests | **100% PASS** |
+| **Core Rust Test Suite** (Compiler, Runtime, WASM) | 126 tests | **100% PASS** |
 | **PyCheck Linter Test Suite** | 73 unit tests | **100% PASS** |
-| **End-to-End Example Suite** (`test_all.ps1`) | 18 verifications | **100% PASS** |
+| **End-to-End Example Suite** (`test_all.ps1`) | 19 verifications | **100% PASS** |
 | **Endurance Suite** | 100,000 iterations | **0 memory leaks, 0 NaN** |
 | **Property Tests (VM == JIT parity)** | 100 random programs | **100% Parity** |
 

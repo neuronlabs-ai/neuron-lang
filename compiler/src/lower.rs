@@ -669,7 +669,8 @@ impl Lowerer {
             }
             Expr::FnCall(c) => {
                 if let Expr::Dot(d) = &c.callee {
-                    if d.field == "before" || d.field == "after" || d.field == "snapshot" {
+                    if d.field == "before" || d.field == "after" || d.field == "snapshot"
+                        || d.field == "shift" || d.field == "lag" || d.field == "lead" {
                         let receiver_id = self.lower_expr(func, &d.obj);
                         let t_id = if !c.args.is_empty() {
                             self.lower_expr(func, &c.args[0].value)
@@ -677,8 +678,8 @@ impl Lowerer {
                             0
                         };
                         let op = match d.field.as_str() {
-                            "before" => IROp::TemporalBefore { t: t_id },
-                            "after" => IROp::TemporalAfter { t: t_id },
+                            "before" | "lag" => IROp::TemporalBefore { t: t_id },
+                            "after" | "lead" | "shift" => IROp::TemporalAfter { t: t_id },
                             "snapshot" => IROp::TemporalSnapshot { at: t_id },
                             _ => unreachable!(),
                         };
@@ -1021,7 +1022,7 @@ impl Lowerer {
             }
             TypeExpr::Uncertain(inner, _) => IRType::Uncertain(Box::new(self.lower_type(inner))),
             TypeExpr::Random(inner, _) => IRType::Random(Box::new(self.lower_type(inner))),
-            TypeExpr::Temporal(inner, dir, _) => IRType::Temporal(Box::new(self.lower_type(inner)), dir.clone()),
+            TypeExpr::Temporal(inner, dir, _) => IRType::Temporal(Box::new(self.lower_type(inner)), dir.to_string()),
             TypeExpr::Causal(inner, mode, _) => IRType::Causal(Box::new(self.lower_type(inner)), mode.clone()),
             TypeExpr::ListType(inner, _) => IRType::List(Box::new(self.lower_type(inner))),
             _ => IRType::Any,

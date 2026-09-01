@@ -23,7 +23,8 @@ $runExamples = @(
     "micro_gpt.nr",
     "agi_agent.nr",
     "qwen_mini_transpiled.nr",
-    "stress_test.nr"
+    "stress_test.nr",
+    "demo_offset_temporal.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan

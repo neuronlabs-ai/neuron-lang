@@ -62,7 +62,7 @@
 % ═══════════════════════════════════════════════
 
 \begin{abstract}
-We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors---\ty{Temporal[T, direction]}, \ty{Causal[T, mode]}, \ty{Uncertain[T]}, and \ty{Effect[E$_1$, ...]}---integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 149 source files with 120 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
+We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors---\ty{Temporal[T, direction/offset]}, \ty{Causal[T, mode]}, \ty{Uncertain[T]}, and \ty{Effect[E$_1$, ...]}---integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 150 source files with 126 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
 \end{abstract}
 
 % ═══════════════════════════════════════════════
@@ -201,17 +201,19 @@ We present the typing rules for each type constructor using standard inference r
 \frac{\Gamma \vdash f : \ty{Temporal}[T, \ty{past}] \to T' \quad \Gamma \vdash e : \ty{Temporal}[T, \ty{future}]}{\Gamma \vdash f(e) : \textbf{error}[\ty{TemporalLeak}]}
 \end{equation}
 
-\subsubsection{Design Discussion: Binary Direction vs.\ Integer Offsets}
+\subsubsection{Integer Offsets and Algebraic Composition}
 
-The current type system uses a binary direction tag (\ty{past}/\ty{future}). An alternative design would use integer offsets:
+NEURON supports both coarse binary direction tags (\ty{past\_to\_future} / \ty{future\_to\_past}) and exact \textbf{signed integer offsets}:
 \[
 \ty{Temporal}[T, \Delta] \quad \text{where } \Delta \in \mathbb{Z}
 \]
-Under this model, \ty{prices.after(k)} would produce \ty{Temporal}$[T, \Delta+k]$, and the safety rule would reject any expression where $\Delta > 0$ flows into a context expecting $\Delta \leq 0$. Offsets would compose algebraically: \ty{.after(3).before(1)} would yield $\Delta = +2$, still unsafe.
-
-We chose the binary model for two reasons. First, the most common temporal error in practice is using \emph{any} future data where \emph{only} past data is permitted; the binary model catches this directly. Second, the binary model requires only a string comparison at call sites, whereas the offset model would require integer arithmetic in the type checker and potentially subtyping ($\Delta = 0$ as a subtype of $\Delta \leq 0$).
-
-The binary model abstracts all future offsets into a single category and therefore sacrifices precision for simplicity. The offset model would reject strictly more programs in some cases (e.g., distinguishing $\Delta = +1$ from $\Delta = +5$), while the binary model collapses all positive offsets into \ty{future}. The two models are not in a strict subset relationship; rather, the binary model is a coarser abstraction that trades granularity for implementability. We consider the offset extension future work.
+Under this model, calling \ty{prices.shift(k)} or \ty{prices.lead(k)} produces \ty{Temporal}$[T, \Delta+k]$, while \ty{prices.lag(k)} produces \ty{Temporal}$[T, \Delta-k]$. Offsets compose algebraically at compile time:
+\begin{itemize}[leftmargin=1.5em]
+  \item Calling \ty{.shift(-5).shift(2)} on \ty{Temporal[T, 0]} evaluates algebraically to $\Delta = -3$ (safe past data).
+  \item Binary operations combining two temporal streams $a : \ty{Temporal}[T, \Delta_1]$ and $b : \ty{Temporal}[T, \Delta_2]$ yield a conservative alignment boundary $\Delta_{\text{res}} = \min(\Delta_1, \Delta_2)$.
+  \item The safety rule enforces bounded subtyping: when a function expects $\Delta_{\text{req}} \leq 0$, passing any $\Delta_{\text{arg}} \leq 0$ is permitted, while passing $\Delta_{\text{arg}} > 0$ triggers $\textbf{error}[\ty{TemporalLeak}]$ with exact violation diagnostics (reporting the number of leaked forward steps).
+  \item For multi-horizon predictive modeling (e.g., forecasting $t+5$ steps ahead), functions returning \ty{Temporal}$[T, +k]$ guarantee compile-time alignment between prediction horizons and loss target timestamps ($t+k \equiv t+k$).
+\end{itemize}
 
 \subsection{Causal Types}
 \label{sec:causal}
@@ -552,7 +554,7 @@ NEURON's GPU backend achieves up to \textbf{164.9x speedup} on large-scale eleme
 
 The type system enforces \emph{structural} correctness---whether the right kinds of values flow to the right places---not \emph{semantic} correctness---whether the values themselves are accurate.
 
-\textbf{Future work.} Offset-based temporal types (\S\ref{sec:temporal}), multi-device and distributed GPU execution, and formal soundness proof.
+\textbf{Future work.} Multi-device and distributed GPU execution, and formal soundness proof.
 
 % ═══════════════════════════════════════════════
 %  8. CONCLUSION

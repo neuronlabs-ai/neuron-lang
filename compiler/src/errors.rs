@@ -270,6 +270,22 @@ pub fn temporal_leak_error(span: Span, found_dir: &str, expected_dir: &str) -> N
     .with_fix("Use .before(t) to restrict temporal data to the past, or .snapshot(at=t) to remove temporal ordering")
 }
 
+pub fn temporal_offset_leak_error(span: Span, found_offset: i64, expected_offset_max: i64) -> NeuronError {
+    let leak_steps = found_offset - expected_offset_max;
+    NeuronError::new(
+        ErrorCode::TemporalLeak,
+        format!(
+            "Temporal offset violation: data has future offset +{} (crosses {} step(s) into future), but context requires offset <= {}",
+            found_offset, leak_steps, expected_offset_max
+        ),
+        span,
+    )
+    .with_expected(&format!("offset <= {}", expected_offset_max))
+    .with_actual(&format!("offset +{}", found_offset))
+    .with_fix(format!("Use .lag({}) or .shift(-{}) to restrict temporal data to the past", leak_steps, leak_steps))
+}
+
+
 pub fn causal_type_mismatch_error(span: Span, mode_a: &str, mode_b: &str) -> NeuronError {
     NeuronError::new(
         ErrorCode::CausalTypeMismatch,

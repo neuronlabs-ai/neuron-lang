@@ -467,6 +467,27 @@ pub struct StoreExpr {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporalSpec {
+    Direction(String), // "past_to_future", "future_to_past"
+    Offset(i64),       // e.g. 0, -5, +3
+}
+
+impl std::fmt::Display for TemporalSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direction(s) => write!(f, "{}", s),
+            Self::Offset(n) => {
+                if *n > 0 {
+                    write!(f, "+{}", n)
+                } else {
+                    write!(f, "{}", n)
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════
 //  Type expressions
 // ═══════════════════════════════════════════
@@ -478,7 +499,7 @@ pub enum TypeExpr {
     Uncertain(Box<TypeExpr>, Span),              // Uncertain[T]
     Random(Box<TypeExpr>, Span),                 // Random[T]
     Prob(Box<TypeExpr>, Span),                   // Prob[T]
-    Temporal(Box<TypeExpr>, String, Span),        // Temporal[T, "past_to_future"]
+    Temporal(Box<TypeExpr>, TemporalSpec, Span),  // Temporal[T, past_to_future] or Temporal[T, 0]
     Causal(Box<TypeExpr>, String, Span),          // Causal[T, "observed"]
     Learnable(String, Option<Box<Expr>>, Span),   // Learnable[FnType, base=expr]
     ListType(Box<TypeExpr>, Span),               // List[T]
