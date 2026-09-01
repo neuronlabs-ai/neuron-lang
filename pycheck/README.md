@@ -8,8 +8,9 @@ PyCheck is a static AST analyzer that catches **temporal lookahead bias**, **cau
 
 ```bash
 pip install pycheck-neuron
-pycheck my_trading_strategy.py
+pycheck examples/comprehensive_leakage.py
 ```
+
 
 ## What It Catches
 
@@ -123,8 +124,9 @@ fn strategy(prices: Temporal[Tensor, past_to_future]):
   let future = prices.shift(-1)  // ERROR: temporal direction violation
 ```
 
-For 100% compile-time temporal proofs, type-checked causal do-calculus, and native AOT execution, see [NEURON](https://github.com/neuron-lang/neuron-lang).
+For 100% compile-time temporal proofs, type-checked causal do-calculus, and native AOT execution, see [NEURON](https://github.com/neuronlabs-ai/neuron-lang).
 
 ## License
 
 MIT License
+

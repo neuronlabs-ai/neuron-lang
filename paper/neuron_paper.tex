@@ -62,7 +62,7 @@
 % ═══════════════════════════════════════════════
 
 \begin{abstract}
-We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors---\ty{Temporal[T, direction]}, \ty{Causal[T, mode]}, \ty{Uncertain[T]}, and \ty{Effect[E$_1$, ...]}---integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a prototype compiler in approximately 12,000 lines of Rust with 17 test suites), and evaluate the system on three worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
+We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors---\ty{Temporal[T, direction]}, \ty{Causal[T, mode]}, \ty{Uncertain[T]}, and \ty{Effect[E$_1$, ...]}---integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 149 source files with 120 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
 \end{abstract}
 
 % ═══════════════════════════════════════════════
@@ -106,8 +106,10 @@ We make the following claims and note their boundaries:
 \begin{enumerate}[itemsep=2pt]
   \item Typing rules for four domain-specific type constructors, including a discussion of design trade-offs in temporal direction tracking (\S3).
   \item Worked examples with exact compiler output for each error class (\S5).
-  \item A prototype implementation comprising ${\sim}12{,}000$ lines of Rust, 17 test suites, and 8 standard library modules (\S4).
+  \item A full compiler implementation comprising ${\sim}29{,}000$ lines across 149 files, 120 passing tests, and 8 standard library modules (\S4).
   \item A structural causal model engine supporting \ty{observe}, \ty{intervene}, and \ty{counterfactual} with do-calculus semantics (\S4.3).
+  \item A six-pass IR optimization pipeline implementing constant folding, algebraic simplification, common subexpression elimination, dead code elimination, loop invariant code motion, and tensor operation fusion (\S4.5).
+  \item A Language Server Protocol (LSP) implementation providing real-time type diagnostics in VS Code with an official extension (\S4.6).
 \end{enumerate}
 
 % ═══════════════════════════════════════════════
