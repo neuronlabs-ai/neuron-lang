@@ -34,7 +34,8 @@ $runExamples = @(
     "noether_discovery.nr",
     "tokamak_plasma_fusion.nr",
     "prove_noether_law.nr",
-    "quantum_prime_spectrum.nr"
+    "quantum_prime_spectrum.nr",
+    "riemann_prime_rescaling.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
