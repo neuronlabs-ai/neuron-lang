@@ -1,0 +1,6 @@
+id,problem
+AIMO_01,Find the remainder when 7^2024 is divided by 1000.
+AIMO_02,"Find the number of ordered pairs of positive integers (m, n) such that m * n = 2023."
+AIMO_03,Find the sum of all positive divisors of 2024 modulo 1000.
+AIMO_04,"Find the number of ordered pairs of positive integers (a, b) such that a^2 + b^2 = 625."
+AIMO_05,Find the remainder when the 25-th Fibonacci number F(25) is divided by 1000.
