@@ -531,7 +531,13 @@ impl Lowerer {
                 if self.current_block_id.is_some() {
                     self.terminate(Terminator::Jump(cond_block));
                 }
-                
+
+                for name in &modified {
+                    for scope in self.env.iter_mut() {
+                        scope.remove(name);
+                    }
+                }
+
                 self.current_block_id = Some(exit_block);
             }
             Stmt::If(i) => {
