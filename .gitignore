@@ -57,3 +57,6 @@ out/
 
 # Scratch & temporary directories
 scratch/
+models/
+test_math_cap.nr
+tools/submission.csv
