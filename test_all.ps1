@@ -30,7 +30,8 @@ $runExamples = @(
     "neuro_physics.nr",
     "moe_uncertainty.nr",
     "diffusion_toy.nr",
-    "mamba_ssm.nr"
+    "mamba_ssm.nr",
+    "noether_discovery.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
