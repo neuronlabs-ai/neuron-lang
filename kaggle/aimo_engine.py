@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-kaggle/aimo_engine.py — Sovereign NEURON Competition Kernel for AIMO Progress Prize
-Architecture:
-  1. Embedded Mathematical Preamble (Number Theory, Algebra, Combinatorics, Geometry)
-  2. Automated Code Sanitizer (strips syntax noise, semicolons, Rust-isms)
-  3. Two-Headed Solver:
-     - Head A: Deterministic Algebraic Fast-Path
-     - Head B: LLM Math Proposer with Compiler Self-Correction Loop
-  4. Majority Consensus Filter
-  5. Kaggle Submission Pipeline (Auto-detects test.csv -> submission.csv)
+kaggle/aimo_engine.py — Sovereign NEURON Competition Kernel (Elite Strategy Edition)
+Implements all 4 High-Leverage Competition Strategies:
+  1. Dynamic Compute Budgeting (The 9-Hour Bank & Time Pacer)
+  2. Cartesianization for Geometry (Analytic coordinate polynomials in scope)
+  3. Orthogonal Multi-Perspective Prompting (Algebraic, Inductive, Cartesian, Bounded Search)
+  4. Consensus Early-Stopping (Short-circuits immediately when agreement threshold is met)
 """
 
 import os
@@ -22,7 +19,7 @@ import subprocess
 import urllib.request
 from typing import Optional, List, Dict, Tuple
 
-# ── 1. Embedded Math Preamble ────────────────────────────────────────────────
+# ── 1. Embedded Math Preamble (Number Theory, Combinatorics, Geometry) ────────
 MATH_PREAMBLE = """
 fn gcd(a: Int, b: Int) -> Int:
   let x = a
@@ -189,6 +186,15 @@ fn heron_area(a: Float, b: Float, c: Float) -> Float:
   let s = (a + b + c) / 2.0
   let val = s * (s - a) * (s - b) * (s - c)
   return sqrt_newton(val)
+
+// Cartesian Geometry Primitives
+fn dist_sq(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return dx * dx + dy * dy
+
+fn dist_cartesian(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
+  return sqrt_newton(dist_sq(x1, y1, x2, y2))
 """
 
 # ── 2. Compiler Discovery ────────────────────────────────────────────────────
@@ -251,7 +257,40 @@ def run_neuron(user_code: str, timeout: float = 3.0) -> Tuple[Optional[int], flo
             try: os.remove(temp_path)
             except OSError: pass
 
-# ── 4. Two-Headed Solver Engine ──────────────────────────────────────────────
+# ── 4. Dynamic Budget Pacer (Strategy 1) ──────────────────────────────────────
+class BudgetPacer:
+    """Manages the 9-hour (32,400s) competition bank across 50 problems."""
+    def __init__(self, total_problems: int, max_total_seconds: float = 31000.0):
+        self.total_problems = total_problems
+        self.max_total_seconds = max_total_seconds
+        self.start_time = time.perf_counter()
+
+    def get_candidate_budget(self, problem_idx: int) -> int:
+        elapsed = time.perf_counter() - self.start_time
+        remaining_time = max(10.0, self.max_total_seconds - elapsed)
+        remaining_probs = max(1, self.total_problems - problem_idx)
+        time_per_prob = remaining_time / remaining_probs
+
+        if time_per_prob > 240:
+            return 8   # Banked surplus: deep search
+        elif time_per_prob > 90:
+            return 5   # Normal budget
+        else:
+            return 3   # Conserve remaining time
+
+# ── 5. Orthogonal Perspectives (Strategy 2 & 3) ──────────────────────────────
+PERSPECTIVES = [
+    # Perspective 1: Direct Algebraic / Invariant Reduction
+    "Approach: Direct deduction. Identify algebraic invariants, symmetry, or exact recurrence relationships.",
+    # Perspective 2: Small-Case Induction
+    "Approach: Small-case induction. Test small values (n=1, 2, 3, 4) in a loop, identify the pattern, and evaluate at target.",
+    # Perspective 3: Cartesian / Coordinate Geometry (Strategy 2)
+    "Approach: Coordinate geometry (Cartesianization). Map vertices to (x, y) coordinates, convert constraints into quadratic distance/slope equations, and solve.",
+    # Perspective 4: Bounded Sieve / Search
+    "Approach: Bounded search. Implement an efficient while-loop search over the feasible parameter space."
+]
+
+# ── 6. Two-Headed Solver Engine ──────────────────────────────────────────────
 class AIMOEngine:
     def __init__(self, ollama_url: str = "http://127.0.0.1:11434/api/generate", model: str = "qwen2-math:7b"):
         self.ollama_url = ollama_url
@@ -364,26 +403,33 @@ class AIMOEngine:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("response", "")
 
-    def solve_llm_candidates(self, problem: str, num_candidates: int = 3) -> Optional[int]:
-        """Head B: Generates candidates via LLM reasoning, validates via NEURON, takes consensus."""
-        prompt = f"""You are an expert mathematical competition solver. Write concise NEURON code to solve this problem.
+    def solve_llm_candidates(self, problem: str, budget: int = 4) -> Optional[int]:
+        """
+        Head B: Orthogonal Multi-Perspective Prompting + Early-Stopping (Strategies 3 & 4).
+        """
+        votes: Dict[int, int] = {}
 
-PRE-DEFINED FUNCTIONS AVAILABLE:
-- gcd(a, b), lcm(a, b), mod_pow(b, e, m), is_prime(n), count_divisors(n), sum_divisors(n)
-- nPr(n, r), nCr(n, r), stars_and_bars(n, k), derangements(n), catalan(n), count_factor_triples(n)
-- heron_area(a: Float, b: Float, c: Float) -> Float, sqrt_newton(x: Float) -> Float
+        for i in range(budget):
+            perspective = PERSPECTIVES[i % len(PERSPECTIVES)]
+            temp = 0.2 + (i * 0.15)
+            prompt = f"""You are an expert mathematical competition solver. Write concise NEURON code to solve this problem.
+
+PRE-DEFINED HELPERS ALREADY IN SCOPE:
+- gcd, lcm, mod_pow, is_prime, count_divisors, sum_divisors
+- nPr, nCr, stars_and_bars, derangements, catalan, count_factor_triples
+- heron_area, sqrt_newton, dist_sq, dist_cartesian
 
 RULES:
 1. Write ONLY your `fn main():` function.
-2. Use 'let x = 10'. To update: 'let x = x + 1'. NO semicolons ';', NO 'let mut'.
+2. Variables: 'let x = 10'. To update: 'let x = x + 1'. NO semicolons ';', NO 'let mut'.
 3. Loops: 'while condition:'.
-4. Print final answer: 'print(ans)'. Output ONLY code in ```neuron ... ``` tags.
+4. Print final answer in [0, 999]: 'print(ans)'. Output ONLY code in ```neuron ... ``` tags.
+
+PERSPECTIVE GUIDANCE:
+{perspective}
 
 Problem: {problem}"""
 
-        votes: Dict[int, int] = {}
-        for i in range(num_candidates):
-            temp = 0.2 + (i * 0.2)
             try:
                 raw = self.query_llm(prompt, temperature=temp)
                 m = re.search(r'```(?:neuron)?\s*\n(.*?)```', raw, re.DOTALL)
@@ -391,6 +437,10 @@ Problem: {problem}"""
                 ans, ms, err = run_neuron(code)
                 if ans is not None:
                     votes[ans] = votes.get(ans, 0) + 1
+                    # Strategy 4: Consensus Early-Stopping
+                    # If 2 or more candidates agree on an answer, short-circuit!
+                    if votes[ans] >= 2:
+                        return ans
             except Exception:
                 continue
 
@@ -398,25 +448,24 @@ Problem: {problem}"""
             return max(votes, key=votes.get)
         return None
 
-    def solve(self, problem: str) -> int:
-        """Master solver pipeline: Head A -> Head B -> Consensus -> Default fallback 0."""
-        # 1. Try deterministic fast-path (sub-1ms)
+    def solve(self, problem: str, budget: int = 4) -> int:
+        """Master solver pipeline: Head A -> Head B with Budget -> Fallback 0."""
+        # 1. Deterministic Fast-Path
         fast_ans = self.solve_deterministic(problem)
         if fast_ans is not None:
             return fast_ans
 
-        # 2. Try LLM proposer with NEURON verification
+        # 2. LLM with Orthogonal Perspectives & Early-Stopping
         try:
-            llm_ans = self.solve_llm_candidates(problem, num_candidates=3)
+            llm_ans = self.solve_llm_candidates(problem, budget=budget)
             if llm_ans is not None:
                 return llm_ans
         except Exception:
             pass
 
-        # Fallback default
         return 0
 
-# ── 5. Kaggle Submission Pipeline ────────────────────────────────────────────
+# ── 7. Kaggle Submission Pipeline ────────────────────────────────────────────
 def run_kaggle_pipeline():
     test_paths = [
         "/kaggle/input/ai-mathematical-olympiad-progress-prize-2/test.csv",
@@ -431,10 +480,7 @@ def run_kaggle_pipeline():
             break
 
     if not test_file:
-        print("[ERROR] No test.csv found. Generating empty dummy submission.")
-        out_path = "/kaggle/working/submission.csv" if os.path.exists("/kaggle/working") else os.path.join(CWD, "submission.csv")
-        with open(out_path, "w", newline="", encoding="utf-8") as f:
-            f.write("id,answer\n")
+        print("[ERROR] No test.csv found.")
         return
 
     out_dir = "/kaggle/working" if os.path.exists("/kaggle/working") else CWD
@@ -450,17 +496,20 @@ def run_kaggle_pipeline():
         for r in reader:
             rows.append(r)
 
+    pacer = BudgetPacer(total_problems=len(rows))
     results = []
     start_total = time.perf_counter()
-    for row in rows:
+
+    for idx, row in enumerate(rows):
         pid = row.get("id", "0")
         prob = row.get("problem", "")
-        print(f"\n--- [Problem ID: {pid}] ---")
+        budget = pacer.get_candidate_budget(idx)
+        print(f"\n--- [Problem {idx+1}/{len(rows)} | ID: {pid} | Budget: {budget} candidates] ---")
         print(f"Statement: {prob[:80]}...")
         t0 = time.perf_counter()
-        ans = engine.solve(prob)
+        ans = engine.solve(prob, budget=budget)
         elapsed = (time.perf_counter() - t0) * 1000
-        print(f"Certified Answer: {ans} (Solved in {elapsed:.1f}ms)")
+        print(f"Certified Answer: {ans} (Processed in {elapsed:.1f}ms)")
         results.append({"id": pid, "answer": ans})
 
     total_s = time.perf_counter() - start_total
