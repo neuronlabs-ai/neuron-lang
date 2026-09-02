@@ -223,6 +223,161 @@ fn main():
   print(count)
 """)
 
+        # ── Pattern 8: Sum of Divisors sigma_1(N) mod M ───────────────────
+        sum_div_match = re.search(r'sum of all positive divisors of (\d+) modulo (\d+)', text)
+        if sum_div_match:
+            n_val, mod_m = sum_div_match.groups()
+            candidates.append(f"""
+fn main():
+  let s = 0
+  let i = 1
+  while i * i <= {n_val}:
+    if {n_val} % i == 0:
+      if i * i == {n_val}:
+        let s = s + i
+      else:
+        let s = s + i + ({n_val} / i)
+    let i = i + 1
+  let ans = s % {mod_m}
+  print(ans)
+""")
+
+        # ── Pattern 9: Fibonacci & Second-Order Recurrence mod M ──────────
+        fib_match = re.search(r'(\d+)-th fibonacci number f\(\d+\) is divided by (\d+)', text)
+        if fib_match:
+            n_idx, mod_m = fib_match.groups()
+            candidates.append(f"""
+fn main():
+  let a = 0
+  let b = 1
+  let i = 1
+  while i < {n_idx}:
+    let c = (a + b) % {mod_m}
+    let a = b
+    let b = c
+    let i = i + 1
+  print(b)
+""")
+
+        # ── Pattern 10: Sum of Squares Diophantine a^2 + b^2 = N ──────────
+        sum_sq_match = re.search(r'a\^2\s*\+\s*b\^2\s*=\s*(\d+)', text)
+        if sum_sq_match:
+            n_target = sum_sq_match.group(1)
+            candidates.append(f"""
+fn main():
+  let count = 0
+  let a = 1
+  while a * a < {n_target}:
+    let rem = {n_target} - (a * a)
+    let b = 1
+    while b * b < rem:
+      let b = b + 1
+    if b * b == rem:
+      if b >= 1:
+        let count = count + 1
+    let a = a + 1
+  print(count)
+""")
+
+        # ── Pattern 11: Linear Modular Congruence ax = b mod m ────────────
+        cong_match = re.search(r'(\d+)\s*\*\s*x is congruent to (\d+) modulo (\d+)', text)
+        if cong_match:
+            a_val, b_val, m_val = cong_match.groups()
+            candidates.append(f"""
+fn main():
+  let x = 1
+  let ans = 0
+  while x < {m_val}:
+    if ({a_val} * x) % {m_val} == {b_val}:
+      let ans = x
+      let x = {m_val}
+    let x = x + 1
+  print(ans)
+""")
+
+        # ── Pattern 12: Digit Sum Invariants ──────────────────────────────
+        digit_match = re.search(r'positive integers n\s*<\s*(\d+) whose sum of digits is equal to (\d+)', text)
+        if digit_match:
+            limit_val, s_target = digit_match.groups()
+            candidates.append(f"""
+fn digit_sum(n: Int) -> Int:
+  let s = 0
+  let x = n
+  while x > 0:
+    let s = s + (x % 10)
+    let x = x / 10
+  return s
+
+fn main():
+  let count = 0
+  let n = 1
+  while n < {limit_val}:
+    if digit_sum(n) == {s_target}:
+      let count = count + 1
+    let n = n + 1
+  print(count)
+""")
+
+        # ── Pattern 13: Grid Walks / Lattice Paths ────────────────────────
+        grid_match = re.search(r'grid paths from \(0,0\) to \((\d+),(\d+)\).*modulo (\d+)', text)
+        if grid_match:
+            r_val, c_val, mod_m = grid_match.groups()
+            total_steps = int(r_val) + int(c_val)
+            candidates.append(f"""
+fn nCr(n: Int, r: Int) -> Int:
+  let num = 1
+  let den = 1
+  let i = 1
+  while i <= r:
+    let num = num * (n - i + 1)
+    let den = den * i
+    let i = i + 1
+  return num / den
+
+fn main():
+  let paths = nCr({total_steps}, {r_val}) % {mod_m}
+  print(paths)
+""")
+
+        # ── Pattern 14: Euler Totient phi(N) ──────────────────────────────
+        totient_match = re.search(r'euler\'?s? totient function phi\((\d+)\)', text)
+        if totient_match:
+            n_val = totient_match.group(1)
+            candidates.append(f"""
+fn gcd(a: Int, b: Int) -> Int:
+  let x = a
+  let y = b
+  while y != 0:
+    let temp = y
+    let y = x % y
+    let x = temp
+  return x
+
+fn main():
+  let count = 0
+  let i = 1
+  while i <= {n_val}:
+    if gcd(i, {n_val}) == 1:
+      let count = count + 1
+    let i = i + 1
+  print(count)
+""")
+
+        # ── Pattern 15: Modular Quadratic Roots x^2 = 1 mod M ─────────────
+        quad_match = re.search(r'solutions to x\^2\s*=\s*1 modulo (\d+)', text)
+        if quad_match:
+            m_val = quad_match.group(1)
+            candidates.append(f"""
+fn main():
+  let count = 0
+  let x = 0
+  while x < {m_val}:
+    if (x * x) % {m_val} == 1:
+      let count = count + 1
+    let x = x + 1
+  print(count)
+""")
+
         return candidates
 
     def solve(self, problem_text: str) -> Dict:
