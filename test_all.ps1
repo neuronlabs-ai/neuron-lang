@@ -28,7 +28,9 @@ $runExamples = @(
     "neuro_causal_quant.nr",
     "cognitive_swarm.nr",
     "neuro_physics.nr",
-    "moe_uncertainty.nr"
+    "moe_uncertainty.nr",
+    "diffusion_toy.nr",
+    "mamba_ssm.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
