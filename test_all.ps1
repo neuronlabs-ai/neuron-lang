@@ -33,7 +33,8 @@ $runExamples = @(
     "mamba_ssm.nr",
     "noether_discovery.nr",
     "tokamak_plasma_fusion.nr",
-    "prove_noether_law.nr"
+    "prove_noether_law.nr",
+    "quantum_prime_spectrum.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
