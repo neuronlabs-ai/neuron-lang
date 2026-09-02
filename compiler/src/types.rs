@@ -140,7 +140,7 @@ fn apply_wrappers(mut ty: NType, wrappers: Vec<TypeWrapper>) -> NType {
     ty
 }
 
-fn types_compatible(a: &NType, b: &NType) -> bool {
+pub fn types_compatible(a: &NType, b: &NType) -> bool {
     if matches!(a, NType::Any) || matches!(b, NType::Any) { return true; }
     match (a, b) {
         (NType::Base(x), NType::Base(y)) => x == y,

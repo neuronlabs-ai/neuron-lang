@@ -212,4 +212,15 @@ mod tests {
         let json_res = eval_neuron(src);
         assert!(json_res.contains("\"success\":true"));
     }
+
+    #[test]
+    fn test_wasm_offset_temporal_check() {
+        let valid_src = "fn safe(x: Temporal[Tensor, 0]) -> Tensor:\n  return x\n\nfn main():\n  let p: Temporal[Tensor, 0] = zeros(5, 5)\n  let s = p.shift(-5).shift(2)\n  safe(s)\n";
+        let valid_json = type_check(valid_src);
+        assert!(valid_json.contains("\"success\":true"), "Expected valid offset temporal check to pass in WASM");
+
+        let invalid_src = "fn safe(x: Temporal[Tensor, 0]) -> Tensor:\n  return x\n\nfn main():\n  let p: Temporal[Tensor, 0] = zeros(5, 5)\n  let s = p.shift(3)\n  safe(s)\n";
+        let invalid_json = type_check(invalid_src);
+        assert!(invalid_json.contains("\"success\":false"), "Expected future offset leak to fail in WASM");
+    }
 }
