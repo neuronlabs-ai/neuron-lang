@@ -26,7 +26,9 @@ $runExamples = @(
     "stress_test.nr",
     "demo_offset_temporal.nr",
     "neuro_causal_quant.nr",
-    "cognitive_swarm.nr"
+    "cognitive_swarm.nr",
+    "neuro_physics.nr",
+    "moe_uncertainty.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
