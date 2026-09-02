@@ -35,7 +35,8 @@ $runExamples = @(
     "tokamak_plasma_fusion.nr",
     "prove_noether_law.nr",
     "quantum_prime_spectrum.nr",
-    "riemann_prime_rescaling.nr"
+    "riemann_prime_rescaling.nr",
+    "aimo_olympiad_solver.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
