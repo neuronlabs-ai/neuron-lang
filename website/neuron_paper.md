@@ -45,7 +45,7 @@ We make the following claims and note their boundaries:
 
 1. Typing rules for four domain-specific type constructors, including a discussion of design trade-offs in temporal direction tracking (§3).
 2. Worked examples with exact compiler output for each error class (§5).
-3. A full compiler implementation comprising ~29,000 lines across 149 files, 120 passing tests, and 8 standard library modules (§4).
+3. A full compiler implementation comprising ~29,000 lines across 150 files, 126 passing tests, and 8 standard library modules (§4).
 4. A structural causal model engine supporting `observe`, `intervene`, and `counterfactual` with do-calculus semantics (§4.3).
 5. A six-pass IR optimization pipeline implementing constant folding, algebraic simplification, common subexpression elimination, dead code elimination, loop invariant code motion, and tensor operation fusion (§4.5).
 6. A Language Server Protocol (LSP) implementation providing real-time type diagnostics in VS Code with an official extension (§4.6).
