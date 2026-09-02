@@ -1271,6 +1271,12 @@ impl VM {
                         let r = self.tape.div(&ta, tb);
                         Ok(Value::Tensor(r))
                     }
+                    (Value::Int(x), Value::Int(y)) => {
+                        if *y == 0 {
+                            return Err("Runtime Error: Division by zero".to_string());
+                        }
+                        Ok(Value::Int(x / y))
+                    }
                     _ => Ok(Value::Float(a.as_float() / b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
