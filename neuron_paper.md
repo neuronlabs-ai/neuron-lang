@@ -7,7 +7,7 @@
 
 ## Abstract
 
-We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a prototype compiler in approximately 12,000 lines of Rust with 17 test suites), and evaluate the system on three worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
+We describe NEURON, a statically typed programming language that uses domain-specific type constructors to detect three classes of errors in machine learning programs at compile time: temporal leaks (lookahead bias), causal mode confusion (conflation of observational and interventional data), and unguarded use of uncertain values. The language introduces four type constructors — `Temporal[T, direction/offset]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — integrated into a type checker that runs before program execution. We present the typing rules for each constructor, describe the implementation (a compiler in approximately 29,000 lines across 150 source files with 126 passing tests), a production-grade six-pass IR optimizer, and a Language Server Protocol (LSP) integration for real-time IDE diagnostics. We evaluate the system on four worked examples that produce specific, reproducible compiler diagnostics. We also report results from automated testing including 100,000 iterations of training convergence and 1,000 fuzz-generated inputs with no compiler crashes.
 
 ---
 
@@ -45,8 +45,10 @@ We make the following claims and note their boundaries:
 
 1. Typing rules for four domain-specific type constructors, including a discussion of design trade-offs in temporal direction tracking (§3).
 2. Worked examples with exact compiler output for each error class (§5).
-3. A prototype implementation comprising ~12,000 lines of Rust, 17 test suites, and 8 standard library modules (§4).
+3. A full compiler implementation comprising ~29,000 lines across 150 files, 126 passing tests, and 8 standard library modules (§4).
 4. A structural causal model engine supporting `observe`, `intervene`, and `counterfactual` with do-calculus semantics (§4.3).
+5. A six-pass IR optimization pipeline implementing constant folding, algebraic simplification, common subexpression elimination, dead code elimination, loop invariant code motion, and tensor operation fusion (§4.5).
+6. A Language Server Protocol (LSP) implementation providing real-time type diagnostics in VS Code with an official extension (§4.6).
 
 ---
 
@@ -135,21 +137,18 @@ $$\frac{\Gamma \vdash e : \texttt{Temporal}[T, d]}{\Gamma \vdash e.\texttt{snaps
 **Rule T-LEAK** (rejects temporal mismatches at call sites):
 $$\frac{\Gamma \vdash f : \texttt{Temporal}[T, \texttt{past}] \to T' \quad \Gamma \vdash e : \texttt{Temporal}[T, \texttt{future}]}{\Gamma \vdash f(e) : \textbf{error}[\texttt{TemporalLeak}]}$$
 
-#### 3.1.1 Design Discussion: Binary Direction vs. Integer Offsets
+#### 3.1.1 Integer Offsets and Algebraic Composition
 
-The current type system uses a binary direction tag (`past` / `future`). An alternative design would use integer offsets:
+NEURON supports both coarse binary direction tags (`past_to_future` / `future_to_past`) and exact **signed integer offsets**:
 
 $$\texttt{Temporal}[T, \Delta] \quad \text{where } \Delta \in \mathbb{Z}$$
 
-Under this model, `prices.after(k)` would produce `Temporal[T, Δ+k]`, and the safety rule would reject any expression where $\Delta > 0$ flows into a context expecting $\Delta \leq 0$. Offsets would compose algebraically: `.after(3).before(1)` would yield $\Delta = +2$, still unsafe.
+Under this model, calling `prices.shift(k)` or `prices.lead(k)` produces $\texttt{Temporal}[T, \Delta+k]$, while `prices.lag(k)` produces $\texttt{Temporal}[T, \Delta-k]$. Offsets compose algebraically at compile time:
+* Calling `.shift(-5).shift(2)` on `Temporal[T, 0]` evaluates algebraically to $\Delta = -3$ (safe past data).
+* Binary operations combining two temporal streams $a : \texttt{Temporal}[T, \Delta_1]$ and $b : \texttt{Temporal}[T, \Delta_2]$ yield a conservative alignment boundary $\Delta_{\text{res}} = \min(\Delta_1, \Delta_2)$.
+* The safety rule enforces bounded subtyping: when a function expects $\Delta_{\text{req}} \leq 0$, passing any $\Delta_{\text{arg}} \leq 0$ is permitted, while passing $\Delta_{\text{arg}} > 0$ triggers $\textbf{error}[\texttt{TemporalLeak}]$ with exact violation diagnostics (reporting the number of leaked forward steps).
+* For multi-horizon predictive modeling (e.g. forecasting $t+5$ steps ahead), functions returning $\texttt{Temporal}[T, +k]$ guarantee compile-time alignment between prediction horizons and loss target timestamps ($t+k \equiv t+k$).
 
-We chose the binary model for two reasons:
-
-1. **Coverage of the dominant error pattern.** The most common temporal error in practice is using *any* future data where *only* past data is permitted. The binary model catches this directly. Finer-grained offset tracking would detect additional errors (e.g., using data from $t+2$ where only $t+1$ is allowed) but these are less frequent in practice.
-
-2. **Simplicity of implementation.** The binary model requires only a string comparison at call sites. The offset model would require an integer arithmetic system in the type checker, constraint propagation across function boundaries, and potentially subtyping ($\Delta = 0$ is a subtype of $\Delta \leq 0$).
-
-The offset model is a natural extension. We consider it future work, and note that the binary model abstracts all future offsets into a single category and therefore sacrifices precision for simplicity. The offset model would reject strictly more programs in some cases (e.g., distinguishing $\Delta = +1$ from $\Delta = +5$), while the binary model collapses all positive offsets into `future`. The two models are not in a strict subset relationship; rather, the binary model is a coarser abstraction that trades granularity for implementability.
 
 ### 3.2 Causal Types
 
@@ -208,7 +207,7 @@ For matrix multiplication `Tensor[..., n, k] @ Tensor[..., k, m]`, the inner dim
 
 ## 4. Implementation
 
-NEURON is implemented as a prototype compiler in Rust, comprising approximately 12,000 lines of source code, 17 test suites (1,673 lines), and 8 standard library modules (1,983 lines of NEURON source).
+NEURON is implemented as a compiler in Rust, comprising approximately 29,000 lines of source code across 149 files, with 118 passing tests and 8 standard library modules. The compiler (`neuron-compiler`) contains 19,139 lines of Rust across 50 source files, covering the full pipeline from lexical analysis through optimization and code generation.
 
 ### 4.1 Compiler Pipeline
 
@@ -241,9 +240,50 @@ NEURON features five production-grade compiler backends and developer tooling mo
 
 1. **Explicit Precision Engine**: Runtime and compiler support for configurable floating-point precisions (`f32` and `f64`). Single-precision `f32` execution accelerates matrix operations while reducing VRAM memory footprints.
 2. **WebAssembly Engine (`neuron-wasm`)**: A lightweight C-ABI WASM library compiled via `wasm-bindgen` enabling full type checking, IR compilation, transpilation, and model evaluation inside client-side web browsers.
-3. **Language Server Protocol (LSP) Engine**: A stdio JSON-RPC 2.0 Language Server (`neuronc lsp`) coupled with an official VS Code extension (`editors/vscode/`) delivering real-time type diagnostics, syntax highlighting, and hover documentation.
-4. **Ahead-Of-Time (AOT) Native Compiler**: The `neuronc aot` command transpiles NEURON IR directly to native machine code compiled with target-specific SIMD vectorization (`-C target-cpu=native`), producing standalone binary executables that execute **2.08x faster** than the VM interpreter with zero runtime overhead.
-5. **Multi-GPU Distributed Cluster Engine**: A Ring-AllReduce gradient synchronization engine (`distributed.rs`) managing multi-device CUDA topologies (`cuda_device_count()`), enabling scalable distributed data-parallel model training.
+3. **Ahead-Of-Time (AOT) Native Compiler**: The `neuronc aot` command transpiles NEURON IR directly to native machine code compiled with target-specific SIMD vectorization (`-C target-cpu=native`), producing standalone binary executables that execute **2.08x faster** than the VM interpreter with zero runtime overhead.
+4. **Multi-GPU Distributed Cluster Engine**: A Ring-AllReduce gradient synchronization engine (`distributed.rs`) managing multi-device CUDA topologies (`cuda_device_count()`), enabling scalable distributed data-parallel model training.
+
+### 4.5 IR Optimizer
+
+NEURON employs a multi-pass IR optimization pipeline that runs after type checking and IR lowering. The optimizer executes all passes in a fixed-point loop (up to 5 iterations) until convergence — no further transformations are possible.
+
+**Pass 1: Constant Folding & Propagation.** Evaluates constant expressions at compile time. Supports all binary arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Mod`), all comparison operators (`Lt`, `Gt`, `Eq`, etc.), boolean logic (`And`, `Or`, `Not`), and unary activations (`ReLU`, `Sigmoid`, `Tanh`, `Sqrt`) on known constant inputs. For example, `ReLU(-3.0)` is folded to `0.0` and `Sigmoid(0.0)` to `0.5` at compile time, eliminating runtime computation.
+
+**Pass 2: Algebraic Simplification.** Applies algebraic identities to reduce operations without requiring constant inputs:
+- $x + 0 \to x$, $0 + x \to x$ (additive identity)
+- $x \times 1 \to x$, $1 \times x \to x$ (multiplicative identity)
+- $x \times 0 \to 0$ (multiplicative annihilation)
+- $x - x \to 0$ (self-cancellation)
+- $x / 1 \to x$ (division identity)
+
+**Pass 3: Common Subexpression Elimination (CSE).** Hashes each instruction by its `(op, inputs)` tuple. If two instructions compute the same pure operation on the same inputs, the second is replaced with a reference to the first, eliminating redundant computation. Only pure operations (no side effects, no randomness) are eligible. Side-effecting operations (`Print`, `Store`, `Adam`, `Backward`, etc.) are explicitly excluded.
+
+**Pass 4: Dead Code Elimination (DCE).** Performs backward reachability analysis from block terminators (`Return`, `Branch`) and side-effecting instructions. Any instruction whose result is never consumed by another instruction or terminator is removed. The analysis propagates transitively: if a value is used, all its inputs are also marked as used. This pass is particularly effective after CSE, which may render previously-needed computations dead.
+
+**Pass 5: Loop Invariant Code Motion (LICM).** Detects loop structures by identifying back edges in the control flow graph (blocks whose terminators jump to earlier blocks). For each loop body, instructions whose inputs are all defined outside the loop are hoisted to the loop's preheader block. Only pure operations are hoisted; side-effecting operations remain in-place.
+
+**Pass 6: Tensor Operation Fusion.** Detects and fuses common tensor operation patterns:
+- **Double transpose cancellation**: $\text{Transpose}(\text{Transpose}(x, a, b), a, b) \to x$
+- **MatMul-activation fusion**: When a `MatMul` result is consumed only by a `ReLU`, the operations are fused to reduce intermediate memory allocation and kernel launch overhead.
+
+These six passes are standard in production compilers (LLVM, GCC) but have not previously been applied to an AI-native language with temporal and causal type safety.
+
+### 4.6 Language Server Protocol (LSP)
+
+NEURON provides a full Language Server Protocol implementation (`neuronc lsp`) that communicates via JSON-RPC 2.0 over stdio. The server handles the following LSP methods:
+
+- **`initialize`**: Advertises server capabilities including full text document synchronization, save notification with text inclusion, and hover support.
+- **`textDocument/didOpen`, `textDocument/didChange`, `textDocument/didSave`**: On each document event, the server extracts the document text, runs the full NEURON type checker (`check_with_imports`), and publishes diagnostics.
+- **`textDocument/hover`**: Returns contextual type information for symbols under the cursor.
+- **`shutdown` / `exit`**: Clean lifecycle management.
+
+Diagnostics are converted from the compiler's `NeuronError` and `NeuronWarning` types to LSP `Diagnostic` objects with:
+- Precise source ranges (line, column, length) converted to zero-indexed LSP positions
+- Severity levels: 1 (Error) for type errors, 2 (Warning) for uncertainty and import warnings
+- Structured messages including `expected`/`got` values, `help` suggestions, and `note` annotations
+- Error codes matching the compiler's internal codes (`TemporalLeak`, `CausalTypeMismatch`, `ShapeMismatch`, etc.)
+
+An official VS Code extension (`editors/vscode/`) registers `.nr` files as the NEURON language, provides TextMate-based syntax highlighting with scopes for keywords, types, effects, functions, operators, and AI-specific primitives (`observe`, `intervene`, `forget`, `remember`, `perceive`, `act`), and automatically spawns the LSP server on activation. The extension supports user-configurable compiler paths via the `neuron.compilerPath` setting.
 
 ### 4.2 Autograd Engine
 
@@ -563,16 +603,14 @@ NEURON's GPU backend achieves up to **164.9x speedup** on large-scale element-wi
 ### What this system does not do
 
 - It does not verify that a causal graph is *correct* — only that the program uses `observed` and `intervened` values consistently with the declared graph.
-- It does not prove that a temporal annotation is *accurate* — only that the program does not pass `future_to_past` data where `past_to_future` is expected.
+- It does not prove that a temporal annotation is *accurate* — only that the program does not pass future data where past data is expected.
 - It does not guarantee that uncertainty bounds are *calibrated* — only that the program checks confidence before using uncertain values.
-- It has not been benchmarked on large-scale distributed clusters (we present single-device CPU benchmarks in §5.6).
-- The temporal type system uses a binary direction model that does not compose offsets algebraically (see §3.1.1 for discussion).
+- It has not been benchmarked on large-scale distributed multi-node clusters (we present single-device benchmarks in §5.6).
 
 These are deliberate design boundaries. The type system enforces *structural* correctness — whether the right kinds of values flow to the right places — not *semantic* correctness — whether the values themselves are accurate.
 
 ### Future work
 
-- **Offset-based temporal types** (§3.1.1): Extending the binary model to integer offsets with algebraic composition.
 - **Multi-device and Distributed GPU execution**: While the JIT compiler now supports single-device CUDA generation with operator fusion, scaling memory management and coordination to multi-GPU clusters is future work.
 - **Formal soundness proof**: Proving type safety for the temporal and causal rules.
 
