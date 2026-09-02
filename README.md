@@ -314,9 +314,13 @@ cd pycheck && pytest
 
 ---
 
-## License
+## License & Commercial Inquiries
 
-Licensed under the [Business Source License 1.1 (BSL 1.1)](LICENSE).
+NEURON is licensed under the [Community and Commercial Enterprise License (BSL 1.1)](LICENSE).
+- **Free for non-commercial research, education, and evaluation.**
+- **Production use, live algorithmic trading, and commercial cloud hosting require an enterprise commercial license.**
+
+For commercial enterprise licensing, hedge fund execution licenses, compliance audit certificates, or custom AOT hardware backends, contact: **`licensing@neuron-lab.org`** | **`sales@neuron-lab.org`**.
 
 ---
 
