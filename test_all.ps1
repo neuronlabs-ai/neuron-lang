@@ -25,7 +25,8 @@ $runExamples = @(
     "qwen_mini_transpiled.nr",
     "stress_test.nr",
     "demo_offset_temporal.nr",
-    "neuro_causal_quant.nr"
+    "neuro_causal_quant.nr",
+    "cognitive_swarm.nr"
 )
 
 Write-Host "================================================================" -ForegroundColor Cyan
