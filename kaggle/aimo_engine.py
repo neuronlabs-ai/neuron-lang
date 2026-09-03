@@ -229,29 +229,77 @@ if not NEURON_BIN:
 
 # ── 3. Robust Code Extractor & Sanitizer ──────────────────────────────────────
 def extract_and_sanitize_code(raw: str) -> str:
-    # 1. Extract block between backticks (matches ```neuron, ```neur, ```rust, or just ```)
+    # 1. Extract block between backticks (matches ```neuron, ```python, ```neur, or generic ```)
     m = re.search(r'```[a-zA-Z0-9_-]*\s*\n(.*?)```', raw, re.DOTALL)
     code = m.group(1).strip() if m else raw.strip()
 
-    # 2. Line-by-line cleanup
+    # 2. Line-by-line conversion & cleanup
     lines = []
+    loop_vars = []
+    has_fn_main = ("fn main" in code)
+
     for line in code.split("\n"):
         stripped = line.strip()
-        if stripped.startswith("```"):
+        if not stripped or stripped.startswith("```") or stripped.startswith("`") or stripped.startswith("def ") or stripped.startswith("import ") or stripped.startswith("<"):
             continue
-        cleaned = re.sub(r";\s*$", "", line)
-        cleaned = re.sub(r"\blet\s+mut\s+", "let ", cleaned)
-        cleaned = re.sub(r"(\w+)\^2", r"(\1 * \1)", cleaned)
-        cleaned = re.sub(r"(\w+)\.powi\(2\)", r"(\1 * \1)", cleaned)
-        cleaned = re.sub(r"\bsqrt\(", "sqrt_newton(", cleaned)
-        cleaned = re.sub(r"(\w+)\s*\+=\s*(\w+)", r"let \1 = \1 + \2", cleaned)
-        lines.append(cleaned)
-    clean_code = "\n".join(lines).strip()
 
-    # 3. Auto-wrap bare code into fn main(): if missing
-    if "fn main" not in clean_code:
-        indented = "\n".join("  " + l for l in clean_code.split("\n") if l.strip())
+        # If already native NEURON fn main, preserve it with standard cleanup
+        if has_fn_main:
+            cleaned = re.sub(r";\s*$", "", line)
+            cleaned = re.sub(r"\blet\s+mut\s+", "let ", cleaned)
+            cleaned = re.sub(r"//", "/", cleaned)
+            cleaned = re.sub(r"(\w+)\^2", r"(\1 * \1)", cleaned)
+            cleaned = re.sub(r"(\w+)\.powi\(2\)", r"(\1 * \1)", cleaned)
+            cleaned = re.sub(r"\bsqrt\(", "sqrt_newton(", cleaned)
+            cleaned = re.sub(r"\bcomb\(", "nCr(", cleaned)
+            cleaned = re.sub(r"(\w+)\s*\+=\s*(.+)", r"let \1 = (\1 + \2)", cleaned)
+            lines.append(cleaned)
+            continue
+
+        # Convert Python `for x in range(a, b):` into NEURON while loop
+        m_for = re.match(r'for\s+(\w+)\s+in\s+range\(([^,]+),\s*([^)]+)\):', stripped)
+        if m_for:
+            var, start, end = m_for.group(1), m_for.group(2).strip(), m_for.group(3).strip()
+            loop_vars.append(var)
+            lines.append(f"  let {var} = {start}")
+            lines.append(f"  while {var} < {end}:")
+            continue
+
+        # Mathematical and syntax mappings
+        l = stripped
+        l = re.sub(r";\s*$", "", l)
+        l = re.sub(r"//", "/", l)
+        l = re.sub(r"\bcomb\(", "nCr(", l)
+        l = re.sub(r"\bsqrt\(", "sqrt_newton(", l)
+        l = re.sub(r"(\w+)\^2", r"(\1 * \1)", l)
+        l = re.sub(r"(\w+)\.powi\(2\)", r"(\1 * \1)", l)
+        l = re.sub(r"(\w+)\s*\+=\s*(.+)", r"let \1 = (\1 + \2)", l)
+
+        # Prepend `let ` to assignments if missing
+        if re.match(r'^[a-zA-Z_]\w*\s*=', l) and not l.startswith("let "):
+            l = "let " + l
+
+        # Convert return into print, close loops, and break
+        if l.startswith("return "):
+            expr = l[7:].strip()
+            for var in reversed(loop_vars):
+                lines.append(f"    let {var} = {var} + 1")
+            loop_vars.clear()
+            lines.append(f"  print({expr})")
+            break
+
+        indent = "    " if loop_vars else "  "
+        lines.append(indent + l)
+
+    # Close any unclosed loops
+    for var in reversed(loop_vars):
+        lines.append(f"    let {var} = {var} + 1")
+
+    if not has_fn_main:
+        indented = "\n".join(lines)
         clean_code = f"fn main():\n{indented}\n"
+    else:
+        clean_code = "\n".join(lines).strip()
 
     return clean_code
 
@@ -264,7 +312,7 @@ def run_neuron(code: str, timeout: float = 3.0) -> Tuple[Optional[int], float, O
 
     start = time.perf_counter()
     try:
-        proc = subprocess.run([NEURON_BIN, "run", temp_path], capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run([NEURON_BIN, "run", temp_path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         ms = (time.perf_counter() - start) * 1000
         for line in reversed(proc.stdout.strip().split("\n")):
             try:
