@@ -166,6 +166,18 @@ fn heron_area(a: Float, b: Float, c: Float) -> Float:
   let val = s * (s - a) * (s - b) * (s - c)
   return sqrt_newton(val)
 
-fn main():
-  let t = count_factor_triples(360)
-  print(t)
+fn dist_sq(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return dx * dx + dy * dy
+
+fn dist_cartesian(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
+  return sqrt_newton(dist_sq(x1, y1, x2, y2))
+
+fn eval_poly(coeffs: List[Int], x: Int) -> Int:
+  let res = 0
+  let i = 0
+  while i < len(coeffs):
+    let res = res * x + coeffs[i]
+    let i = i + 1
+  return res

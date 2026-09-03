@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-kaggle/aimo_engine.py — Sovereign NEURON Competition Kernel (Elite Strategy Edition)
-Implements all 4 High-Leverage Competition Strategies:
-  1. Dynamic Compute Budgeting (The 9-Hour Bank & Time Pacer)
-  2. Cartesianization for Geometry (Analytic coordinate polynomials in scope)
-  3. Orthogonal Multi-Perspective Prompting (Algebraic, Inductive, Cartesian, Bounded Search)
-  4. Consensus Early-Stopping (Short-circuits immediately when agreement threshold is met)
+kaggle/aimo_engine.py — Sovereign NEURON Competition Kernel (Elite Strategy Edition v2)
+Features:
+  1. Embedded Math Preamble (Number Theory, Combinatorics, Geometry)
+  2. Robust Code Extractor & Auto-Wrapper (handles missing fn main, backtick variations)
+  3. Automated Syntax Sanitizer (semicolons, let mut, powi, sqrt -> sqrt_newton)
+  4. Few-Shot Guided Prompting with Orthogonal Perspectives
+  5. Dynamic Compute Budgeting (BudgetPacer) & Consensus Early-Stopping
 """
 
 import os
@@ -19,7 +20,7 @@ import subprocess
 import urllib.request
 from typing import Optional, List, Dict, Tuple
 
-# ── 1. Embedded Math Preamble (Number Theory, Combinatorics, Geometry) ────────
+# ── 1. Embedded Math Preamble ────────────────────────────────────────────────
 MATH_PREAMBLE = """
 fn gcd(a: Int, b: Int) -> Int:
   let x = a
@@ -187,7 +188,6 @@ fn heron_area(a: Float, b: Float, c: Float) -> Float:
   let val = s * (s - a) * (s - b) * (s - c)
   return sqrt_newton(val)
 
-// Cartesian Geometry Primitives
 fn dist_sq(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
   let dx = x2 - x1
   let dy = y2 - y1
@@ -195,6 +195,14 @@ fn dist_sq(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
 
 fn dist_cartesian(x1: Float, y1: Float, x2: Float, y2: Float) -> Float:
   return sqrt_newton(dist_sq(x1, y1, x2, y2))
+
+fn eval_poly(coeffs: List[Int], x: Int) -> Int:
+  let res = 0
+  let i = 0
+  while i < len(coeffs):
+    let res = res * x + coeffs[i]
+    let i = i + 1
+  return res
 """
 
 # ── 2. Compiler Discovery ────────────────────────────────────────────────────
@@ -219,19 +227,37 @@ for p in POSSIBLE_BINS:
 if not NEURON_BIN:
     NEURON_BIN = "neuronc"
 
-# ── 3. Code Sanitizer & Sandbox Runner ───────────────────────────────────────
-def sanitize_neuron_code(code: str) -> str:
+# ── 3. Robust Code Extractor & Sanitizer ──────────────────────────────────────
+def extract_and_sanitize_code(raw: str) -> str:
+    # 1. Extract block between backticks (matches ```neuron, ```neur, ```rust, or just ```)
+    m = re.search(r'```[a-zA-Z0-9_-]*\s*\n(.*?)```', raw, re.DOTALL)
+    code = m.group(1).strip() if m else raw.strip()
+
+    # 2. Line-by-line cleanup
     lines = []
     for line in code.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            continue
         cleaned = re.sub(r";\s*$", "", line)
         cleaned = re.sub(r"\blet\s+mut\s+", "let ", cleaned)
+        cleaned = re.sub(r"(\w+)\^2", r"(\1 * \1)", cleaned)
         cleaned = re.sub(r"(\w+)\.powi\(2\)", r"(\1 * \1)", cleaned)
+        cleaned = re.sub(r"\bsqrt\(", "sqrt_newton(", cleaned)
         cleaned = re.sub(r"(\w+)\s*\+=\s*(\w+)", r"let \1 = \1 + \2", cleaned)
         lines.append(cleaned)
-    return "\n".join(lines)
+    clean_code = "\n".join(lines).strip()
 
-def run_neuron(user_code: str, timeout: float = 3.0) -> Tuple[Optional[int], float, Optional[str]]:
-    full_code = f"{MATH_PREAMBLE}\n\n{sanitize_neuron_code(user_code)}\n"
+    # 3. Auto-wrap bare code into fn main(): if missing
+    if "fn main" not in clean_code:
+        indented = "\n".join("  " + l for l in clean_code.split("\n") if l.strip())
+        clean_code = f"fn main():\n{indented}\n"
+
+    return clean_code
+
+def run_neuron(code: str, timeout: float = 3.0) -> Tuple[Optional[int], float, Optional[str]]:
+    sanitized = extract_and_sanitize_code(code)
+    full_code = f"{MATH_PREAMBLE}\n\n{sanitized}\n"
     with tempfile.NamedTemporaryFile(suffix=".nr", delete=False, mode="w", encoding="utf-8") as f:
         f.write(full_code)
         temp_path = f.name
@@ -257,9 +283,8 @@ def run_neuron(user_code: str, timeout: float = 3.0) -> Tuple[Optional[int], flo
             try: os.remove(temp_path)
             except OSError: pass
 
-# ── 4. Dynamic Budget Pacer (Strategy 1) ──────────────────────────────────────
+# ── 4. Dynamic Budget Pacer ──────────────────────────────────────────────────
 class BudgetPacer:
-    """Manages the 9-hour (32,400s) competition bank across 50 problems."""
     def __init__(self, total_problems: int, max_total_seconds: float = 31000.0):
         self.total_problems = total_problems
         self.max_total_seconds = max_total_seconds
@@ -272,22 +297,73 @@ class BudgetPacer:
         time_per_prob = remaining_time / remaining_probs
 
         if time_per_prob > 240:
-            return 8   # Banked surplus: deep search
+            return 8
         elif time_per_prob > 90:
-            return 5   # Normal budget
+            return 5
         else:
-            return 3   # Conserve remaining time
+            return 3
 
-# ── 5. Orthogonal Perspectives (Strategy 2 & 3) ──────────────────────────────
+# ── 5. Orthogonal Perspectives & Few-Shot Prompts ────────────────────────────
+FEW_SHOT_GUIDE = """
+Example 1 (Modular Arithmetic):
+Problem: Find remainder of 7^2024 mod 1000.
+```neuron
+fn main():
+  let ans = mod_pow(7, 2024, 1000)
+  print(ans)
+```
+
+Example 2 (Algebra & Invariants):
+Problem: Let x + y = 20 and x * y = 96. Find x^2 + y^2.
+```neuron
+fn main():
+  let s = 20
+  let p = 96
+  let ans = s * s - 2 * p
+  print(ans)
+```
+
+Example 3 (Geometry):
+Problem: Find the perimeter of a right triangle with hypotenuse 25 and inradius 4.
+```neuron
+fn main():
+  let c = 25
+  let r = 4
+  let a_plus_b = c + 2 * r
+  let perimeter = a_plus_b + c
+  print(perimeter)
+```
+
+Example 4 (Finite Summation / Direct Simulation):
+Problem: Find remainder when sum of ((k choose 2) choose 2) for k=3 to 40 is divided by 1000.
+```neuron
+fn main():
+  let total = 0
+  let k = 3
+  while k <= 40:
+    let m = (k * (k - 1)) / 2
+    let term = (m * (m - 1)) / 2
+    let total = (total + term) % 1000
+    let k = k + 1
+  print(total)
+```
+
+Example 5 (Polynomial Roots & Shifts via eval_poly):
+Problem: Let r, s, t be roots of x^3 - 7*x^2 + 14*x - 8 = 0. Find (1+r)*(1+s)*(1+t).
+```neuron
+fn main():
+  let coeffs = [1, -7, 14, -8]
+  let p_minus1 = eval_poly(coeffs, -1)
+  let ans = 0 - p_minus1
+  print(ans)
+```
+"""
+
 PERSPECTIVES = [
-    # Perspective 1: Direct Algebraic / Invariant Reduction
-    "Approach: Direct deduction. Identify algebraic invariants, symmetry, or exact recurrence relationships.",
-    # Perspective 2: Small-Case Induction
-    "Approach: Small-case induction. Test small values (n=1, 2, 3, 4) in a loop, identify the pattern, and evaluate at target.",
-    # Perspective 3: Cartesian / Coordinate Geometry (Strategy 2)
-    "Approach: Coordinate geometry (Cartesianization). Map vertices to (x, y) coordinates, convert constraints into quadratic distance/slope equations, and solve.",
-    # Perspective 4: Bounded Sieve / Search
-    "Approach: Bounded search. Implement an efficient while-loop search over the feasible parameter space."
+    "Perspective 1 (Algebraic Deduction): Identify algebraic invariants, symmetry, or exact recurrence equations.",
+    "Perspective 2 (Small-Case Induction): Evaluate small cases (n=1,2,3) in a loop, find the recurrence pattern, and extrapolate.",
+    "Perspective 3 (Coordinate Geometry): Map vertices to (x, y) coordinates and solve distance/slope polynomials.",
+    "Perspective 4 (Bounded Search): Implement an efficient while-loop search over the feasible parameter space."
 ]
 
 # ── 6. Two-Headed Solver Engine ──────────────────────────────────────────────
@@ -405,7 +481,7 @@ class AIMOEngine:
 
     def solve_llm_candidates(self, problem: str, budget: int = 4) -> Optional[int]:
         """
-        Head B: Orthogonal Multi-Perspective Prompting + Early-Stopping (Strategies 3 & 4).
+        Head B: Orthogonal Multi-Perspective Prompting + Self-Correction Retry + Early-Stopping.
         """
         votes: Dict[int, int] = {}
 
@@ -414,31 +490,37 @@ class AIMOEngine:
             temp = 0.2 + (i * 0.15)
             prompt = f"""You are an expert mathematical competition solver. Write concise NEURON code to solve this problem.
 
-PRE-DEFINED HELPERS ALREADY IN SCOPE:
+PRE-DEFINED HELPERS IN SCOPE:
 - gcd, lcm, mod_pow, is_prime, count_divisors, sum_divisors
 - nPr, nCr, stars_and_bars, derangements, catalan, count_factor_triples
 - heron_area, sqrt_newton, dist_sq, dist_cartesian
 
 RULES:
-1. Write ONLY your `fn main():` function.
+1. Always write `fn main():` and print the final integer answer with `print(ans)`.
 2. Variables: 'let x = 10'. To update: 'let x = x + 1'. NO semicolons ';', NO 'let mut'.
 3. Loops: 'while condition:'.
-4. Print final answer in [0, 999]: 'print(ans)'. Output ONLY code in ```neuron ... ``` tags.
+4. Wrap your code inside ```neuron ... ``` tags.
 
-PERSPECTIVE GUIDANCE:
+{FEW_SHOT_GUIDE}
+
+STRATEGY GUIDANCE:
 {perspective}
 
 Problem: {problem}"""
 
             try:
                 raw = self.query_llm(prompt, temperature=temp)
-                m = re.search(r'```(?:neuron)?\s*\n(.*?)```', raw, re.DOTALL)
-                code = m.group(1) if m else raw
-                ans, ms, err = run_neuron(code)
+                ans, ms, err = run_neuron(raw)
+
+                # Retry once if compilation failed
+                if ans is None and err:
+                    retry_prompt = f"{prompt}\n\nYour previous attempt had an error:\n{err[:150]}\nPlease fix and output ONLY code inside ```neuron ... ``` tags."
+                    raw_retry = self.query_llm(retry_prompt, temperature=temp)
+                    ans, ms, _ = run_neuron(raw_retry)
+
                 if ans is not None:
                     votes[ans] = votes.get(ans, 0) + 1
-                    # Strategy 4: Consensus Early-Stopping
-                    # If 2 or more candidates agree on an answer, short-circuit!
+                    # Early stopping: if 2 independent candidates agree, short-circuit!
                     if votes[ans] >= 2:
                         return ans
             except Exception:
@@ -449,13 +531,10 @@ Problem: {problem}"""
         return None
 
     def solve(self, problem: str, budget: int = 4) -> int:
-        """Master solver pipeline: Head A -> Head B with Budget -> Fallback 0."""
-        # 1. Deterministic Fast-Path
         fast_ans = self.solve_deterministic(problem)
         if fast_ans is not None:
             return fast_ans
 
-        # 2. LLM with Orthogonal Perspectives & Early-Stopping
         try:
             llm_ans = self.solve_llm_candidates(problem, budget=budget)
             if llm_ans is not None:

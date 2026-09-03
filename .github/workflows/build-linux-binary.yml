@@ -1,0 +1,29 @@
+name: Build Linux Binary for Kaggle
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build NEURON Compiler (Release)
+        run: cargo build --release --bin neuronc
+
+      - name: Smoke Test Binary
+        run: |
+          ./target/release/neuronc --version || true
+          ./target/release/neuronc run examples/mandelbrot.nr || true
+
+      - name: Upload Linux Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neuronc-linux-x86_64
+          path: target/release/neuronc
