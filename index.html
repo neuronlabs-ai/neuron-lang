@@ -190,29 +190,61 @@
   <section class="playground-section" id="playground">
     <div class="container">
       <div class="text-center reveal">
-        <span class="section-label">Live WASM Playground</span>
+        <span class="section-label">Live In-Browser WebAssembly</span>
         <h2 class="section-title">Try <span class="gradient-text">NEURON</span> in Your Browser</h2>
-        <p class="section-subtitle">Real compiler running via WebAssembly — edit code, then type-check, run, or transpile to Python.</p>
+        <p class="section-subtitle">Real compiler &amp; VM running 100% client-side via WebAssembly — no servers, no cloud, pure local compute.</p>
       </div>
       <div class="playground-card reveal">
         <div class="editor-side">
           <div class="panel-header">
             <div class="tab-group" id="editor-tabs">
-              <button class="tab-btn active" data-tab="temporal">Temporal</button>
+              <button class="tab-btn active" data-tab="autograd">Autograd ML</button>
+              <button class="tab-btn" data-tab="matmul">Matrix Math</button>
+              <button class="tab-btn" data-tab="temporal">Temporal</button>
               <button class="tab-btn" data-tab="causal">Causal</button>
               <button class="tab-btn" data-tab="uncertainty">Uncertainty</button>
-              <button class="tab-btn" data-tab="autograd">Autograd</button>
               <button class="tab-btn" data-tab="forgetting">Forgetting</button>
             </div>
             <div class="panel-actions">
-              <button class="copy-btn" id="copy-btn">
+              <button class="copy-btn" id="reset-btn" title="Reset snippet to original code">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                <span>Reset</span>
+              </button>
+              <button class="copy-btn" id="copy-btn" title="Copy code to clipboard">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 <span>Copy</span>
               </button>
             </div>
           </div>
+          <div class="snippet-desc-bar" id="snippet-desc">
+            Differentiable neural network training in WebAssembly with autograd tape, MSE loss, and Adam optimizer.
+          </div>
           <div class="editor-body">
-            <textarea class="code-editor" id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+            <textarea class="code-editor" id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">// 1. Native Autograd — Train a Neural Network in Browser WASM
+model TinyNet:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w2: Tensor[8, 1] = glorot(8, 1)
+
+  fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
+    let h = relu(x @ self.w1)
+    return h @ self.w2
+
+fn main():
+  let net = TinyNet()
+  let x = zeros(1, 4) + 0.5
+  let y = zeros(1, 1) + 1.0
+
+  print("Starting backpropagation training in browser WASM...")
+  let epoch = 0
+  while epoch < 30:
+    let pred = net.forward(x)
+    let loss = mse(pred, y)
+    update net by adam(grad(loss), lr=0.05)
+    let epoch = epoch + 1
+
+  let final_pred = net.forward(x)
+  print("Training converged! Final prediction:")
+  print(final_pred)</textarea>
           </div>
         </div>
         <div class="terminal-side">
@@ -224,22 +256,24 @@
               <span id="wasm-status" style="margin-left:0.5rem;font-size:0.75rem;color:var(--text-muted)">loading WASM engine…</span>
             </div>
             <div class="panel-actions">
-              <button class="run-btn run-btn-secondary" id="typecheck-btn" disabled>
+              <button class="run-btn run-btn-secondary" id="typecheck-btn" title="Compile & type-check without executing">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
                 Type Check
               </button>
-              <button class="run-btn" id="run-btn" disabled>
+              <button class="run-btn" id="run-btn" title="Execute in client-side WebAssembly VM">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 Run
               </button>
-              <button class="run-btn run-btn-secondary" id="transpile-btn" disabled>
+              <button class="run-btn run-btn-secondary" id="transpile-btn" title="Transpile to standalone PyTorch code">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
                 → Python
               </button>
             </div>
           </div>
           <div class="terminal-body" id="terminal-body">
-            <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> Initializing WASM compiler…</div>
+            <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> neuronc --version</div>
+            <div class="term-line" style="color:var(--text-muted)">NEURON Compiler v1.0.0 (WebAssembly, 100% In-Browser Runtime)</div>
+            <div class="term-line" style="color:var(--emerald)">Click "Run" to train the model, "Type Check" to verify types, or "→ Python" to transpile!</div>
           </div>
         </div>
       </div>

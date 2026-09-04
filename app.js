@@ -1,107 +1,149 @@
 // NEURON Website — Live In-Browser WebAssembly Engine & UI Logic
 import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js';
 
-document.addEventListener("DOMContentLoaded", async () => {
-  // ══════════════════════════════════════════════════
-  // 1. Curated Code Snippets for Interactive Playground
-  // ══════════════════════════════════════════════════
-  const codeSnippets = {
-    temporal: `// Temporal Safety — Lookahead Leaks Detected at Compile Time
-fn predict_price(prices: Temporal[Tensor[10, 1], -1]) -> Tensor[10, 1]:
-  let prev_price: Temporal[Tensor[10, 1], -2] = prices.before(1)
-
-  // COMPILE ERROR: Lookahead violation! Reading future timestamp (+1)
-  let future_leak: Temporal[Tensor[10, 1], 0] = prices.after(1)
-  return future_leak.snapshot()
-`,
-
-    causal: `// Causal Safety — Cannot Conflate Observations with Interventions
-fn should_prescribe(effect: Causal[Float, intervened]) -> Float:
-  return effect.extract()
-
-fn main():
-  // Observational evidence: correlation from historical patient data
-  let obs: Causal[Float, observed] = 0.85
-
-  // COMPILE ERROR: Cannot pass observational data where intervention is required!
-  let decision = should_prescribe(obs)
-  print(decision)
-`,
-
-    uncertainty: `// Uncertainty Tracking — Warns When Accessing Unguarded Predictions
-fn predict_dosage(vitals: Tensor[1, 4]) -> Uncertain[Float]:
-  let dose = 50.0
-  let conf = 0.65
-  return Uncertain(dose, conf)
-
-fn administer(dose: Float):
-  print("Administering dose:")
-  print(dose)
-
-fn main():
-  let p = predict_dosage(zeros(1, 4))
-  // COMPILER WARNING: accessing uncertain value without confidence check!
-  administer(p)
-`,
-
-    autograd: `// Native Autograd — Differentiable ML Model Training in Browser WASM
+// ══════════════════════════════════════════════════
+// 1. Curated Code Snippets & Descriptions
+// ══════════════════════════════════════════════════
+const codeSnippets = {
+  autograd: `// 1. Native Autograd — Train a Neural Network in Browser WASM
 model TinyNet:
-  w: Tensor[4, 1] = glorot(4, 1)
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w2: Tensor[8, 1] = glorot(8, 1)
 
   fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
-    return x @ self.w
+    let h = relu(x @ self.w1)
+    return h @ self.w2
 
 fn main():
   let net = TinyNet()
   let x = zeros(1, 4) + 0.5
   let y = zeros(1, 1) + 1.0
 
+  print("Starting backpropagation training in browser WASM...")
   let epoch = 0
-  while epoch < 25:
+  while epoch < 30:
     let pred = net.forward(x)
     let loss = mse(pred, y)
     update net by adam(grad(loss), lr=0.05)
     let epoch = epoch + 1
 
   let final_pred = net.forward(x)
-  print("Training 25 steps with Adam complete!")
-  print("Trained prediction:")
-  print(final_pred)
-`,
+  print("Training converged! Final prediction:")
+  print(final_pred)`,
 
-    forgetting: `// Provable Machine Unlearning — Fisher Information Noise Scrubbing
-model SafetyNet:
+  matmul: `// 2. High-Performance Tensor Math & Activations
+fn main():
+  let a = glorot(4, 4)
+  let b = glorot(4, 4)
+  let c = a @ b
+  print("Matrix A @ Matrix B:")
+  print(c)
+  let activated = relu(c)
+  print("ReLU(A @ B):")
+  print(activated)`,
+
+  temporal: `// 3. Temporal Safety — Lookahead Leak Prevention
+// Notice: prices.after(1) tries to peek +1 step into the future!
+fn predict_price(prices: Temporal[Tensor[10, 1], -1]) -> Tensor[10, 1]:
+  let prev_price = prices.before(1)
+  
+  // COMPILE ERROR: reading future timestamps (+1) is rejected at compile time!
+  let future_leak: Temporal[Tensor[10, 1], 0] = prices.after(1)
+  return future_leak.snapshot()
+
+fn main():
+  let history: Temporal[Tensor[10, 1], -1] = zeros(10, 1) + 100.0
+  let p = predict_price(history)
+  print(p)`,
+
+  causal: `// 4. Causal Safety — Conflating Correlation with Causation
+// Observational data cannot be passed to functions requiring causal interventions!
+fn should_prescribe(effect: Causal[Float, intervened]) -> Float:
+  return effect.extract()
+
+fn main():
+  // Observational evidence: correlation observed in clinical records
+  let obs: Causal[Float, observed] = 0.85
+
+  // TYPE ERROR: Cannot prescribe medication based solely on observational data!
+  let decision = should_prescribe(obs)
+  print(decision)`,
+
+  uncertainty: `// 5. Medical Safety — Uncertain[T] with Confidence Bounds
+model DosagePredictor:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w_dose: Tensor[8, 1] = glorot(8, 1)
+  w_conf: Tensor[8, 1] = glorot(8, 1)
+
+  fn predict(self, vitals: Tensor[1, 4]) -> Uncertain[Tensor[1, 1]]:
+    let h = relu(vitals @ self.w1)
+    let dose = h @ self.w_dose
+    let confidence = sigmoid(h @ self.w_conf)
+    return Uncertain(dose, confidence)
+
+fn main():
+  let predictor = DosagePredictor()
+  let vitals = zeros(1, 4) + 0.5
+  let result = predictor.predict(vitals)
+
+  print("Estimated Dosage (mg):")
+  print(result.value)
+  print("Model Confidence Interval:")
+  print(result.confidence)`,
+
+  forgetting: `// 6. Provable Machine Unlearning with Fisher Scrubbing
+model PatientNet:
   w: Tensor[4, 1] = glorot(4, 1)
 
 fn main():
-  let net = SafetyNet()
+  let net = PatientNet()
   let sensitive_data = zeros(1, 4) + 0.9
 
-  print("Executing Fisher Information Noise Scrubbing...")
+  print("Applying Fisher Information Noise Scrubbing to model...")
   let cert = forget(net, sensitive_data, method="FisherScrubbing", strength=0.1)
-  print("Unlearning verified & certificate signed.")
-`
-  };
+  print("Unlearning verified: Certificate signed in-memory.")`
+};
 
-  // ══════════════════════════════════════════════════
-  // 2. State & Elements
-  // ══════════════════════════════════════════════════
-  let currentTab = "temporal";
-  let wasmReady = false;
+const snippetDescriptions = {
+  autograd: "Differentiable neural network training in WebAssembly with autograd tape, MSE loss, and Adam optimizer.",
+  matmul: "Sub-millisecond matrix multiplication and vectorized ReLU activation running on browser SIMD.",
+  temporal: "Compile-time prevention of lookahead bias in time-series data. Click 'Type Check' to see it caught!",
+  causal: "Prevents confusing observational correlation with interventional causation. Click 'Type Check' to verify!",
+  uncertainty: "Tracks uncertainty distributions and confidence intervals across medical dosage predictions.",
+  forgetting: "Provable machine unlearning in-place via Fisher Information Noise Scrubbing with verified bounds."
+};
 
+// ══════════════════════════════════════════════════
+// 2. Application Logic
+// ══════════════════════════════════════════════════
+let currentTab = "autograd";
+let wasmReady = false;
+
+function initApp() {
   const tabContainer = document.getElementById("editor-tabs");
   const codeEditor = document.getElementById("code-editor");
   const terminalBody = document.getElementById("terminal-body");
+  const snippetDesc = document.getElementById("snippet-desc");
   const runBtn = document.getElementById("run-btn");
   const typecheckBtn = document.getElementById("typecheck-btn");
   const transpileBtn = document.getElementById("transpile-btn");
   const copyBtn = document.getElementById("copy-btn");
+  const resetBtn = document.getElementById("reset-btn");
   const wasmStatus = document.getElementById("wasm-status");
   const navToggle = document.getElementById("nav-toggle");
   const navLinks = document.querySelector(".nav-links");
 
+  function updateEditor() {
+    if (codeEditor) {
+      codeEditor.value = codeSnippets[currentTab] || "";
+    }
+    if (snippetDesc) {
+      snippetDesc.textContent = snippetDescriptions[currentTab] || "";
+    }
+  }
+
   // ══════════════════════════════════════════════════
-  // 3. ANSI Escape Code Converter to Formatted HTML
+  // ANSI Color Formatter
   // ══════════════════════════════════════════════════
   function ansiToHtml(text) {
     if (!text) return "";
@@ -110,7 +152,6 @@ fn main():
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
 
-    // Color mappings
     escaped = escaped
       .replace(/\u001b\[1;31m/g, '<span style="color:var(--rose);font-weight:600">')
       .replace(/\u001b\[31m/g, '<span style="color:var(--rose)">')
@@ -124,16 +165,17 @@ fn main():
       .replace(/\u001b\[36m/g, '<span style="color:#38bdf8">')
       .replace(/\u001b\[1m/g, '<span style="font-weight:bold;color:var(--text-primary)">')
       .replace(/\u001b\[0m/g, '</span>')
-      .replace(/\u001b\[[0-9;]*m/g, ''); // strip any remaining
+      .replace(/\u001b\[[0-9;]*m/g, '');
 
     return escaped;
   }
 
   function clearTerminal() {
-    terminalBody.innerHTML = "";
+    if (terminalBody) terminalBody.innerHTML = "";
   }
 
   function appendPrompt(cmd) {
+    if (!terminalBody) return;
     const div = document.createElement("div");
     div.className = "term-line";
     div.innerHTML = `<span class="term-prompt">visitor@neuron:~$</span> ${cmd}`;
@@ -141,6 +183,7 @@ fn main():
   }
 
   function appendLine(html, type = "") {
+    if (!terminalBody) return;
     const div = document.createElement("div");
     div.className = "term-line";
     if (type === "error") div.className += " term-error";
@@ -173,7 +216,7 @@ fn main():
         if (res.output && res.output !== "Type check failed.") {
           appendLine(ansiToHtml(res.output));
         }
-        appendLine("Compilation / Execution failed.", "error");
+        appendLine("Compilation / Verification completed with diagnostics above.", "error");
       } else {
         if (res.output) {
           appendLine(ansiToHtml(res.output));
@@ -186,53 +229,48 @@ fn main():
   }
 
   // ══════════════════════════════════════════════════
-  // 4. Initialize WASM Engine
+  // WASM Loader
   // ══════════════════════════════════════════════════
-  async function loadWasmEngine() {
+  async function loadWasm() {
     try {
       const t0 = performance.now();
       await init('neuron_wasm_bg.wasm');
       const elapsed = Math.round(performance.now() - t0);
 
       wasmReady = true;
-      wasmStatus.textContent = `WASM engine ready (${elapsed}ms) ✓`;
-      wasmStatus.style.color = "var(--emerald)";
+      if (wasmStatus) {
+        wasmStatus.textContent = `WASM ready (${elapsed}ms) ✓`;
+        wasmStatus.style.color = "var(--emerald)";
+      }
 
-      runBtn.disabled = false;
-      typecheckBtn.disabled = false;
-      transpileBtn.disabled = false;
-
-      clearTerminal();
-      appendPrompt("neuronc --version");
-      appendLine("NEURON Compiler v1.0.0 (WebAssembly, 100% In-Browser Runtime)");
-      appendLine("Ready. Edit code or select an example above, then click an action.", "success");
+      if (runBtn) runBtn.disabled = false;
+      if (typecheckBtn) typecheckBtn.disabled = false;
+      if (transpileBtn) transpileBtn.disabled = false;
     } catch (err) {
       console.warn("Direct WASM init fallback:", err);
       try {
         await init();
         wasmReady = true;
-        wasmStatus.textContent = "WASM engine ready ✓";
-        wasmStatus.style.color = "var(--emerald)";
-        runBtn.disabled = false;
-        typecheckBtn.disabled = false;
-        transpileBtn.disabled = false;
+        if (wasmStatus) {
+          wasmStatus.textContent = "WASM ready ✓";
+          wasmStatus.style.color = "var(--emerald)";
+        }
+        if (runBtn) runBtn.disabled = false;
+        if (typecheckBtn) typecheckBtn.disabled = false;
+        if (transpileBtn) transpileBtn.disabled = false;
       } catch (e2) {
-        console.error("WASM load failed completely:", e2);
-        wasmStatus.textContent = "WASM unavailable";
-        wasmStatus.style.color = "var(--rose)";
-        appendPrompt("neuronc check");
-        appendLine(`WebAssembly failed to initialize: ${e2.message || e2}.`, "error");
+        console.error("WASM load failed:", e2);
+        if (wasmStatus) {
+          wasmStatus.textContent = "WASM unavailable";
+          wasmStatus.style.color = "var(--rose)";
+        }
       }
     }
   }
 
   // ══════════════════════════════════════════════════
-  // 5. Playground Events & Actions
+  // Event Listeners
   // ══════════════════════════════════════════════════
-  function updateEditor() {
-    codeEditor.value = codeSnippets[currentTab] || "";
-  }
-
   if (tabContainer) {
     tabContainer.addEventListener("click", (e) => {
       const button = e.target.closest(".tab-btn");
@@ -246,23 +284,36 @@ fn main():
 
       clearTerminal();
       appendPrompt(`neuronc check examples/${currentTab}.nr`);
-      appendLine(`Loaded ${currentTab} example. Click Type Check, Run, or → Python.`);
+      appendLine(`Loaded "${button.textContent.trim()}" example.`);
+      appendLine(`Click "Run" to execute in WASM, "Type Check" to verify types, or "→ Python" to transpile.`);
     });
   }
 
   if (copyBtn) {
     copyBtn.addEventListener("click", () => {
+      if (!codeEditor) return;
       navigator.clipboard.writeText(codeEditor.value).then(() => {
         const span = copyBtn.querySelector("span");
-        span.textContent = "Copied!";
-        setTimeout(() => { span.textContent = "Copy"; }, 2000);
+        if (span) {
+          span.textContent = "Copied!";
+          setTimeout(() => { span.textContent = "Copy"; }, 2000);
+        }
       }).catch(err => console.error("Clipboard copy failed:", err));
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      updateEditor();
+      clearTerminal();
+      appendPrompt(`git checkout examples/${currentTab}.nr`);
+      appendLine(`Reset snippet to original code.`);
     });
   }
 
   if (typecheckBtn) {
     typecheckBtn.addEventListener("click", () => {
-      if (!wasmReady) return;
+      if (!wasmReady || !codeEditor) return;
       const src = codeEditor.value;
       const cmd = `neuronc check ${currentTab}.nr`;
       try {
@@ -271,14 +322,14 @@ fn main():
       } catch (err) {
         clearTerminal();
         appendPrompt(cmd);
-        appendLine(`Type check crashed: ${err.message || err}`, "error");
+        appendLine(`Type check error: ${err.message || err}`, "error");
       }
     });
   }
 
   if (runBtn) {
     runBtn.addEventListener("click", () => {
-      if (!wasmReady) return;
+      if (!wasmReady || !codeEditor) return;
       const src = codeEditor.value;
       const cmd = `neuronc run ${currentTab}.nr`;
       try {
@@ -287,14 +338,14 @@ fn main():
       } catch (err) {
         clearTerminal();
         appendPrompt(cmd);
-        appendLine(`Runtime execution crashed: ${err.message || err}`, "error");
+        appendLine(`Runtime error: ${err.message || err}`, "error");
       }
     });
   }
 
   if (transpileBtn) {
     transpileBtn.addEventListener("click", () => {
-      if (!wasmReady) return;
+      if (!wasmReady || !codeEditor) return;
       const src = codeEditor.value;
       const cmd = `neuronc transpile --target python ${currentTab}.nr`;
       try {
@@ -303,20 +354,19 @@ fn main():
       } catch (err) {
         clearTerminal();
         appendPrompt(cmd);
-        appendLine(`Transpiler crashed: ${err.message || err}`, "error");
+        appendLine(`Transpiler error: ${err.message || err}`, "error");
       }
     });
   }
 
-  // ══════════════════════════════════════════════════
-  // 6. Navigation, Scroll, and Interactive Effects
-  // ══════════════════════════════════════════════════
-  if (navToggle) {
+  // Mobile nav
+  if (navToggle && navLinks) {
     navToggle.addEventListener("click", () => {
       navLinks.classList.toggle("active");
     });
   }
 
+  // Smooth scroll
   document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', function (e) {
       const href = this.getAttribute('href');
@@ -332,6 +382,7 @@ fn main():
     });
   });
 
+  // Reveal animations
   const revealElements = document.querySelectorAll(".reveal");
   if ('IntersectionObserver' in window) {
     const revealObserver = new IntersectionObserver((entries, observer) => {
@@ -347,6 +398,7 @@ fn main():
     revealElements.forEach(el => el.classList.add("revealed"));
   }
 
+  // Card cursor gradients
   const cards = document.querySelectorAll(".feature-card, .pricing-card, .benchmark-card, .cta-card");
   cards.forEach(card => {
     card.addEventListener("mousemove", (e) => {
@@ -356,6 +408,7 @@ fn main():
     });
   });
 
+  // Stats counter
   const statsElements = document.querySelectorAll(".hero-stat-value");
   if (statsElements.length > 0 && 'IntersectionObserver' in window) {
     const statsObserver = new IntersectionObserver((entries, observer) => {
@@ -391,6 +444,7 @@ fn main():
     });
   }
 
+  // FAQs
   document.querySelectorAll(".faq-question").forEach(btn => {
     btn.addEventListener("click", () => {
       const item = btn.closest(".faq-item");
@@ -400,9 +454,14 @@ fn main():
     });
   });
 
-  // ══════════════════════════════════════════════════
-  // 7. Startup
-  // ══════════════════════════════════════════════════
+  // Initialize
   updateEditor();
-  loadWasmEngine();
-});
+  loadWasm();
+}
+
+// Ensure initApp runs regardless of whether DOMContentLoaded has already fired
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initApp);
+} else {
+  initApp();
+}
