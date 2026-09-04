@@ -58,5 +58,6 @@ out/
 # Scratch & temporary directories
 scratch/
 models/
+wasm/pkg/
 test_math_cap.nr
 tools/submission.csv
