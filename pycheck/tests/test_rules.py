@@ -34,6 +34,20 @@ def _check(rule, code, expect_hit=True, in_loop=False, loop_var=None):
     ctx = AnalysisContext(code.split('\n'), "<test>")
     ctx.in_loop = in_loop
     ctx.loop_var = loop_var
+    # Populate constants and assignments
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    val = None
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, (int, float)):
+                        val = node.value.value
+                    elif isinstance(node.value, ast.UnaryOp) and isinstance(node.value.op, ast.USub):
+                        if isinstance(node.value.operand, ast.Constant) and isinstance(node.value.operand.value, (int, float)):
+                            val = -node.value.operand.value
+                    if val is not None:
+                        ctx.constants[target.id] = val
+                    ctx.assignments[target.id] = node.value
     hits = []
     for node in ast.walk(tree):
         hits.extend(rule.check_node(node, ctx))
@@ -57,6 +71,13 @@ class TestT001:
 
     def test_silent_on_positive_shift(self):
         _check(T001_ShiftNegative(), "df['x'] = df['close'].shift(1)", expect_hit=False)
+
+    def test_fires_on_negative_shift_alias(self):
+        code = "future_shift = -1\ndf['x'] = df['close'].shift(future_shift)"
+        _check(T001_ShiftNegative(), code, expect_hit=True)
+
+    def test_fires_on_periods_keyword(self):
+        _check(T001_ShiftNegative(), "df['x'] = df['close'].shift(periods=-1)", expect_hit=True)
 
     def test_silent_on_no_shift(self):
         _check(T001_ShiftNegative(), "x = df['close'].mean()", expect_hit=False)
@@ -189,6 +210,13 @@ class TestT014:
 
     def test_silent_on_positive_diff(self):
         _check(T014_DiffNegative(), "df['d'] = df['close'].diff(1)", expect_hit=False)
+
+    def test_fires_on_periods_keyword(self):
+        _check(T014_DiffNegative(), "df['d'] = df['close'].diff(periods=-1)", expect_hit=True)
+
+    def test_fires_on_diff_alias(self):
+        code = "k = -2\ndf['d'] = df['close'].diff(periods=k)"
+        _check(T014_DiffNegative(), code, expect_hit=True)
 
 
 class TestT015:

@@ -2,10 +2,13 @@
   <h1 align="center">◈ NEURON</h1>
   <p align="center"><strong>The world's first AI-native programming language.</strong></p>
   <p align="center">
-    A statically typed, natively differentiable programming language with compile-time temporal safety,<br>
-    causal inference, uncertainty tracking, and built-in verifiable machine unlearning.
+    A statically typed, natively differentiable programming language with compile-time temporal safety checks,<br>
+    causal inference types, uncertainty tracking, and empirical machine unlearning certificates.
   </p>
 </p>
+
+> [!NOTE]
+> **Status**: Research prototype in active development. NEURON enforces type-level compile-time safety checks for temporal offsets, causal intervention modes, and effect boundaries. See the technical paper for formal boundary definitions and scope.
 
 <p align="center">
   <a href="#why-neuron">Why NEURON?</a> •
@@ -58,10 +61,10 @@ fn main() [Effect[Mut[model]]]:
 | Feature | Python / PyTorch / JAX | NEURON |
 |---|---|---|
 | **Gradients** | Library runtime call (`.backward()`) | **Built into type system** — every `fn` is differentiable |
-| **Temporal Data Leakage** | Silent runtime failure (fake 99% accuracy) | **Compile-time rejection** (`error[TemporalLeak]`) |
-| **Machine Unlearning** | Full retraining required ($$$) | **Built-in `forget()` primitive** with `ForgetCertificate` |
+| **Temporal Data Leakage** | Silent runtime failure (fake 99% accuracy) | **Type-level compile-time checks** (`error[TemporalLeak]`) & offset bounds |
+| **Machine Unlearning** | Full retraining required ($$$) | **Built-in `forget()` primitive** with empirical `ForgetCertificate` |
 | **Causality** | Separate libraries (DoWhy) | **First-class causal types** (`observe`, `intervene`) |
-| **Uncertainty** | Manual propagation | **Type-tracked** (`Uncertain[Tensor]`) |
+| **Uncertainty** | Manual propagation | **Type-tracked** (`Uncertain[Tensor]`, confidence warnings) |
 | **Execution Targets** | Python runtime only | **Interpreter, Rust JIT, Native AOT Binary, WASM, Python** |
 
 ---

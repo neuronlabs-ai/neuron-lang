@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEURON — Live In-Browser AI Engine</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', 'SF Pro Display', -apple-system, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .header {
+      text-align: center;
+      padding: 40px 20px 20px;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .header h1 {
+      font-size: 2.4em;
+      font-weight: 700;
+      background: linear-gradient(135deg, #00d4ff, #7b2ff7, #ff6b6b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+    .header .subtitle {
+      font-size: 1.1em;
+      color: #888;
+      margin-top: 8px;
+    }
+    .header .engine-badge {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 6px 18px;
+      border: 1px solid #7b2ff7;
+      border-radius: 20px;
+      font-size: 0.85em;
+      color: #7b2ff7;
+      letter-spacing: 1px;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 30px 20px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .panel {
+      background: #111118;
+      border: 1px solid #1e1e30;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 18px;
+      background: #14141f;
+      border-bottom: 1px solid #1e1e30;
+      font-size: 0.85em;
+      font-weight: 600;
+      color: #aaa;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+    .dot-red { background: #ff4444; }
+    .dot-yellow { background: #ffaa00; }
+    textarea {
+      width: 100%;
+      min-height: 380px;
+      background: transparent;
+      border: none;
+      color: #00d4ff;
+      font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.9em;
+      line-height: 1.7;
+      padding: 18px;
+      resize: vertical;
+      outline: none;
+    }
+    .output-area {
+      min-height: 380px;
+      padding: 18px;
+      font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.9em;
+      line-height: 1.7;
+      color: #00ff88;
+      white-space: pre-wrap;
+      overflow-y: auto;
+    }
+    .output-area .error { color: #ff4444; }
+    .output-area .info { color: #888; }
+    .controls {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 12px 32px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.5px;
+    }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .btn-run {
+      background: linear-gradient(135deg, #7b2ff7, #00d4ff);
+      color: white;
+    }
+    .btn-check {
+      background: #1e1e30;
+      color: #00d4ff;
+      border: 1px solid #00d4ff;
+    }
+    .btn-transpile {
+      background: #1e1e30;
+      color: #ffaa00;
+      border: 1px solid #ffaa00;
+    }
+    .btn-example {
+      background: #1e1e30;
+      color: #888;
+      border: 1px solid #333;
+      padding: 8px 16px;
+      font-size: 0.85em;
+    }
+    .btn-example:hover { color: #fff; border-color: #7b2ff7; }
+    .examples-row {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .stats {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 30px;
+      justify-content: center;
+      padding: 20px;
+    }
+    .stat-box {
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.8em;
+      font-weight: 700;
+      color: #7b2ff7;
+    }
+    .stat-label {
+      font-size: 0.8em;
+      color: #666;
+      margin-top: 4px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .loading {
+      text-align: center;
+      padding: 60px;
+      grid-column: 1 / -1;
+    }
+    .loading .spinner {
+      display: inline-block;
+      width: 40px;
+      height: 40px;
+      border: 3px solid #1e1e30;
+      border-top: 3px solid #7b2ff7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>NEURON</h1>
+    <div class="subtitle">Sovereign AI Compiler — Running Entirely In Your Browser</div>
+    <div class="engine-badge">ENGINE SIZE: 1.19 MB &bull; ZERO CLOUD &bull; ZERO INSTALL</div>
+  </div>
+
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p style="margin-top: 16px; color: #888;">Loading 1.19 MB WASM engine...</p>
+  </div>
+
+  <div id="app" class="container" style="display: none;">
+
+    <div class="stats">
+      <div class="stat-box">
+        <div class="stat-value" id="engineSize">1.19 MB</div>
+        <div class="stat-label">Engine Size</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="loadTime">—</div>
+        <div class="stat-label">Load Time</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="execTime">—</div>
+        <div class="stat-label">Execution Time</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">0</div>
+        <div class="stat-label">Cloud Calls</div>
+      </div>
+    </div>
+
+    <div class="examples-row">
+      <button class="btn btn-example" onclick="loadExample('matmul')">Matrix Multiply</button>
+      <button class="btn btn-example" onclick="loadExample('autograd')">Autograd Training</button>
+      <button class="btn btn-example" onclick="loadExample('medical')">Medical Safety</button>
+      <button class="btn btn-example" onclick="loadExample('anomaly')">Anomaly Detection</button>
+      <button class="btn btn-example" onclick="loadExample('transpile')">→ PyTorch Transpile</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>NEURON SOURCE CODE</span>
+        <span><span class="dot dot-green"></span> editor</span>
+      </div>
+      <textarea id="editor" spellcheck="false">fn main():
+  let w = glorot(4, 1)
+  let x = zeros(1, 4) + 0.5
+  let pred = x @ w
+  print(pred)</textarea>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span>OUTPUT</span>
+        <span><span class="dot dot-green"></span> ready</span>
+      </div>
+      <div id="output" class="output-area">
+        <span class="info">// Press RUN to execute NEURON code directly in your browser.
+// No server. No cloud. No Python. Pure 1.19 MB WebAssembly.</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-run" onclick="runCode()">▶ RUN</button>
+      <button class="btn btn-check" onclick="checkCode()">✓ TYPE CHECK</button>
+      <button class="btn btn-transpile" onclick="transpileCode()">⟳ TRANSPILE TO PYTHON</button>
+    </div>
+
+  </div>
+
+  <script type="module">
+    import init, { eval_neuron, type_check, transpile_to_python } from './neuron_wasm.js';
+
+    let wasmReady = false;
+
+    const t0 = performance.now();
+    await init();
+    const loadMs = (performance.now() - t0).toFixed(0);
+    wasmReady = true;
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'grid';
+    document.getElementById('loadTime').textContent = loadMs + ' ms';
+
+    window.runCode = function() {
+      if (!wasmReady) return;
+      const src = document.getElementById('editor').value;
+      const output = document.getElementById('output');
+      try {
+        const t1 = performance.now();
+        const result = eval_neuron(src);
+        const execMs = (performance.now() - t1).toFixed(1);
+        document.getElementById('execTime').textContent = execMs + ' ms';
+        output.innerHTML = result;
+      } catch (e) {
+        output.innerHTML = '<span class="error">Runtime Error:\n' + e + '</span>';
+      }
+    };
+
+    window.checkCode = function() {
+      if (!wasmReady) return;
+      const src = document.getElementById('editor').value;
+      const output = document.getElementById('output');
+      try {
+        const t1 = performance.now();
+        const result = type_check(src);
+        const execMs = (performance.now() - t1).toFixed(1);
+        document.getElementById('execTime').textContent = execMs + ' ms';
+        const parsed = JSON.parse(result);
+        if (parsed.errors && parsed.errors.length > 0) {
+          output.innerHTML = '<span class="error">TYPE CHECK FAILED:\n\n' +
+            parsed.errors.map(e => '  ✗ ' + e).join('\n') + '</span>';
+        } else {
+          output.innerHTML = '<span style="color:#00ff88">✓ TYPE CHECK PASSED — All types verified.\n\nNo temporal leaks.\nNo uncertainty violations.\nNo causal confusion.\n\nSafe to deploy.</span>';
+        }
+      } catch (e) {
+        output.innerHTML = '<span class="error">Type Check Error:\n' + e + '</span>';
+      }
+    };
+
+    window.transpileCode = function() {
+      if (!wasmReady) return;
+      const src = document.getElementById('editor').value;
+      const output = document.getElementById('output');
+      try {
+        const t1 = performance.now();
+        const result = transpile_to_python(src);
+        const execMs = (performance.now() - t1).toFixed(1);
+        document.getElementById('execTime').textContent = execMs + ' ms';
+        output.innerHTML = '<span class="info"># ── Auto-generated PyTorch Python ──</span>\n\n' + result;
+      } catch (e) {
+        output.innerHTML = '<span class="error">Transpile Error:\n' + e + '</span>';
+      }
+    };
+
+    const examples = {
+      matmul: `// Matrix Multiplication — runs in microseconds
+fn main():
+  let a = glorot(4, 4)
+  let b = glorot(4, 4)
+  let c = a @ b
+  print(c)`,
+
+      autograd: `// Autograd Training Loop — Forward + Loss + Backward
+model TinyNet:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w2: Tensor[8, 1] = glorot(8, 1)
+
+  fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
+    let h = relu(x @ self.w1)
+    return h @ self.w2
+
+fn main():
+  let net = TinyNet()
+  let x = zeros(1, 4) + 0.5
+  let y = zeros(1, 1) + 1.0
+
+  let epoch = 0
+  while epoch < 100:
+    let pred = net.forward(x)
+    let loss = mse(pred, y)
+    update net by adam(grad(loss), lr=1e-3)
+    let epoch = epoch + 1
+
+  let final_pred = net.forward(x)
+  print(final_pred)`,
+
+      medical: `// Medical Safety — Uncertain[T] blocks dangerous doses
+model DosagePredictor:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w_dose: Tensor[8, 1] = glorot(8, 1)
+  w_conf: Tensor[8, 1] = glorot(8, 1)
+
+  fn predict(self, vitals: Tensor[1, 4]) -> Uncertain[Tensor[1, 1]]:
+    let h = relu(vitals @ self.w1)
+    let dose = h @ self.w_dose
+    let confidence = sigmoid(h @ self.w_conf)
+    return Uncertain(dose, confidence)
+
+fn main():
+  let predictor = DosagePredictor()
+  let vitals = zeros(1, 4) + 0.5
+  let target = zeros(1, 1) + 0.25
+
+  let epoch = 0
+  while epoch < 50:
+    let p = predictor.predict(vitals)
+    let loss = mse(p.value, target)
+    update predictor by adam(grad(loss), lr=1e-3)
+    let epoch = epoch + 1
+
+  let result = predictor.predict(vitals)
+  print(result.value)
+  print(result.confidence)`,
+
+      anomaly: `// Edge Anomaly Detection — No Cloud, No Python
+model AnomalyDetector:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w2: Tensor[8, 1] = glorot(8, 1)
+
+  fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
+    let h = relu(x @ self.w1)
+    return sigmoid(h @ self.w2)
+
+fn main():
+  let detector = AnomalyDetector()
+  let normal = zeros(1, 4) + 0.1
+  let spike  = zeros(1, 4) + 0.9
+  let target_safe = zeros(1, 1)
+  let target_alert = zeros(1, 1) + 1.0
+
+  let epoch = 0
+  while epoch < 150:
+    let l1 = mse(detector.forward(normal), target_safe)
+    let l2 = mse(detector.forward(spike), target_alert)
+    let loss = (l1 + l2) * 0.5
+    update detector by adam(grad(loss), lr=1e-3)
+    let epoch = epoch + 1
+
+  print("Normal sensor reading:")
+  print(detector.forward(zeros(1, 4) + 0.15))
+  print("Anomalous sensor spike:")
+  print(detector.forward(zeros(1, 4) + 0.88))`,
+
+      transpile: `// Write NEURON → Click "Transpile to Python"
+model SimpleNet:
+  w1: Tensor[4, 8] = glorot(4, 8)
+  w2: Tensor[8, 1] = glorot(8, 1)
+
+  fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
+    let h = relu(x @ self.w1)
+    return h @ self.w2
+
+fn main():
+  let net = SimpleNet()
+  let x = zeros(1, 4) + 0.5
+  let pred = net.forward(x)
+  print(pred)`
+    };
+
+    window.loadExample = function(name) {
+      document.getElementById('editor').value = examples[name] || '';
+      document.getElementById('output').innerHTML = '<span class="info">// Example loaded. Press RUN to execute.</span>';
+    };
+  </script>
+
+</body>
+</html>

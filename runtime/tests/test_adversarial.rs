@@ -127,6 +127,22 @@ fn adversarial_relu_negative() {
 }
 
 #[test]
+fn adversarial_optimizer_matmul_relu_fusion_direct() {
+    // R16 regression test: MatMul -> ReLU must NOT erase the ReLU activation.
+    // [1.0] @ [-1.0] = -1.0. relu(-1.0) must return 0.0, NOT -1.0.
+    let src = r#"
+fn main() -> Tensor[1, 1]:
+  let x = zeros(1, 1) + 1.0
+  let w = zeros(1, 1) - 1.0
+  let y = x @ w
+  let z = relu(y)
+  return z
+"#;
+    let r = should_run_ok(src).expect("matmul followed by relu should run cleanly");
+    assert!(r.contains("0.0"), "relu of negative matmul must produce 0.0, got: {}", r);
+}
+
+#[test]
 fn adversarial_sigmoid_extreme_positive() {
     let r = should_run_ok("fn main() -> Tensor:\n  let x = zeros(2, 2) + 1000.0\n  let y = sigmoid(x)\n  return y.sum()\n");
     match r {
@@ -240,6 +256,37 @@ fn main() -> Float:
   return 0.0
 "#;
     should_run_ok(src).expect("forget should work");
+}
+
+#[test]
+fn adversarial_r14_forget_zero_strength_not_successful() {
+    let src = r#"
+model Tiny:
+  w: Tensor[2, 2] = zeros(2, 2) + 1.0
+
+  fn forward(self, x: Tensor[2, 2]) -> Tensor[2, 2]:
+    return self.w @ x
+
+fn main() -> Bool:
+  let m = Tiny()
+  let task_data = zeros(2, 2) + 0.5
+  let cert = forget(m, task_data, "GradientAscent", 0.0)
+  return cert.forgetting_successful
+"#;
+    let r = should_run_ok(src).expect("forget with zero strength should return certificate");
+    assert!(r.contains("false"), "zero strength forget certificate must have forgetting_successful=false, got: {}", r);
+}
+
+#[test]
+fn adversarial_r17_stop_grad_backward_safety() {
+    let src = r#"
+fn main() -> Tensor:
+  let x = zeros(2, 2) + 2.0
+  let y = stop_grad(x)
+  let z = y + y
+  return z
+"#;
+    should_run_ok(src).expect("stop_grad graph severance must not crash during backward");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -716,5 +763,126 @@ neuron-runtime = {{ path = "{}" }}
         neuron_runtime::vm::Value::Int(val) => assert_eq!(val, 7),
         _ => panic!("Expected Int(7), got {:?}", result),
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  13. CODEX AUDIT TYPE SOUNDNESS REGRESSIONS (R1–R9)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn adversarial_r6_undefined_variable_fails() {
+    let src = r#"
+fn main() -> Float:
+  return missing_value + 1.0
+"#;
+    assert!(should_compile_error(src), "undefined variables must cause compile error");
+}
+
+#[test]
+fn adversarial_r5_return_type_mismatch_fails() {
+    let src = r#"
+fn lie() -> Tensor[1, 1]:
+  return 1.0
+
+fn main() -> Tensor[1, 1]:
+  return lie()
+"#;
+    assert!(should_compile_error(src), "return type mismatch must cause compile error");
+}
+
+#[test]
+fn adversarial_r1_temporal_raw_tensor_bypass_fails() {
+    let src = r#"
+fn accepts_raw_tensor(x: Tensor) -> Tensor:
+  return x
+
+fn main() -> Tensor:
+  let prices: Temporal[Tensor, 0] = randn(4, 4)
+  let future = prices.shift(3)
+  return accepts_raw_tensor(future)
+"#;
+    assert!(should_compile_error(src), "passing Temporal to raw Tensor must be rejected");
+}
+
+#[test]
+fn adversarial_r4_causal_raw_float_bypass_fails() {
+    let src = r#"
+fn add_raw(a: Float, b: Float) -> Float:
+  return a + b
+
+fn main() -> Float:
+  let observed: Causal[Float, observed] = 1.0
+  let intervened: Causal[Float, intervened] = 2.0
+  return add_raw(observed, intervened)
+"#;
+    assert!(should_compile_error(src), "passing Causal to raw Float must be rejected");
+}
+
+#[test]
+fn adversarial_r2_temporal_before_laundering_fails() {
+    let src = r#"
+fn requires_safe(x: Temporal[Tensor, 0]) -> Tensor:
+  return x.snapshot()
+
+fn main() -> Tensor:
+  let prices: Temporal[Tensor, 0] = randn(4, 4)
+  let future = prices.shift(10)
+  let laundered = future.before(1)
+  return requires_safe(laundered)
+"#;
+    assert!(should_compile_error(src), "laundered temporal offset +9 passed to 0 must be rejected");
+}
+
+#[test]
+fn adversarial_r3_temporal_binary_composition_preserves_future() {
+    let src = r#"
+fn requires_safe(x: Temporal[Tensor, 0]) -> Tensor:
+  return x.snapshot()
+
+fn main() -> Tensor:
+  let prices: Temporal[Tensor, 0] = randn(4, 4)
+  let past = prices.shift(-5)
+  let future = prices.shift(3)
+  let mixed = past + future
+  return requires_safe(mixed)
+"#;
+    assert!(should_compile_error(src), "temporal binary composition with future (+3) passed to 0 must be rejected");
+}
+
+#[test]
+fn adversarial_r7_if_block_scoping_prevents_escape() {
+    let src = r#"
+fn main() -> Int:
+  let flag = false
+  if flag:
+    let x = 1
+  return x
+"#;
+    assert!(should_compile_error(src), "variables defined inside if block must not escape");
+}
+
+#[test]
+fn adversarial_r8_effect_loop_scope_propagated() {
+    let src = r#"
+model Tiny:
+  w: Tensor[1, 1] = zeros(1, 1) + 1.0
+
+  fn mutate_in_loop(self):
+    for i in range(1):
+      update self.w by sgd(grad(self.w), lr=0.1)
+"#;
+    assert!(should_compile_error(src), "mutations inside loop must require Effect declaration");
+}
+
+#[test]
+fn adversarial_r9_effect_wrong_target_rejected() {
+    let src = r#"
+model Tiny:
+  w: Tensor[1, 1] = zeros(1, 1) + 1.0
+
+  fn mutate_wrong_target(self) [Effect[Mut[other]]]:
+    update self.w by sgd(grad(self.w), lr=0.1)
+"#;
+    assert!(should_compile_error(src), "mutating self.w when only Mut[other] is declared must be rejected");
 }
 

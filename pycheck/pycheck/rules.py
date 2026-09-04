@@ -48,6 +48,7 @@ class AnalysisContext:
         self.in_loop = False
         self.loop_var: Optional[str] = None
         self.assignments: Dict[str, ast.AST] = {}  # var_name -> assigned node
+        self.constants: Dict[str, any] = {}  # var_name -> literal constant value
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -67,7 +68,7 @@ class T001_ShiftNegative(Rule):
             return []
         results = []
         for arg in node.args:
-            val = self._get_negative_value(arg)
+            val = self._get_negative_value(arg, ctx)
             if val is not None and val > 0:
                 results.append(Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
@@ -77,7 +78,7 @@ class T001_ShiftNegative(Rule):
                 self._taint_parent(node, ctx, f"shift(-{val}) future data")
         for kw in node.keywords:
             if kw.arg == 'periods':
-                val = self._get_negative_value(kw.value)
+                val = self._get_negative_value(kw.value, ctx)
                 if val is not None and val > 0:
                     results.append(Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
@@ -85,12 +86,16 @@ class T001_ShiftNegative(Rule):
                         f"Use .shift(periods={val}) to access past data instead"))
         return results
 
-    def _get_negative_value(self, arg):
+    def _get_negative_value(self, arg, ctx=None):
         if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
             if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
                 return abs(arg.operand.value)
         if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
             return abs(arg.value)
+        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
+            val = ctx.constants.get(arg.id)
+            if val is not None and isinstance(val, (int, float)) and val < 0:
+                return abs(val)
         return None
 
     def _taint_parent(self, node, ctx, reason):
@@ -399,20 +404,35 @@ class T014_DiffNegative(Rule):
             return []
         if not (isinstance(node.func, ast.Attribute) and node.func.attr == 'diff'):
             return []
+        results = []
         for arg in node.args:
-            if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
-                if isinstance(arg.operand, ast.Constant):
-                    val = arg.operand.value
-                    return [Diagnostic(
-                        node.lineno, node.col_offset, self.severity, self.code,
-                        f".diff(-{val}) computes difference using future data",
-                        f"Use .diff({val}) to compute backward differences")]
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
-                return [Diagnostic(
+            val = self._get_negative_value(arg, ctx)
+            if val is not None and val > 0:
+                results.append(Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
-                    f".diff({int(arg.value)}) computes difference using future data",
-                    f"Use .diff({abs(int(arg.value))}) to compute backward differences")]
-        return []
+                    f".diff(-{val}) computes difference using future data",
+                    f"Use .diff({val}) to compute backward differences"))
+        for kw in node.keywords:
+            if kw.arg == 'periods':
+                val = self._get_negative_value(kw.value, ctx)
+                if val is not None and val > 0:
+                    results.append(Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        f".diff(periods=-{val}) computes difference using future data",
+                        f"Use .diff(periods={val}) to compute backward differences"))
+        return results
+
+    def _get_negative_value(self, arg, ctx=None):
+        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+            if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
+                return abs(arg.operand.value)
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
+            return abs(arg.value)
+        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
+            val = ctx.constants.get(arg.id)
+            if val is not None and isinstance(val, (int, float)) and val < 0:
+                return abs(val)
+        return None
 
 
 class T015_GroupbyShiftLeak(Rule):

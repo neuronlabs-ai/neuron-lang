@@ -614,39 +614,33 @@ fn cmd_pycheck(file_path: &str) {
         process::exit(1);
     }
 
-    // Find the analyzer script relative to the neuronc binary
+    // Find the pycheck package directory (containing pycheck/__init__.py)
     let exe_path = std::env::current_exe().unwrap_or_default();
     let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
 
-    // Try multiple locations for the analyzer
-    let analyzer_candidates = vec![
-        std::path::PathBuf::from("pycheck/analyzer.py"),
-        exe_dir.join("../../pycheck/analyzer.py"),
-        exe_dir.join("../../../pycheck/analyzer.py"),
-        exe_dir.join("pycheck/analyzer.py"),
+    let pycheck_candidates = vec![
+        std::path::PathBuf::from("pycheck"),
+        exe_dir.join("../../pycheck"),
+        exe_dir.join("../../../pycheck"),
+        exe_dir.join("pycheck"),
     ];
 
-    let analyzer_path = analyzer_candidates.iter()
-        .find(|p| p.exists())
+    let pycheck_dir = pycheck_candidates.iter()
+        .find(|p| p.join("pycheck/__init__.py").exists())
         .cloned();
 
-    let analyzer = match analyzer_path {
-        Some(p) => p,
-        None => {
-            eprintln!("error: could not find pycheck/analyzer.py");
-            eprintln!("  searched in:");
-            for c in &analyzer_candidates {
-                eprintln!("    {}", c.display());
-            }
-            process::exit(1);
-        }
-    };
+    let abs_file_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-    // Run the analyzer via Python
-    let output = Command::new("python")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg(analyzer.to_str().unwrap())
-        .arg(file_path)
+    // Run the packaged analyzer via python -m pycheck.cli
+    let mut cmd = Command::new("python");
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    if let Some(ref dir) = pycheck_dir {
+        cmd.current_dir(dir);
+    }
+    let output = cmd
+        .arg("-m")
+        .arg("pycheck.cli")
+        .arg(abs_file_path.to_str().unwrap_or(file_path))
         .output();
 
     match output {

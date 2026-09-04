@@ -92,6 +92,9 @@ impl NType {
         matches!(self, NType::Base(n) if n == "Int" || n == "Float" || n == "Loss")
     }
     pub fn is_tensor(&self) -> bool { matches!(self, NType::Tensor(_)) }
+    pub fn is_temporal(&self) -> bool { matches!(self, NType::Temporal(_, _)) }
+    pub fn is_causal(&self) -> bool { matches!(self, NType::Causal(_, _)) }
+    pub fn is_uncertain(&self) -> bool { matches!(self, NType::Uncertain(_)) }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,29 +145,31 @@ fn apply_wrappers(mut ty: NType, wrappers: Vec<TypeWrapper>) -> NType {
 
 pub fn types_compatible(a: &NType, b: &NType) -> bool {
     if matches!(a, NType::Any) || matches!(b, NType::Any) { return true; }
+    if matches!(a, NType::Base(ref n) if n == "Any") || matches!(b, NType::Base(ref n) if n == "Any") { return true; }
     match (a, b) {
-        (NType::Base(x), NType::Base(y)) => x == y,
+        (NType::Base(x), NType::Base(y)) => x == y || (x == "Float" && y == "Loss") || (x == "Loss" && y == "Float"),
+        (NType::Tensor(_), NType::Base(y)) if y == "Loss" || y == "Tensor" => true,
+        (NType::Base(x), NType::Tensor(_)) if x == "Loss" || x == "Tensor" => true,
         (NType::Tensor(_), NType::Tensor(_)) => true, // Shape checked separately
         (NType::Uncertain(x), NType::Uncertain(y)) => types_compatible(x, y),
         (NType::Random(x), NType::Random(y)) => types_compatible(x, y),
         (NType::Temporal(x, s1), NType::Temporal(y, s2)) => {
+            // Semantic Invariant: An expression whose information dependency is no later
+            // than the maximum allowed dependency is safe (actual <= expected).
             let spec_compat = match (s1, s2) {
                 (TemporalSpec::Direction(d1), TemporalSpec::Direction(d2)) => d1 == d2,
-                (TemporalSpec::Offset(o1), TemporalSpec::Offset(o2)) => {
-                    if *o1 <= 0 && *o2 <= 0 {
-                        true // Both represent safe past / zero-lookahead data
-                    } else {
-                        o1 == o2
-                    }
+                (TemporalSpec::Offset(o_exp), TemporalSpec::Offset(o_act)) => {
+                    // Subtyping: actual data offset must be <= expected offset bound.
+                    // Past data (e.g. -5) safely satisfies present (0) or future (+5) expectations.
+                    o_act <= o_exp
                 }
-                (TemporalSpec::Direction(d), TemporalSpec::Offset(o)) => {
-                    if d == "past_to_future" { *o <= 0 }
-                    else if d == "future_to_past" { *o > 0 }
+                (TemporalSpec::Direction(d_exp), TemporalSpec::Offset(o_act)) => {
+                    if d_exp == "past_to_future" { *o_act <= 0 }
+                    else if d_exp == "future_to_past" { *o_act > 0 }
                     else { false }
                 }
-                (TemporalSpec::Offset(o), TemporalSpec::Direction(d)) => {
-                    if d == "past_to_future" { *o <= 0 }
-                    else if d == "future_to_past" { *o > 0 }
+                (TemporalSpec::Offset(o_exp), TemporalSpec::Direction(d_act)) => {
+                    if d_act == "past_to_future" { *o_exp >= 0 }
                     else { false }
                 }
             };
@@ -176,15 +181,10 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
         (NType::Model(a, _, _), NType::Base(b)) => a == b,
         (NType::Base(a), NType::Model(b, _, _)) => a == b,
         (NType::Void, NType::Void) => true,
-        // Transparent temporal / causal / uncertainty compatibility
-        (x, NType::Temporal(y, _)) => types_compatible(x, y),
-        (NType::Temporal(x, _), y) => types_compatible(x, y),
-        (x, NType::Causal(y, _)) => types_compatible(x, y),
-        (NType::Causal(x, _), y) => types_compatible(x, y),
-        (x, NType::Uncertain(y)) => types_compatible(x, y),
-        (NType::Uncertain(x), y) => types_compatible(x, y),
-        (x, NType::Random(y)) => types_compatible(x, y),
-        (NType::Random(x), y) => types_compatible(x, y),
+        // Safe ingestion: raw data can be introduced into Temporal or Causal ("observed").
+        // Raw types can NEVER accept Temporal or Causal, preventing egress/erasure bypasses.
+        (NType::Temporal(x, _), actual) if !actual.is_temporal() => types_compatible(x, actual),
+        (NType::Causal(x, ref mode), actual) if mode == "observed" && !actual.is_causal() => types_compatible(x, actual),
         _ => false,
     }
 }
@@ -192,7 +192,11 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
 
 fn type_from_ast(te: &TypeExpr) -> NType {
     match te {
-        TypeExpr::Base(name, _) => NType::Base(name.clone()),
+        TypeExpr::Base(name, _) => {
+            if name == "Any" { NType::Any }
+            else if name == "Tensor" { NType::Tensor(vec![]) }
+            else { NType::Base(name.clone()) }
+        }
         TypeExpr::Tensor(dims, _) => NType::Tensor(dims.iter().map(|d| match d {
             DimExpr::Static(v) => Dim::Static(*v),
             DimExpr::Symbolic(s) => Dim::Symbolic(s.clone()),
@@ -219,7 +223,11 @@ fn type_from_ast(te: &TypeExpr) -> NType {
             let ps: Vec<NType> = params.iter().map(|p| type_from_ast(p)).collect();
             NType::Fn_(ps, Box::new(type_from_ast(ret)), None)
         }
-        TypeExpr::UserDefined(name, _) => NType::Base(name.clone()),
+        TypeExpr::UserDefined(name, _) => {
+            if name == "Any" { NType::Any }
+            else if name == "Tensor" { NType::Tensor(vec![]) }
+            else { NType::Base(name.clone()) }
+        }
     }
 }
 
@@ -266,6 +274,32 @@ impl UnificationEnv {
                 true
             }
         }
+    }
+}
+
+fn extract_symbolic_dims(te: &TypeExpr, out: &mut Vec<String>) {
+    match te {
+        TypeExpr::Tensor(dims, _) => {
+            for d in dims {
+                if let DimExpr::Symbolic(ref s) = d {
+                    if !out.contains(s) {
+                        out.push(s.clone());
+                    }
+                }
+            }
+        }
+        TypeExpr::Temporal(inner, _, _)
+        | TypeExpr::Causal(inner, _, _)
+        | TypeExpr::Uncertain(inner, _)
+        | TypeExpr::Random(inner, _)
+        | TypeExpr::Prob(inner, _)
+        | TypeExpr::ListType(inner, _)
+        | TypeExpr::OptionType(inner, _)
+        | TypeExpr::Memory(inner, _)
+        | TypeExpr::RewardType(inner, _) => {
+            extract_symbolic_dims(inner, out);
+        }
+        _ => {}
     }
 }
 
@@ -370,6 +404,13 @@ impl SymbolTable {
         global.define("input", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));
         global.define("embed_string", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
         global.define("generate_reply", NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("String".into())), None));
+        global.define("forget", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("sgd", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("adam", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("grad", NType::Fn_(vec![any.clone()], Box::new(tensor.clone()), None));
+        global.define("stop_grad", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("mean", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
+        global.define("sum", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
 
         // Built-in type names
         global.define("Int", NType::Base("Int".into()));
@@ -379,6 +420,11 @@ impl SymbolTable {
         global.define("Timestamp", NType::Base("Timestamp".into()));
         global.define("Loss", NType::Base("Loss".into()));
         global.define("Dataset", NType::Base("Dataset".into()));
+        global.define("Any", NType::Any);
+        global.define("Uncertain", NType::Fn_(vec![any.clone(), any.clone()], Box::new(NType::Uncertain(Box::new(any.clone()))), None));
+        global.define("UNCERTAIN", NType::Fn_(vec![any.clone(), any.clone()], Box::new(NType::Uncertain(Box::new(any.clone()))), None));
+        global.define("load", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("println", NType::Fn_(vec![any.clone()], Box::new(NType::Void), None));
 
         Self { scopes: vec![global] }
     }
@@ -416,6 +462,14 @@ impl SymbolTable {
             scope.record_uncertain_confidence_checked(name);
         }
     }
+
+    fn propagate_child_scope(&mut self, child: Scope) {
+        if let Some(parent) = self.scopes.last_mut() {
+            parent.mutations.extend(child.mutations);
+            parent.uncertain_accessed.extend(child.uncertain_accessed);
+            parent.uncertain_confidence_checked.extend(child.uncertain_confidence_checked);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════
@@ -427,6 +481,7 @@ pub struct TypeChecker {
     symbols: SymbolTable,
     unifier: UnificationEnv,
     model_types: HashMap<String, NType>,
+    current_return_type: Option<NType>,
 }
 
 impl TypeChecker {
@@ -436,6 +491,7 @@ impl TypeChecker {
             symbols: SymbolTable::new(),
             unifier: UnificationEnv::default(),
             model_types: HashMap::new(),
+            current_return_type: None,
         }
     }
 
@@ -564,6 +620,13 @@ impl TypeChecker {
                 for p in &m.params {
                     let ty = p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any);
                     self.symbols.define(&p.name, ty);
+                    if let Some(ref ta) = p.type_ann {
+                        let mut dims = Vec::new();
+                        extract_symbolic_dims(ta, &mut dims);
+                        for dim in dims {
+                            self.symbols.define(&dim, NType::Base("Int".into()));
+                        }
+                    }
                 }
                 for f in &m.fields {
                     self.symbols.define(&f.name, type_from_ast(&f.type_ann));
@@ -578,6 +641,13 @@ impl TypeChecker {
                 for p in &l.params {
                     let ty = p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any);
                     self.symbols.define(&p.name, ty);
+                    if let Some(ref ta) = p.type_ann {
+                        let mut dims = Vec::new();
+                        extract_symbolic_dims(ta, &mut dims);
+                        for dim in dims {
+                            self.symbols.define(&dim, NType::Base("Int".into()));
+                        }
+                    }
                 }
                 for method in &l.methods { self.check_fn(method, self_ty.as_ref()); }
                 self.symbols.pop();
@@ -625,8 +695,19 @@ impl TypeChecker {
                 p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any)
             };
             self.symbols.define(&p.name, ty);
+            if let Some(ref ta) = p.type_ann {
+                let mut dims = Vec::new();
+                extract_symbolic_dims(ta, &mut dims);
+                for dim in dims {
+                    self.symbols.define(&dim, NType::Base("Int".into()));
+                }
+            }
         }
+        // R5 fix: track expected return type so Stmt::Return can validate against it
+        let prev_return_type = self.current_return_type.take();
+        self.current_return_type = f.return_type.as_ref().map(|t| type_from_ast(t));
         for stmt in &f.body { self.check_stmt(stmt); }
+        self.current_return_type = prev_return_type;
 
         // Effect checking
         let scope = self.symbols.pop();
@@ -638,15 +719,38 @@ impl TypeChecker {
             }
         }
 
-        if !scope.mutations.is_empty() {
+        // Effects govern caller-visible state (mutations to parameters or self).
+        // Pure local variable mutations within the function body do not require effects.
+        let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+        let external_mutations: Vec<&String> = scope.mutations.iter().filter(|m| {
+            let root = m.split('.').next().unwrap_or(m.as_str());
+            param_names.contains(&root) || root == "self" || (self_ty.is_some() && m.starts_with("self."))
+        }).collect();
+
+        if !external_mutations.is_empty() {
             if let Some(ref eff) = f.effect_clause {
-                let has_mut = eff.effects.iter().any(|e| e.kind == "Mut");
-                if !has_mut {
-                    let missing: Vec<String> = scope.mutations.iter().map(|m| format!("Mut[{}]", m)).collect();
-                    self.result.add_error(effect_undeclared_error(f.span.clone(), &f.name, &missing));
+                let declared_mut_targets: Vec<String> = eff.effects.iter()
+                    .filter(|e| e.kind == "Mut")
+                    .filter_map(|e| e.target.clone())
+                    .collect();
+                let has_generic_mut = eff.effects.iter().any(|e| e.kind == "Mut" && e.target.is_none());
+
+                if !has_generic_mut {
+                    let mut unpermitted: Vec<String> = Vec::new();
+                    for m in &external_mutations {
+                        let covered = declared_mut_targets.iter().any(|dt| {
+                            dt == *m || m.starts_with(&format!("{}.", dt)) || (dt == "self" && m.starts_with("self."))
+                        });
+                        if !covered {
+                            unpermitted.push(format!("Mut[{}]", m));
+                        }
+                    }
+                    if !unpermitted.is_empty() {
+                        self.result.add_error(effect_undeclared_error(f.span.clone(), &f.name, &unpermitted));
+                    }
                 }
             } else {
-                let missing: Vec<String> = scope.mutations.iter().map(|m| format!("Mut[{}]", m)).collect();
+                let missing: Vec<String> = external_mutations.iter().map(|m| format!("Mut[{}]", m)).collect();
                 self.result.add_error(effect_undeclared_error(f.span.clone(), &f.name, &missing));
             }
         }
@@ -679,7 +783,8 @@ impl TypeChecker {
                 self.symbols.push();
                 self.symbols.define(&f.var, elem_ty);
                 for s in &f.body { self.check_stmt(s); }
-                self.symbols.pop();
+                let child = self.symbols.pop();
+                self.symbols.propagate_child_scope(child);
             }
             Stmt::If(i) => {
                 let cond_ty = self.infer_expr(&i.cond);
@@ -688,8 +793,15 @@ impl TypeChecker {
                         ErrorCode::TypeMismatch, "If condition must be Bool", i.span.clone(),
                     ).with_actual(&cond_ty.display()));
                 }
+                self.symbols.push();
                 for s in &i.then_body { self.check_stmt(s); }
+                let then_child = self.symbols.pop();
+                self.symbols.propagate_child_scope(then_child);
+
+                self.symbols.push();
                 for s in &i.else_body { self.check_stmt(s); }
+                let else_child = self.symbols.pop();
+                self.symbols.propagate_child_scope(else_child);
             }
             Stmt::While(w) => {
                 let cond_ty = self.infer_expr(&w.cond);
@@ -700,9 +812,29 @@ impl TypeChecker {
                 }
                 self.symbols.push();
                 for s in &w.body { self.check_stmt(s); }
-                self.symbols.pop();
+                let child = self.symbols.pop();
+                self.symbols.propagate_child_scope(child);
             }
-            Stmt::Return(r) => { self.infer_expr(&r.value); }
+            Stmt::Return(r) => {
+                let inferred = self.infer_expr(&r.value);
+                if let Some(ref declared) = self.current_return_type {
+                    if !types_compatible(declared, &inferred) && !matches!(inferred, NType::Any) {
+                        self.result.add_error(
+                            NeuronError::new(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "Function declared to return {} but returns {}",
+                                    declared.display(),
+                                    inferred.display()
+                                ),
+                                r.span.clone(),
+                            )
+                            .with_expected(&declared.display())
+                            .with_actual(&inferred.display()),
+                        );
+                    }
+                }
+            }
             Stmt::Update(u) => {
                 self.symbols.record_mutation(&u.target);
                 self.infer_expr(&u.expr);
@@ -721,11 +853,25 @@ impl TypeChecker {
             Expr::BoolLit(_, _) => NType::Base("Bool".into()),
             Expr::StringLit(_, _) => NType::Base("String".into()),
             Expr::Ident(name, span) => {
-                let ty = self.symbols.lookup(name).unwrap_or(NType::Any);
-                if let NType::Uncertain(_) = ty {
-                    self.symbols.record_uncertain_access(name, span.clone());
+                match self.symbols.lookup(name) {
+                    Some(ty) => {
+                        if let NType::Uncertain(_) = ty {
+                            self.symbols.record_uncertain_access(name, span.clone());
+                        }
+                        ty
+                    }
+                    None => {
+                        // R6 fix: report undefined identifiers instead of silently becoming Any.
+                        // We still return Any for error recovery so the checker can continue
+                        // finding additional errors in the same compilation.
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::UndefinedVariable,
+                            format!("Undefined variable '{}'", name),
+                            span.clone(),
+                        ));
+                        NType::Any
+                    }
                 }
-                ty
             }
             Expr::Self_(_) => self.symbols.lookup("self").unwrap_or(NType::Any),
 
@@ -767,7 +913,13 @@ impl TypeChecker {
             Expr::Index(idx) => {
                 let obj_ty = self.infer_expr(&idx.obj);
                 match obj_ty {
-                    NType::Tensor(_) => obj_ty.clone(),
+                    NType::Tensor(ref dims) => {
+                        if dims.len() <= 1 {
+                            NType::Base("Float".into())
+                        } else {
+                            NType::Tensor(dims[1..].to_vec())
+                        }
+                    }
                     NType::List(inner) => *inner.clone(),
                     NType::Tuple(ref types) => {
                         if idx.indices.len() == 1 {
@@ -978,8 +1130,10 @@ impl TypeChecker {
                         if let TypeWrapper::Temporal(ref mut lspec) = lw {
                             match (&lspec, &rspec) {
                                 (TemporalSpec::Offset(n1), TemporalSpec::Offset(n2)) => {
-                                    // Conservative alignment takes the minimum offset (furthest past required)
-                                    *lspec = TemporalSpec::Offset(std::cmp::min(*n1, *n2));
+                                    // R3 fix: The temporal horizon of an expression is governed by its
+                                    // latest dependency (max offset). If either operand touches the future,
+                                    // the combined result depends on future data and cannot be laundered.
+                                    *lspec = TemporalSpec::Offset(std::cmp::max(*n1, *n2));
                                 }
                                 (TemporalSpec::Direction(d1), TemporalSpec::Direction(d2)) => {
                                     if d1 != d2 {
@@ -1104,18 +1258,19 @@ impl TypeChecker {
         if let Expr::Dot(ref d) = c.callee {
             let obj_ty = self.infer_expr(&d.obj);
             if let NType::Temporal(ref inner, ref spec) = obj_ty {
+                let current_offset = match spec {
+                    TemporalSpec::Offset(n) => *n,
+                    TemporalSpec::Direction(dir) => if dir == "past_to_future" { 0 } else { 1 },
+                };
                 if d.field == "before" {
                     let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
-                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(-k.abs()));
+                    // R2 fix: compose with receiver's offset, never reset
+                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(current_offset - k.abs()));
                 } else if d.field == "after" {
                     let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
-                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(k.abs().max(1)));
+                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(current_offset + k.abs().max(1)));
                 } else if d.field == "shift" || d.field == "lag" || d.field == "lead" {
                     let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(0);
-                    let current_offset = match spec {
-                        TemporalSpec::Offset(n) => *n,
-                        TemporalSpec::Direction(dir) => if dir == "past_to_future" { 0 } else { 1 },
-                    };
                     let new_offset = match d.field.as_str() {
                         "shift" => current_offset + k,
                         "lag" => current_offset - k,
@@ -1127,13 +1282,40 @@ impl TypeChecker {
                     return *inner.clone();
                 }
             }
+            if let NType::Causal(ref inner, _) = obj_ty {
+                if d.field == "extract" || d.field == "value" || d.field == "snapshot" {
+                    return *inner.clone();
+                }
+            }
+            if let NType::Uncertain(ref inner) = obj_ty {
+                if d.field == "extract" || d.field == "value" || d.field == "snapshot" {
+                    return *inner.clone();
+                }
+            }
+            if d.field == "forget" {
+                return NType::Base("ForgetCertificate".into());
+            }
+            if d.field == "observe" {
+                return NType::Causal(Box::new(NType::Any), "observed".into());
+            }
+            if d.field == "intervene" {
+                return NType::Causal(Box::new(NType::Any), "intervened".into());
+            }
         }
         let callee_name = match &c.callee {
             Expr::Ident(ref name, _) => Some(name.as_str()),
             _ => None,
         };
+        if callee_name == Some("Uncertain") || callee_name == Some("UNCERTAIN") {
+            let inner = c.args.first().map(|a| self.infer_expr(&a.value)).unwrap_or(NType::Any);
+            return NType::Uncertain(Box::new(inner));
+        }
         let is_variadic_shape_creator = match callee_name {
             Some("zeros") | Some("glorot") | Some("ones") | Some("randn") => true,
+            _ => false,
+        };
+        let is_variadic_optimizer_or_builtin = match callee_name {
+            Some("sgd") | Some("adam") | Some("forget") => true,
             _ => false,
         };
 
@@ -1160,6 +1342,10 @@ impl TypeChecker {
                                 c.span.clone(),
                             ));
                         }
+                    }
+                } else if is_variadic_optimizer_or_builtin {
+                    for arg in &c.args {
+                        self.infer_expr(&arg.value);
                     }
                 } else {
                     let expected_args_len = if is_method_call { params.len().saturating_sub(1) } else { params.len() };
@@ -1246,14 +1432,14 @@ impl TypeChecker {
             match d.field.as_str() {
                 "before" => {
                     let new_spec = match spec {
-                        TemporalSpec::Offset(n) => TemporalSpec::Offset(-n.abs().max(1)),
+                        TemporalSpec::Offset(n) => TemporalSpec::Offset(n - 1),
                         TemporalSpec::Direction(_) => TemporalSpec::Direction("past_to_future".into()),
                     };
                     return NType::Temporal(inner.clone(), new_spec);
                 }
                 "after" => {
                     let new_spec = match spec {
-                        TemporalSpec::Offset(n) => TemporalSpec::Offset(n.abs().max(1)),
+                        TemporalSpec::Offset(n) => TemporalSpec::Offset(n + 1),
                         TemporalSpec::Direction(dir) => {
                             let nd = if dir == "past_to_future" { "future_to_past" } else { "past_to_future" };
                             TemporalSpec::Direction(nd.into())
@@ -1269,10 +1455,17 @@ impl TypeChecker {
             }
         }
 
+        // Causal field/method access
+        if let NType::Causal(ref inner, _) = obj_ty {
+            if d.field == "extract" || d.field == "value" || d.field == "snapshot" {
+                return *inner.clone();
+            }
+        }
+
         // Uncertain field access
         if let NType::Uncertain(ref inner) = obj_ty {
             match d.field.as_str() {
-                "value" => return *inner.clone(),
+                "value" | "extract" | "snapshot" => return *inner.clone(),
                 "confidence" => return NType::Base("Float".into()),
                 "std" => return NType::Base("Float".into()),
                 "bounds" => return NType::Tuple(vec![NType::Base("Float".into()), NType::Base("Float".into())]),

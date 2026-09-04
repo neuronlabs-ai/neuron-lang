@@ -2,10 +2,8 @@
 # NEURON End-to-End Verification Suite
 
 $neuronc = "$PSScriptRoot\target\release\neuronc.exe"
-if (-not (Test-Path $neuronc)) {
-    Write-Host "Building neuronc release binary..." -ForegroundColor Cyan
-    cargo build --release --bin neuronc
-}
+Write-Host "Ensuring neuronc release binary is built..." -ForegroundColor Cyan
+cargo build --release --bin neuronc
 
 $runExamples = @(
     "simple_shapes.nr",

@@ -148,8 +148,9 @@ pub fn forget_task(
     let bounds_satisfied = residual_loss_retained < 0.5;
 
     // Forgetting is considered successful if alignment dropped significantly
+    // AND parameters actually changed. Zero-strength or no-change runs cannot pass.
     let alignment_drop = alignment_before - alignment_after;
-    let forgetting_successful = alignment_drop > 0.01 || params_modified > 0;
+    let forgetting_successful = strength > 0.0 && alignment_drop > 0.01 && params_modified > 0;
 
     // Create a unique certificate ID from actual measurements
     // (deterministic so VM and JIT produce identical certificates for the same inputs)

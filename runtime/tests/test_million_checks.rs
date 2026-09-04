@@ -1,4 +1,4 @@
-﻿/// NEURON 1,000,000+ Mass Property & Invariant Verification Suite
+/// NEURON 1,000,000+ Mass Property & Invariant Verification Suite
 ///
 /// Executes over 1,000,000 continuous randomized test cases and property assertions:
 /// 1. 250,000 Temporal Offset Algebraic Invariant Checks
@@ -78,7 +78,7 @@ fn test_million_verified_assertions() {
         let derived_ty = NType::Temporal(Box::new(NType::Tensor(vec![])), TemporalSpec::Offset(simulated_offset));
         let past_req = NType::Temporal(Box::new(NType::Tensor(vec![])), TemporalSpec::Offset(0));
         
-        let is_compat = types_compatible(&derived_ty, &past_req);
+        let is_compat = types_compatible(&past_req, &derived_ty);
         if simulated_offset <= 0 {
             assert!(is_compat, "Invariant violation: offset <= 0 must satisfy Temporal[T, 0]");
         } else {

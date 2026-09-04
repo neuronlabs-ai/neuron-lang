@@ -295,6 +295,8 @@ pub fn lookup_keyword(word: &str) -> Option<TokenType> {
         "explain" => Some(TokenType::Explain),
         "true" => Some(TokenType::True),
         "false" => Some(TokenType::False),
+        "and" => Some(TokenType::And),
+        "or" => Some(TokenType::Or),
         "agent" => Some(TokenType::Agent),
         "meta" => Some(TokenType::Meta),
         "search" => Some(TokenType::Search),

@@ -29,7 +29,7 @@ fn causal_recovery(trial):
 //  interventional (causal) evidence
 // ─────────────────────────────────────────
 fn should_prescribe(effect: Causal[Float, intervened]) -> Float:
-  return effect
+  return effect.extract()
 
 // ─────────────────────────────────────────
 //  Outcome Predictor Network

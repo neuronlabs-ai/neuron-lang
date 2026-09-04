@@ -34,6 +34,22 @@ class PyCheckAnalyzer(ast.NodeVisitor):
         """Override to run rules on every node."""
         self._run_rules(node)
         super().generic_visit(node)
+
+    def visit_Assign(self, node):
+        """Track literal constant assignments for constant folding / alias analysis."""
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                val = None
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, (int, float)):
+                    val = node.value.value
+                elif isinstance(node.value, ast.UnaryOp) and isinstance(node.value.op, ast.USub):
+                    if isinstance(node.value.operand, ast.Constant) and isinstance(node.value.operand.value, (int, float)):
+                        val = -node.value.operand.value
+                if val is not None:
+                    self.ctx.constants[target.id] = val
+                self.ctx.assignments[target.id] = node.value
+        self._run_rules(node)
+        self.generic_visit(node)
     
     def visit_For(self, node):
         """Track loop context for rules that need it."""

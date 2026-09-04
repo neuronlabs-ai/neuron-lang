@@ -1,4 +1,4 @@
-﻿/// Integration tests for Offset-Based Temporal Types (§3.1.1).
+/// Integration tests for Offset-Based Temporal Types (§3.1.1).
 /// Verifies algebraic composition (.shift, .lag, .lead), horizon alignment, and compile-time rejection.
 
 use neuron_compiler::lexer::Lexer;
@@ -21,7 +21,7 @@ fn check_src(src: &str) -> Result<(), Vec<String>> {
 fn test_temporal_offset_valid_algebra() {
     let code = r#"
 fn process_past(data: Temporal[Tensor, 0]) -> Tensor:
-    return data
+    return data.snapshot()
 
 fn main():
     let prices: Temporal[Tensor, 0] = zeros(10, 4)
@@ -37,7 +37,7 @@ fn main():
 fn test_temporal_offset_lag_and_lead() {
     let code = r#"
 fn safe_strategy(x: Temporal[Tensor, 0]) -> Tensor:
-    return x
+    return x.snapshot()
 
 fn main():
     let data: Temporal[Tensor, 0] = zeros(10, 4)
@@ -52,7 +52,7 @@ fn main():
 fn test_temporal_offset_negative_rejection() {
     let code = r#"
 fn safe_strategy(x: Temporal[Tensor, 0]) -> Tensor:
-    return x
+    return x.snapshot()
 
 fn main():
     let data: Temporal[Tensor, 0] = zeros(10, 4)
@@ -70,7 +70,7 @@ fn main():
 fn test_temporal_offset_lead_rejection() {
     let code = r#"
 fn safe_strategy(x: Temporal[Tensor, 0]) -> Tensor:
-    return x
+    return x.snapshot()
 
 fn main():
     let data: Temporal[Tensor, 0] = zeros(10, 4)
@@ -84,8 +84,21 @@ fn main():
 #[test]
 fn test_temporal_offset_binary_conservative_composition() {
     let code = r#"
+fn require_lagged_2(x: Temporal[Tensor, -2]) -> Tensor:
+    return x.snapshot()
+
+fn main():
+    let a: Temporal[Tensor, -2] = zeros(5, 5)
+    let b: Temporal[Tensor, -5] = zeros(5, 5)
+    let c = a + b
+    let res = require_lagged_2(c)
+"#;
+    let res = check_src(code);
+    assert!(res.is_ok(), "Expected binary op max(-2, -5) to yield offset -2: {:?}", res);
+
+    let code_invalid = r#"
 fn require_lagged_5(x: Temporal[Tensor, -5]) -> Tensor:
-    return x
+    return x.snapshot()
 
 fn main():
     let a: Temporal[Tensor, -2] = zeros(5, 5)
@@ -93,15 +106,14 @@ fn main():
     let c = a + b
     let res = require_lagged_5(c)
 "#;
-    let res = check_src(code);
-    assert!(res.is_ok(), "Expected binary op min(-2, -5) to yield offset -5: {:?}", res);
+    assert!(check_src(code_invalid).is_err(), "Expected binary op max(-2, -5) = -2 to reject requirement -5");
 }
 
 #[test]
 fn test_temporal_offset_multi_horizon_matching() {
     let valid_code = r#"
 fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Tensor:
-    return pred - target
+    return (pred - target).snapshot()
 
 fn main():
     let p: Temporal[Tensor, 5] = zeros(10, 1)
@@ -112,7 +124,7 @@ fn main():
 
     let invalid_code = r#"
 fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Tensor:
-    return pred - target
+    return (pred - target).snapshot()
 
 fn main():
     let p: Temporal[Tensor, 5] = zeros(10, 1)

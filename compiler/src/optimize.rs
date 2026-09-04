@@ -687,40 +687,11 @@ fn pass_tensor_fusion(func: &mut IRFunction) -> bool {
         changed = true;
     }
 
-    // Detect MatMul → ReLU fusion (when MatMul result is only used by the ReLU)
-    for block in &mut func.blocks {
-        let len = block.instructions.len();
-        for i in 0..len {
-            let node = &block.instructions[i];
-            if matches!(&node.op, IROp::ReLU) && node.inputs.len() == 1 {
-                let matmul_id = node.inputs[0];
-                // Check if the input is a MatMul with only one use
-                if use_count.get(&matmul_id).copied().unwrap_or(0) == 1 {
-                    // Find the MatMul in the same block
-                    let mut matmul_idx = None;
-                    for j in 0..i {
-                        if block.instructions[j].id == matmul_id {
-                            if matches!(&block.instructions[j].op, IROp::MatMul) {
-                                matmul_idx = Some(j);
-                            }
-                            break;
-                        }
-                    }
-                    if let Some(j) = matmul_idx {
-                        // Fuse: mark MatMul as Nop, change ReLU to MatMul with same inputs
-                        let matmul_inputs = block.instructions[j].inputs.clone();
-                        block.instructions[j].op = IROp::Nop;
-                        block.instructions[j].inputs = vec![];
-                        block.instructions[i].op = IROp::MatMul; // Fused MatMul+ReLU
-                        block.instructions[i].inputs = matmul_inputs;
-                        // Note: In a full implementation, this would emit a MatMulReLU fused op
-                        // For now, we keep it as separate ops but eliminate the redundant node
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
+    // NOTE: MatMul → ReLU fusion was removed because the previous implementation
+    // replaced ReLU with a plain MatMul, deleting the activation entirely.
+    // This caused relu(negative) to return negative values instead of 0.0.
+    // To re-enable, implement a proper IROp::MatMulReLU fused op that preserves
+    // ReLU semantics (clamping negative values to zero after matrix multiply).
 
     changed
 }

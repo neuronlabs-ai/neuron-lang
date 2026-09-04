@@ -7,7 +7,7 @@
 
 fn execute_trading_strategy(features: Temporal[Tensor, 0]) -> Tensor:
   print("  Executing strategy on clean past-aligned features...")
-  return features
+  return features.snapshot()
 
 fn forecast_5step(features: Temporal[Tensor, 0]) -> Temporal[Tensor, 5]:
   print("  Generating 5-step ahead multi-horizon forecast...")

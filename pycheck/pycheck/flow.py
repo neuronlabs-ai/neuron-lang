@@ -31,11 +31,13 @@ class TaintTracker:
     def __init__(self):
         self.tainted_vars: Dict[str, TaintSource] = {}
         self.diagnostics: List[Diagnostic] = []
+        self.constants: Dict[str, any] = {}
     
     def analyze(self, tree: ast.AST, source_lines: List[str]) -> List[Diagnostic]:
         """Run taint analysis on a full AST."""
         self.tainted_vars.clear()
         self.diagnostics.clear()
+        self.constants.clear()
         
         # Two-pass analysis:
         # Pass 1: Identify all taint sources (assignments from leaky operations)
@@ -45,8 +47,35 @@ class TaintTracker:
         
         return self.diagnostics
     
+    def _extract_constant(self, expr):
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float)):
+            return expr.value
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub):
+            if isinstance(expr.operand, ast.Constant) and isinstance(expr.operand.value, (int, float)):
+                return -expr.operand.value
+        return None
+
+    def _is_negative_period(self, expr) -> bool:
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub):
+            return True
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float)) and expr.value < 0:
+            return True
+        if isinstance(expr, ast.Name):
+            val = self.constants.get(expr.id)
+            if val is not None and isinstance(val, (int, float)) and val < 0:
+                return True
+        return False
+
     def _collect_taints(self, tree: ast.AST):
         """Pass 1: Walk the AST and mark variables that receive tainted data."""
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        val = self._extract_constant(node.value)
+                        if val is not None:
+                            self.constants[target.id] = val
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 self._check_assignment_taint(node)
@@ -121,11 +150,11 @@ class TaintTracker:
             # Direct taint sources
             if method == 'shift':
                 for arg in node.args:
-                    if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                    if self._is_negative_period(arg):
                         return "shift() with negative period (future access)"
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):
-                        if arg.value < 0:
-                            return "shift() with negative period (future access)"
+                for kw in node.keywords:
+                    if kw.arg == 'periods' and self._is_negative_period(kw.value):
+                        return "shift() with negative period (future access)"
             
             if method in ('bfill', 'backfill'):
                 return f".{method}() backfills from future values"
@@ -138,9 +167,10 @@ class TaintTracker:
             
             if method == 'diff':
                 for arg in node.args:
-                    if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                    if self._is_negative_period(arg):
                         return ".diff() with negative period (future access)"
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
+                for kw in node.keywords:
+                    if kw.arg == 'periods' and self._is_negative_period(kw.value):
                         return ".diff() with negative period (future access)"
             
             # Taint propagation through method chains

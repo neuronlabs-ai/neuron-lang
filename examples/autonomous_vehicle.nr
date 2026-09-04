@@ -27,7 +27,8 @@ model SensorFusion:
 fn safe_drive(sensor_history: Temporal[Tensor, past_to_future]) -> Tensor[1]:
   let past_readings = sensor_history.before(20)
   let w = glorot(20, 1)
-  return past_readings @ w
+  let act = past_readings @ w
+  return act.snapshot()
 
 fn main() -> Tensor[1]:
   let sensors: Temporal[Tensor, past_to_future] = load("market_data.csv")

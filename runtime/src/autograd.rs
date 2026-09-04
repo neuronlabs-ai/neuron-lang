@@ -312,6 +312,12 @@ impl GradTape {
                 None => continue, // No gradient flowing to this output
             };
 
+            // Skip entries whose inputs were cleared by stop_grad/detach.
+            // These nodes have been severed from the computation graph.
+            if entry.inputs.is_empty() {
+                continue;
+            }
+
             match &entry.op {
                 TapeOp::Add { a_shape, b_shape } => {
                     let grad_a = reduce_grad(&out_grad, &entry.output_shape, a_shape);

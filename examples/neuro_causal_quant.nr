@@ -16,7 +16,7 @@ model QuantStrategy:
   weights: Tensor[4, 1] = glorot(4, 1)
 
   fn predict_alpha(self, features: Temporal[Tensor, 0]) -> Tensor:
-    return features @ self.weights
+    return (features @ self.weights).snapshot()
 
   fn execute_trade(self, signal: Tensor, confidence: Float) -> Tensor:
     if confidence < 0.85:
