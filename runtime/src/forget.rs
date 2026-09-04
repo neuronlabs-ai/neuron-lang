@@ -197,6 +197,7 @@ pub fn forget_task(
     cert_fields.borrow_mut().insert("param_norm_before".into(), Value::Float(total_norm_before));
     cert_fields.borrow_mut().insert("param_norm_after".into(), Value::Float(total_norm_after));
     cert_fields.borrow_mut().insert("relative_param_change".into(), Value::Float(relative_change));
+    cert_fields.borrow_mut().insert("verification_level".into(), Value::Str("Empirical".into()));
 
     Ok(Value::Model {
         name: "ForgetCertificate".into(),

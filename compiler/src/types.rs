@@ -410,7 +410,7 @@ impl SymbolTable {
         global.define("input", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));
         global.define("embed_string", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
         global.define("generate_reply", NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("String".into())), None));
-        global.define("forget", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("forget", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone()], Box::new(NType::Base("ForgetCertificate".into())), None));
         global.define("sgd", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("adam", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("grad", NType::Fn_(vec![any.clone()], Box::new(tensor.clone()), None));
