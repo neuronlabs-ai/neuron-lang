@@ -18,11 +18,13 @@ fn next_seed() -> u64 {
     let counter = SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
     // Mix counter with a time-based value on first call
     if counter == 0 {
-        // Seed the base from system time on first use
+        #[cfg(not(target_arch = "wasm32"))]
         let time_seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(42);
+        #[cfg(target_arch = "wasm32")]
+        let time_seed = 0x9E3779B97F4A7C15u64;
         SEED_COUNTER.store(time_seed, Ordering::Relaxed);
         return time_seed;
     }

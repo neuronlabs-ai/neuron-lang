@@ -58,10 +58,18 @@ pub fn eval_neuron(source: &str) -> String {
 
             match vm.run_main() {
                 Ok(val) => {
-                    let display_str = match val {
-                        neuron_runtime::vm::Value::Void => "Executed successfully (Void return)".to_string(),
-                        v => v.display(),
-                    };
+                    let mut output_lines = vm.stdout_log.clone();
+                    match val {
+                        neuron_runtime::vm::Value::Void => {
+                            if output_lines.is_empty() {
+                                output_lines.push("Executed successfully (Void return)".to_string());
+                            }
+                        }
+                        v => {
+                            output_lines.push(v.display());
+                        }
+                    }
+                    let display_str = output_lines.join("\n");
                     let res = WasmResult {
                         success: true,
                         output: display_str,

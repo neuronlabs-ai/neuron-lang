@@ -106,10 +106,13 @@ pub fn forget_task(
 
     // 3. Apply unlearning: traverse and update all tensors in-place
     //    Use time-based entropy for RNG seed to ensure non-reproducible noise
+    #[cfg(not(target_arch = "wasm32"))]
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(9817234) ^ 0xDEADBEEFCAFE;
+    #[cfg(target_arch = "wasm32")]
+    let seed = 0xDEADBEEFCAFEu64 ^ 9817234u64;
     let mut rng = SimpleRng::new(seed);
     let params_modified = update_tensors_in_model(vm, model, method, strength, &mut rng);
 

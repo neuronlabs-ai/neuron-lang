@@ -744,10 +744,13 @@ impl VM {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
             // Use a simple PRNG seeded from time + a counter for reproducibility within a session
+            #[cfg(not(target_arch = "wasm32"))]
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
+            #[cfg(target_arch = "wasm32")]
+            let seed = 12345678901234567890u128;
             let mut hasher = DefaultHasher::new();
             seed.hash(&mut hasher);
             self.rng_counter += 1;
