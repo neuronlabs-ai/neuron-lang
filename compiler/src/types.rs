@@ -1004,7 +1004,8 @@ impl TypeChecker {
             }
             Expr::Index(idx) => {
                 let obj_ty = self.infer_expr(&idx.obj);
-                match obj_ty {
+                let (stripped_obj, wrappers) = strip_wrappers(obj_ty);
+                let elem_ty = match stripped_obj {
                     NType::Tensor(ref dims) => {
                         if dims.len() <= 1 {
                             NType::Base("Float".into())
@@ -1018,13 +1019,23 @@ impl TypeChecker {
                             if let IndexItem::Expr(Expr::IntLit(val, _)) = &idx.indices[0] {
                                 let i = *val as usize;
                                 if i < types.len() {
-                                    return types[i].clone();
+                                    types[i].clone()
+                                } else {
+                                    NType::Any
                                 }
+                            } else {
+                                NType::Any
                             }
+                        } else {
+                            NType::Any
                         }
-                        NType::Any
                     }
                     _ => NType::Any,
+                };
+                if elem_ty == NType::Any {
+                    NType::Any
+                } else {
+                    apply_wrappers(elem_ty, wrappers)
                 }
             }
             Expr::Grad(g) => {

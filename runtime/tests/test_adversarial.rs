@@ -983,5 +983,20 @@ fn main() -> Float:
     assert!(should_compile_error(src), "Causal wrapper inside a tuple must not escape to raw Float");
 }
 
+#[test]
+fn adversarial_index_temporal_wrapper_preserved() {
+    let src = r#"
+fn requires_safe(x: Temporal[Tensor, 0]) -> Tensor:
+  return x.snapshot()
+
+fn main() -> Tensor:
+  let future_matrix: Temporal[Tensor[2, 2], 5] = randn(2, 2)
+  let future_row = future_matrix[0]
+  return requires_safe(future_row)
+"#;
+    assert!(should_compile_error(src), "Indexing a Temporal tensor must preserve the Temporal wrapper and offset");
+}
+
+
 
 
