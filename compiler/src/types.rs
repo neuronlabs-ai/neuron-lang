@@ -177,6 +177,10 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
         }
         (NType::Causal(x, m1), NType::Causal(y, m2)) => m1 == m2 && types_compatible(x, y),
         (NType::List(x), NType::List(y)) => types_compatible(x, y),
+        (NType::Tuple(ts1), NType::Tuple(ts2)) => {
+            ts1.len() == ts2.len() && ts1.iter().zip(ts2.iter()).all(|(t1, t2)| types_compatible(t1, t2))
+        }
+        (NType::Option_(x), NType::Option_(y)) => types_compatible(x, y),
         (NType::Model(a, _, _), NType::Model(b, _, _)) => a == b,
         (NType::Model(a, _, _), NType::Base(b)) => a == b,
         (NType::Base(a), NType::Model(b, _, _)) => a == b,

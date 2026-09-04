@@ -969,4 +969,19 @@ fn main():
     assert!(run(src).is_err(), "unknown unlearning method must be rejected with runtime error");
 }
 
+#[test]
+fn adversarial_tuple_causal_escape_prevented() {
+    let src = r#"
+fn unwrap_pair(pair: (Float, Int)) -> Float:
+  return pair[0]
+
+fn main() -> Float:
+  let c: Causal[Float, "observed"] = 1.0
+  let p = (c, 42)
+  return unwrap_pair(p)
+"#;
+    assert!(should_compile_error(src), "Causal wrapper inside a tuple must not escape to raw Float");
+}
+
+
 
