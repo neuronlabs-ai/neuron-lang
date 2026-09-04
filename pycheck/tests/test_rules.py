@@ -420,3 +420,29 @@ class TestIntegration:
     def test_no_duplicate_codes(self):
         codes = [r.code for r in ALL_RULES]
         assert len(codes) == len(set(codes)), f"Duplicate rule codes: {[c for c in codes if codes.count(c) > 1]}"
+
+    def test_r2_8_keyword_sink_taint(self):
+        code = """
+import pandas as pd
+df = pd.DataFrame({'x': [1, 2], 'y': [3, 4]})
+x_taint = df.shift(-1)
+model.fit(X=x_taint, y=df['y'])
+"""
+        tree = ast.parse(code)
+        tracker = TaintTracker()
+        results = tracker.analyze(tree, code.split('\n'))
+        assert any(d.code == "F001" and "X" in d.message for d in results), "Keyword arg taint must be detected"
+
+    def test_r2_9_getattr_shift_detected(self):
+        code = """
+import pandas as pd
+df = pd.DataFrame({'x': [1, 2]})
+f = getattr(df, 'shift')(-1)
+"""
+        tree = ast.parse(code)
+        rule = T001_ShiftNegative()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(rule.check_node(node, None))
+        assert any(d.code == "T001" for d in diags), "getattr(df, 'shift')(-1) must trigger T001"
+

@@ -164,6 +164,8 @@ impl Value {
         match self.unwrap_ref() {
             Value::Float(f) => *f,
             Value::Int(i) => *i as f64,
+            Value::Bool(b) => if *b { 1.0 } else { 0.0 },
+            Value::Uncertain { value, .. } => *value,
             Value::Tensor(t) if t.numel() == 1 => t.data[0],
             _ => panic!("Runtime TypeError: Expected Float, found {:?}", self),
         }
@@ -1166,6 +1168,23 @@ impl VM {
                     (Value::Str(x), Value::Str(y)) => {
                         Ok(Value::Str(format!("{}{}", x, y)))
                     }
+                    (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
+                        let combined_std = (s1.powi(2) + s2.powi(2)).sqrt();
+                        let combined_conf = c1.min(*c2);
+                        Ok(Value::Uncertain { value: v1 + v2, std: combined_std, confidence: combined_conf })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Float(y)) => {
+                        Ok(Value::Uncertain { value: v + y, std: *std, confidence: *confidence })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Int(y)) => {
+                        Ok(Value::Uncertain { value: v + *y as f64, std: *std, confidence: *confidence })
+                    }
+                    (Value::Float(x), Value::Uncertain { value: v, std, confidence }) => {
+                        Ok(Value::Uncertain { value: x + v, std: *std, confidence: *confidence })
+                    }
+                    (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
+                        Ok(Value::Uncertain { value: *x as f64 + v, std: *std, confidence: *confidence })
+                    }
                     _ => Ok(Value::Float(a.as_float() + b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -1201,6 +1220,23 @@ impl VM {
                         ta.id = self.tape.alloc_id();
                         let r = self.tape.sub(&ta, tb);
                         Ok(Value::Tensor(r))
+                    }
+                    (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
+                        let combined_std = (s1.powi(2) + s2.powi(2)).sqrt();
+                        let combined_conf = c1.min(*c2);
+                        Ok(Value::Uncertain { value: v1 - v2, std: combined_std, confidence: combined_conf })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Float(y)) => {
+                        Ok(Value::Uncertain { value: v - y, std: *std, confidence: *confidence })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Int(y)) => {
+                        Ok(Value::Uncertain { value: v - *y as f64, std: *std, confidence: *confidence })
+                    }
+                    (Value::Float(x), Value::Uncertain { value: v, std, confidence }) => {
+                        Ok(Value::Uncertain { value: x - v, std: *std, confidence: *confidence })
+                    }
+                    (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
+                        Ok(Value::Uncertain { value: *x as f64 - v, std: *std, confidence: *confidence })
                     }
                     _ => Ok(Value::Float(a.as_float() - b.as_float())),
                 };
@@ -1238,6 +1274,27 @@ impl VM {
                         let r = self.tape.mul(&ta, tb);
                         Ok(Value::Tensor(r))
                     }
+                    (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
+                        let product = v1 * v2;
+                        let rel_var = (s1 / (v1.abs() + 1e-12)).powi(2) + (s2 / (v2.abs() + 1e-12)).powi(2);
+                        let combined_std = product.abs() * rel_var.sqrt();
+                        let combined_conf = c1.min(*c2);
+                        Ok(Value::Uncertain { value: product, std: combined_std, confidence: combined_conf })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Float(y)) => {
+                        Ok(Value::Uncertain { value: v * y, std: std * y.abs(), confidence: *confidence })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Int(y)) => {
+                        let yf = *y as f64;
+                        Ok(Value::Uncertain { value: v * yf, std: std * yf.abs(), confidence: *confidence })
+                    }
+                    (Value::Float(x), Value::Uncertain { value: v, std, confidence }) => {
+                        Ok(Value::Uncertain { value: x * v, std: std * x.abs(), confidence: *confidence })
+                    }
+                    (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
+                        let xf = *x as f64;
+                        Ok(Value::Uncertain { value: xf * v, std: std * xf.abs(), confidence: *confidence })
+                    }
                     _ => Ok(Value::Float(a.as_float() * b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -1273,6 +1330,38 @@ impl VM {
                         ta.id = self.tape.alloc_id();
                         let r = self.tape.div(&ta, tb);
                         Ok(Value::Tensor(r))
+                    }
+                    (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
+                        if *v2 == 0.0 { return Err("Runtime Error: Division by zero".to_string()); }
+                        let ratio = v1 / v2;
+                        let rel_var = (s1 / (v1.abs() + 1e-12)).powi(2) + (s2 / (v2.abs() + 1e-12)).powi(2);
+                        let combined_std = ratio.abs() * rel_var.sqrt();
+                        let combined_conf = c1.min(*c2);
+                        Ok(Value::Uncertain { value: ratio, std: combined_std, confidence: combined_conf })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Float(y)) => {
+                        if *y == 0.0 { return Err("Runtime Error: Division by zero".to_string()); }
+                        Ok(Value::Uncertain { value: v / y, std: std / y.abs(), confidence: *confidence })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Int(y)) => {
+                        if *y == 0 { return Err("Runtime Error: Division by zero".to_string()); }
+                        let yf = *y as f64;
+                        Ok(Value::Uncertain { value: v / yf, std: std / yf.abs(), confidence: *confidence })
+                    }
+                    (Value::Float(x), Value::Uncertain { value: v, std, confidence }) => {
+                        if *v == 0.0 { return Err("Runtime Error: Division by zero".to_string()); }
+                        let ratio = x / v;
+                        let rel_var = (std / (v.abs() + 1e-12)).powi(2);
+                        let combined_std = ratio.abs() * rel_var.sqrt();
+                        Ok(Value::Uncertain { value: ratio, std: combined_std, confidence: *confidence })
+                    }
+                    (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
+                        if *v == 0.0 { return Err("Runtime Error: Division by zero".to_string()); }
+                        let xf = *x as f64;
+                        let ratio = xf / v;
+                        let rel_var = (std / (v.abs() + 1e-12)).powi(2);
+                        let combined_std = ratio.abs() * rel_var.sqrt();
+                        Ok(Value::Uncertain { value: ratio, std: combined_std, confidence: *confidence })
                     }
                     (Value::Int(x), Value::Int(y)) => {
                         if *y == 0 {

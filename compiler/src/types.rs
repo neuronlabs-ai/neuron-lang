@@ -313,6 +313,7 @@ struct Scope {
     mutations: Vec<String>,
     uncertain_accessed: Vec<(String, Span)>,
     uncertain_confidence_checked: Vec<String>,
+    const_ints: HashMap<String, i64>,
 }
 
 impl Scope {
@@ -322,6 +323,7 @@ impl Scope {
             mutations: Vec::new(),
             uncertain_accessed: Vec::new(),
             uncertain_confidence_checked: Vec::new(),
+            const_ints: HashMap::new(),
         }
     }
     
@@ -470,11 +472,38 @@ impl SymbolTable {
             parent.uncertain_confidence_checked.extend(child.uncertain_confidence_checked);
         }
     }
+
+    fn get_const_int(&self, name: &str) -> Option<i64> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(val) = scope.const_ints.get(name) {
+                return Some(*val);
+            }
+        }
+        None
+    }
+
+    fn set_const_int(&mut self, name: &str, val: i64) {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.symbols.contains_key(name) {
+                scope.const_ints.insert(name.to_string(), val);
+                return;
+            }
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.const_ints.insert(name.to_string(), val);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════
 //  Type Checker
 // ═══════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+pub struct FnEffectInfo {
+    pub param_names: Vec<String>,
+    pub effects: Vec<EffectEntry>,
+}
 
 pub struct TypeChecker {
     pub result: CompileResult,
@@ -482,6 +511,7 @@ pub struct TypeChecker {
     unifier: UnificationEnv,
     model_types: HashMap<String, NType>,
     current_return_type: Option<NType>,
+    effects_map: HashMap<String, FnEffectInfo>,
 }
 
 impl TypeChecker {
@@ -492,6 +522,7 @@ impl TypeChecker {
             unifier: UnificationEnv::default(),
             model_types: HashMap::new(),
             current_return_type: None,
+            effects_map: HashMap::new(),
         }
     }
 
@@ -517,6 +548,16 @@ impl TypeChecker {
             TopLevel::Fn(f) => {
                 let fn_ty = self.fn_to_type(f);
                 self.symbols.define(&f.name, fn_ty);
+                let effects = f.effect_clause.as_ref().map(|ec| {
+                    ec.effects.iter().map(|e| EffectEntry {
+                        kind: e.kind.clone(),
+                        target: e.target.clone(),
+                    }).collect()
+                }).unwrap_or_default();
+                self.effects_map.insert(f.name.clone(), FnEffectInfo {
+                    param_names: f.params.iter().map(|p| p.name.clone()).collect(),
+                    effects,
+                });
             }
             TopLevel::Model(m) => {
                 let mut fields = HashMap::new();
@@ -531,6 +572,16 @@ impl TypeChecker {
                 }
                 for met in &m.methods {
                     methods.insert(met.name.clone(), self.fn_to_type(met));
+                    let effects = met.effect_clause.as_ref().map(|ec| {
+                        ec.effects.iter().map(|e| EffectEntry {
+                            kind: e.kind.clone(),
+                            target: e.target.clone(),
+                        }).collect()
+                    }).unwrap_or_default();
+                    self.effects_map.insert(format!("{}.{}", m.name, met.name), FnEffectInfo {
+                        param_names: met.params.iter().map(|p| p.name.clone()).collect(),
+                        effects,
+                    });
                 }
                 let model_ty = NType::Model(m.name.clone(), fields, methods);
                 self.model_types.insert(m.name.clone(), model_ty.clone());
@@ -549,7 +600,19 @@ impl TypeChecker {
                         fields.insert(p.name.clone(), type_from_ast(ta));
                     }
                 }
-                for met in &l.methods { methods.insert(met.name.clone(), self.fn_to_type(met)); }
+                for met in &l.methods {
+                    methods.insert(met.name.clone(), self.fn_to_type(met));
+                    let effects = met.effect_clause.as_ref().map(|ec| {
+                        ec.effects.iter().map(|e| EffectEntry {
+                            kind: e.kind.clone(),
+                            target: e.target.clone(),
+                        }).collect()
+                    }).unwrap_or_default();
+                    self.effects_map.insert(format!("{}.{}", l.name, met.name), FnEffectInfo {
+                        param_names: met.params.iter().map(|p| p.name.clone()).collect(),
+                        effects,
+                    });
+                }
                 let model_ty = NType::Model(l.name.clone(), fields, methods);
                 self.model_types.insert(l.name.clone(), model_ty.clone());
                 let params: Vec<NType> = l.params.iter().map(|p| {
@@ -575,7 +638,19 @@ impl TypeChecker {
                         fields.insert(p.name.clone(), type_from_ast(ta));
                     }
                 }
-                for met in &a.methods { methods.insert(met.name.clone(), self.fn_to_type(met)); }
+                for met in &a.methods {
+                    methods.insert(met.name.clone(), self.fn_to_type(met));
+                    let effects = met.effect_clause.as_ref().map(|ec| {
+                        ec.effects.iter().map(|e| EffectEntry {
+                            kind: e.kind.clone(),
+                            target: e.target.clone(),
+                        }).collect()
+                    }).unwrap_or_default();
+                    self.effects_map.insert(format!("{}.{}", a.name, met.name), FnEffectInfo {
+                        param_names: met.params.iter().map(|p| p.name.clone()).collect(),
+                        effects,
+                    });
+                }
                 let agent_ty = NType::Model(a.name.clone(), fields, methods);
                 self.model_types.insert(a.name.clone(), agent_ty.clone());
                 self.symbols.define(&a.name, agent_ty);
@@ -605,7 +680,14 @@ impl TypeChecker {
             p.type_ann.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Any)
         }).collect();
         let ret = f.return_type.as_ref().map(|t| type_from_ast(t)).unwrap_or(NType::Void);
-        NType::Fn_(params, Box::new(ret), None)
+        let effect = f.effect_clause.as_ref().map(|ec| {
+            let entries = ec.effects.iter().map(|e| EffectEntry {
+                kind: e.kind.clone(),
+                target: e.target.clone(),
+            }).collect();
+            Box::new(NType::Effect(entries))
+        });
+        NType::Fn_(params, Box::new(ret), effect)
     }
 
     // ── Phase 2: Checking ──
@@ -661,6 +743,9 @@ impl TypeChecker {
             }
             TopLevel::Let(l) => {
                 let inferred = self.infer_expr(&l.value);
+                if let Some(val) = self.eval_const_int(&l.value) {
+                    self.symbols.set_const_int(&l.name, val);
+                }
                 if let Some(ref ta) = l.type_ann {
                     let declared = type_from_ast(ta);
                     if !types_compatible(&declared, &inferred) && !matches!(inferred, NType::Any) {
@@ -760,6 +845,9 @@ impl TypeChecker {
         match stmt {
             Stmt::Let(l) => {
                 let inferred = self.infer_expr(&l.value);
+                if let Some(val) = self.eval_const_int(&l.value) {
+                    self.symbols.set_const_int(&l.name, val);
+                }
                 if let Some(ref ta) = l.type_ann {
                     let declared = type_from_ast(ta);
                     if !types_compatible(&declared, &inferred) && !matches!(inferred, NType::Any) {
@@ -1238,22 +1326,95 @@ impl TypeChecker {
         }
     }
 
-    fn extract_int_lit(&self, expr: &Expr) -> Option<i64> {
+    fn expr_to_lvalue_string(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Self_(_) => Some("self".to_string()),
+            Expr::Ident(name, _) => Some(name.clone()),
+            Expr::Dot(d) => {
+                let base = self.expr_to_lvalue_string(&d.obj)?;
+                Some(format!("{}.{}", base, d.field))
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_const_int(&self, expr: &Expr) -> Option<i64> {
         match expr {
             Expr::IntLit(v, _) => Some(*v),
+            Expr::Ident(name, _) => self.symbols.get_const_int(name),
             Expr::UnaryOp(u) => {
-                if matches!(u.op, UnaryOp::Neg) {
-                    if let Expr::IntLit(v, _) = &u.operand {
-                        return Some(-v);
-                    }
+                let val = self.eval_const_int(&u.operand)?;
+                match u.op {
+                    UnaryOp::Neg => Some(-val),
+                    UnaryOp::Not => Some(if val == 0 { 1 } else { 0 }),
                 }
-                None
+            }
+            Expr::BinOp(b) => {
+                let left = self.eval_const_int(&b.left)?;
+                let right = self.eval_const_int(&b.right)?;
+                match b.op {
+                    BinOp::Add => left.checked_add(right),
+                    BinOp::Sub => left.checked_sub(right),
+                    BinOp::Mul => left.checked_mul(right),
+                    BinOp::Div => if right != 0 { left.checked_div(right) } else { None },
+                    BinOp::Mod => if right != 0 { left.checked_rem(right) } else { None },
+                    _ => None,
+                }
             }
             _ => None,
         }
     }
 
     fn infer_fn_call(&mut self, c: &FnCallExpr) -> NType {
+        // Propagate mutations from callee effect clauses to caller scope
+        if let Expr::Dot(ref d) = c.callee {
+            let obj_ty = self.infer_expr(&d.obj);
+            if let NType::Model(ref model_name, _, _) = obj_ty {
+                let key = format!("{}.{}", model_name, d.field);
+                if let Some(info) = self.effects_map.get(&key).cloned() {
+                    for eff in &info.effects {
+                        if eff.kind == "Mut" {
+                            if eff.target.as_deref() == Some("self") || eff.target.is_none() {
+                                if let Some(obj_str) = self.expr_to_lvalue_string(&d.obj) {
+                                    self.symbols.record_mutation(&obj_str);
+                                }
+                            } else if let Some(ref target) = eff.target {
+                                if let Some(idx) = info.param_names.iter().position(|p| p == target) {
+                                    if idx > 0 && idx - 1 < c.args.len() {
+                                        if let Some(arg_str) = self.expr_to_lvalue_string(&c.args[idx - 1].value) {
+                                            self.symbols.record_mutation(&arg_str);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Expr::Ident(ref name, _) = c.callee {
+            if let Some(info) = self.effects_map.get(name).cloned() {
+                for eff in &info.effects {
+                    if eff.kind == "Mut" {
+                        if let Some(ref target) = eff.target {
+                            if let Some(idx) = info.param_names.iter().position(|p| p == target) {
+                                if idx < c.args.len() {
+                                    if let Some(arg_str) = self.expr_to_lvalue_string(&c.args[idx].value) {
+                                        self.symbols.record_mutation(&arg_str);
+                                    }
+                                }
+                            }
+                        } else {
+                            for arg in &c.args {
+                                if let Some(arg_str) = self.expr_to_lvalue_string(&arg.value) {
+                                    self.symbols.record_mutation(&arg_str);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let callee_ty = self.infer_expr(&c.callee);
         if let Expr::Dot(ref d) = c.callee {
             let obj_ty = self.infer_expr(&d.obj);
@@ -1263,21 +1424,64 @@ impl TypeChecker {
                     TemporalSpec::Direction(dir) => if dir == "past_to_future" { 0 } else { 1 },
                 };
                 if d.field == "before" {
-                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
+                    let k = if let Some(arg) = c.args.first() {
+                        if let Some(val) = self.eval_const_int(&arg.value) {
+                            val
+                        } else {
+                            self.result.add_error(NeuronError::new(
+                                ErrorCode::TypeMismatch,
+                                "Temporal method '.before()' requires a compile-time constant integer offset, but found dynamic expression",
+                                arg.value.span().clone(),
+                            ));
+                            -1_000_000
+                        }
+                    } else {
+                        1
+                    };
                     // R2 fix: compose with receiver's offset, never reset
                     return NType::Temporal(inner.clone(), TemporalSpec::Offset(current_offset - k.abs()));
                 } else if d.field == "after" {
-                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(1);
+                    let k = if let Some(arg) = c.args.first() {
+                        if let Some(val) = self.eval_const_int(&arg.value) {
+                            val
+                        } else {
+                            self.result.add_error(NeuronError::new(
+                                ErrorCode::TypeMismatch,
+                                "Temporal method '.after()' requires a compile-time constant integer offset, but found dynamic expression",
+                                arg.value.span().clone(),
+                            ));
+                            1_000_000
+                        }
+                    } else {
+                        1
+                    };
                     return NType::Temporal(inner.clone(), TemporalSpec::Offset(current_offset + k.abs().max(1)));
                 } else if d.field == "shift" || d.field == "lag" || d.field == "lead" {
-                    let k = c.args.first().and_then(|a| self.extract_int_lit(&a.value)).unwrap_or(0);
-                    let new_offset = match d.field.as_str() {
-                        "shift" => current_offset + k,
-                        "lag" => current_offset - k,
-                        "lead" => current_offset + k,
-                        _ => current_offset,
-                    };
-                    return NType::Temporal(inner.clone(), TemporalSpec::Offset(new_offset));
+                    if c.args.is_empty() {
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TypeMismatch,
+                            format!("Temporal method '.{}()' requires an integer offset argument", d.field),
+                            c.span.clone(),
+                        ));
+                        return NType::Temporal(inner.clone(), TemporalSpec::Offset(current_offset));
+                    }
+                    let arg = &c.args[0];
+                    if let Some(k) = self.eval_const_int(&arg.value) {
+                        let new_offset = match d.field.as_str() {
+                            "shift" => current_offset + k,
+                            "lag" => current_offset - k,
+                            "lead" => current_offset + k,
+                            _ => current_offset,
+                        };
+                        return NType::Temporal(inner.clone(), TemporalSpec::Offset(new_offset));
+                    } else {
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TypeMismatch,
+                            format!("Temporal method '.{}()' requires a compile-time constant integer offset, but found dynamic expression", d.field),
+                            arg.value.span().clone(),
+                        ));
+                        return NType::Temporal(inner.clone(), TemporalSpec::Offset(1_000_000));
+                    }
                 } else if d.field == "snapshot" {
                     return *inner.clone();
                 }

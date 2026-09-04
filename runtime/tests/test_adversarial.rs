@@ -886,3 +886,87 @@ model Tiny:
     assert!(should_compile_error(src), "mutating self.w when only Mut[other] is declared must be rejected");
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  ROUND 2 ADVERSARIAL AUDIT REGRESSIONS (R2-1 through R2-7)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn adversarial_r2_1_temporal_shift_variable_leak() {
+    let src = r#"
+fn requires_safe(x: Temporal[Tensor, 0]) -> Tensor:
+  return x.snapshot()
+
+fn main() -> Tensor:
+  let prices: Temporal[Tensor, 0] = randn(2, 2)
+  let k = 5
+  let future = prices.shift(k)
+  return requires_safe(future)
+"#;
+    assert!(should_compile_error(src), "variable shift into future must be rejected at compile time");
+}
+
+#[test]
+fn adversarial_r2_3_interprocedural_effects_propagated() {
+    let src = r#"
+model Tiny:
+  w: Tensor[1, 1] = zeros(1, 1) + 1.0
+
+  fn mutate(self) [Effect[Mut[self]]]:
+    update self.w by sgd(grad(self.w), lr=0.1)
+
+  fn pure_wrapper(self):
+    self.mutate()
+
+fn main():
+  let t = Tiny()
+  t.pure_wrapper()
+"#;
+    assert!(should_compile_error(src), "caller must declare Effect when calling a method that has Effect[Mut[self]]");
+}
+
+#[test]
+fn adversarial_r2_5_uncertain_arithmetic_evaluation() {
+    let src = r#"
+fn main() -> Float:
+  let u = Normal(10.0, 1.0)
+  let res = u + 5.0
+  let res2 = res * 2.0
+  let res3 = res2 / 2.0
+  let res4 = res3 - 5.0
+  if res4.confidence > 0.5:
+    return res4.value
+  return 0.0
+"#;
+    let r = should_run_ok(src).expect("Uncertain arithmetic operations should evaluate without runtime panics");
+    assert!(r.contains("10.0") || r.contains("10"), "Result should be around 10.0, got: {}", r);
+}
+
+#[test]
+fn adversarial_r2_6_forget_negative_strength_rejected() {
+    let src = r#"
+model SafetyNet:
+  w: Tensor[4, 1] = glorot(4, 1)
+
+fn main():
+  let net = SafetyNet()
+  let sensitive_data = zeros(1, 4) + 0.9
+  let cert = forget(net, sensitive_data, "GradientAscent", -1.0)
+"#;
+    assert!(run(src).is_err(), "negative unlearning strength must be rejected with runtime error");
+}
+
+#[test]
+fn adversarial_r2_7_forget_unknown_method_rejected() {
+    let src = r#"
+model SafetyNet:
+  w: Tensor[4, 1] = glorot(4, 1)
+
+fn main():
+  let net = SafetyNet()
+  let sensitive_data = zeros(1, 4) + 0.9
+  let cert = forget(net, sensitive_data, "NoSuchMethod", 0.5)
+"#;
+    assert!(run(src).is_err(), "unknown unlearning method must be rejected with runtime error");
+}
+
+

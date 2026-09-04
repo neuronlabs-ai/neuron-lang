@@ -86,6 +86,24 @@ pub fn forget_task(
     method: &str,
     strength: f64,
 ) -> Result<Value, String> {
+    // Validate unlearning method
+    let valid_methods = ["GradientAscent", "FisherScrubbing", "TaskNegation"];
+    if !valid_methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
+        return Err(format!(
+            "Runtime Error: Unknown forgetting method '{}'. Supported methods are: {}",
+            method,
+            valid_methods.join(", ")
+        ));
+    }
+
+    // Validate unlearning strength: must be in [0.0, 1.0]
+    if strength < 0.0 || strength > 1.0 || strength.is_nan() {
+        return Err(format!(
+            "Runtime Error: Invalid forgetting strength {}. Strength must be in the range [0.0, 1.0].",
+            strength
+        ));
+    }
+
     // 1. Measure parameter norms BEFORE modification
     let norms_before = collect_param_norms(model);
     let total_norm_before: f64 = norms_before.iter().map(|n| n * n).sum::<f64>().sqrt();

@@ -189,6 +189,30 @@ class TaintTracker:
                 if arg_taint:
                     return f"function receives tainted input: {arg_taint}"
         
+        # R2-9 fix: Detect getattr(obj, 'shift')(-1) and similar patterns
+        # Pattern: call(getattr(obj, 'shift'), -1) => obj.shift(-1)
+        if isinstance(node.func, ast.Call):
+            inner_call = node.func
+            if isinstance(inner_call.func, ast.Name) and inner_call.func.id == 'getattr':
+                if len(inner_call.args) >= 2 and isinstance(inner_call.args[1], ast.Constant):
+                    attr_name = inner_call.args[1].value
+                    if attr_name == 'shift':
+                        for arg in node.args:
+                            if self._is_negative_period(arg):
+                                return "getattr(..., 'shift')() with negative period (future access)"
+                        for kw in node.keywords:
+                            if kw.arg == 'periods' and self._is_negative_period(kw.value):
+                                return "getattr(..., 'shift')() with negative period (future access)"
+                    elif attr_name == 'diff':
+                        for arg in node.args:
+                            if self._is_negative_period(arg):
+                                return "getattr(..., 'diff')() with negative period (future access)"
+                        for kw in node.keywords:
+                            if kw.arg == 'periods' and self._is_negative_period(kw.value):
+                                return "getattr(..., 'diff')() with negative period (future access)"
+                    elif attr_name in ('bfill', 'backfill'):
+                        return f"getattr(..., '{attr_name}')() backfills from future values"
+        
         return None
     
     def _check_sinks(self, tree: ast.AST):
@@ -203,13 +227,22 @@ class TaintTracker:
                           'partial_fit', 'predict', 'score'}
                 
                 if method in sinks:
-                    # Check if any argument is tainted
+                    # Check if any positional argument is tainted
                     for arg in node.args:
                         arg_taint = self._expr_taint(arg)
                         if arg_taint:
                             self.diagnostics.append(Diagnostic(
                                 node.lineno, node.col_offset, "error", "F001",
                                 f"Tainted data flows into .{method}(): {arg_taint}",
+                                "Ensure training/prediction data is free of future information"))
+                    # R2-8 fix: Check keyword arguments for taint as well
+                    for kw in node.keywords:
+                        kw_taint = self._expr_taint(kw.value)
+                        if kw_taint:
+                            kw_name = kw.arg if kw.arg else "**kwargs"
+                            self.diagnostics.append(Diagnostic(
+                                node.lineno, node.col_offset, "error", "F001",
+                                f"Tainted data flows into .{method}() via keyword '{kw_name}': {kw_taint}",
                                 "Ensure training/prediction data is free of future information"))
     
     def _get_var_name(self, node: ast.AST) -> Optional[str]:

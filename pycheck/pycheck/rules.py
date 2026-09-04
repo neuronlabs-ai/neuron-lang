@@ -64,7 +64,16 @@ class T001_ShiftNegative(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        if not (isinstance(node.func, ast.Attribute) and node.func.attr == 'shift'):
+        # Standard: obj.shift(...)
+        is_shift = isinstance(node.func, ast.Attribute) and node.func.attr == 'shift'
+        # R2-9 fix: getattr(obj, 'shift')(...)
+        is_getattr_shift = (isinstance(node.func, ast.Call) and
+                            isinstance(node.func.func, ast.Name) and
+                            node.func.func.id == 'getattr' and
+                            len(node.func.args) >= 2 and
+                            isinstance(node.func.args[1], ast.Constant) and
+                            node.func.args[1].value == 'shift')
+        if not (is_shift or is_getattr_shift):
             return []
         results = []
         for arg in node.args:

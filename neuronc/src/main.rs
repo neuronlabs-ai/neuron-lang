@@ -631,8 +631,18 @@ fn cmd_pycheck(file_path: &str) {
 
     let abs_file_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
+    // R2-11 fix: Respect PYTHON env var for custom Python paths
+    let python_bin = std::env::var("PYTHON").unwrap_or_else(|_| {
+        // Try python3 first (common on Unix), fall back to python
+        if cfg!(target_os = "windows") {
+            "python".to_string()
+        } else {
+            "python3".to_string()
+        }
+    });
+
     // Run the packaged analyzer via python -m pycheck.cli
-    let mut cmd = Command::new("python");
+    let mut cmd = Command::new(&python_bin);
     cmd.env("PYTHONIOENCODING", "utf-8");
     if let Some(ref dir) = pycheck_dir {
         cmd.current_dir(dir);
