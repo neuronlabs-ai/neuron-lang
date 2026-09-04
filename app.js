@@ -1,5 +1,5 @@
 // NEURON Website — Live In-Browser WebAssembly Engine & UI Logic
-import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js';
+import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js?v=20260905_live_wasm_v3';
 
 // ══════════════════════════════════════════════════
 // 1. Curated Code Snippets & Descriptions
@@ -42,13 +42,13 @@ fn main():
   print("ReLU(A @ B):")
   print(activated)`,
 
-  temporal: `// 3. Temporal Safety — Lookahead Leak Prevention
-// Notice: prices.after(1) tries to peek +1 step into the future!
+  temporal: `// 3. Temporal Safety — Compile-Time Lookahead Prevention
 fn predict_price(prices: Temporal[Tensor[10, 1], -1]) -> Tensor[10, 1]:
   let prev_price = prices.before(1)
   
-  // COMPILE ERROR: reading future timestamps (+1) is rejected at compile time!
-  let future_leak: Temporal[Tensor[10, 1], 0] = prices.after(1)
+  // COMPILE ERROR: prices.after(2) peeks +1 step into the future!
+  // Change .after(2) to .after(1) or .before(1) to make it compile!
+  let future_leak: Temporal[Tensor[10, 1], 0] = prices.after(2)
   return future_leak.snapshot()
 
 fn main():
@@ -57,15 +57,15 @@ fn main():
   print(p)`,
 
   causal: `// 4. Causal Safety — Conflating Correlation with Causation
-// Observational data cannot be passed to functions requiring causal interventions!
 fn should_prescribe(effect: Causal[Float, intervened]) -> Float:
   return effect.extract()
 
 fn main():
-  // Observational evidence: correlation observed in clinical records
+  // Observational evidence from clinical database (correlation only)
   let obs: Causal[Float, observed] = 0.85
 
-  // TYPE ERROR: Cannot prescribe medication based solely on observational data!
+  // COMPILE ERROR: Cannot prescribe medication based solely on observational data!
+  // Change observed to intervened to simulate a randomized trial!
   let decision = should_prescribe(obs)
   print(decision)`,
 
@@ -100,15 +100,16 @@ fn main():
   let sensitive_data = zeros(1, 4) + 0.9
 
   print("Applying Fisher Information Noise Scrubbing to model...")
-  let cert = forget(net, sensitive_data, method="FisherScrubbing", strength=0.1)
-  print("Unlearning verified: Certificate signed in-memory.")`
+  let cert = forget(net, sensitive_data, "FisherScrubbing", 0.5)
+  print("Unlearning verified: Certificate signed in-memory.")
+  print(cert.forgetting_successful)`
 };
 
 const snippetDescriptions = {
   autograd: "Differentiable neural network training in WebAssembly with autograd tape, MSE loss, and Adam optimizer.",
   matmul: "Sub-millisecond matrix multiplication and vectorized ReLU activation running on browser SIMD.",
-  temporal: "Compile-time prevention of lookahead bias in time-series data. Click 'Type Check' to see it caught!",
-  causal: "Prevents confusing observational correlation with interventional causation. Click 'Type Check' to verify!",
+  temporal: "Compile-time prevention of lookahead bias. The compiler catches future timestamp access before execution.",
+  causal: "Prevents confusing observational correlation with interventional causation at compile time.",
   uncertainty: "Tracks uncertainty distributions and confidence intervals across medical dosage predictions.",
   forgetting: "Provable machine unlearning in-place via Fisher Information Noise Scrubbing with verified bounds."
 };
@@ -135,7 +136,10 @@ function initApp() {
 
   function updateEditor() {
     if (codeEditor) {
-      codeEditor.value = codeSnippets[currentTab] || "";
+      const code = codeSnippets[currentTab] || "";
+      codeEditor.value = code;
+      codeEditor.defaultValue = code;
+      codeEditor.textContent = code;
     }
     if (snippetDesc) {
       snippetDesc.textContent = snippetDescriptions[currentTab] || "";
@@ -234,7 +238,7 @@ function initApp() {
   async function loadWasm() {
     try {
       const t0 = performance.now();
-      await init('neuron_wasm_bg.wasm');
+      await init('neuron_wasm_bg.wasm?v=20260905_live_wasm_v3');
       const elapsed = Math.round(performance.now() - t0);
 
       wasmReady = true;
@@ -246,6 +250,16 @@ function initApp() {
       if (runBtn) runBtn.disabled = false;
       if (typecheckBtn) typecheckBtn.disabled = false;
       if (transpileBtn) transpileBtn.disabled = false;
+
+      // Auto-run current snippet so user sees real output immediately
+      if (codeEditor) {
+        const src = codeEditor.value;
+        const cmd = `neuronc run ${currentTab}.nr`;
+        try {
+          const res = eval_neuron(src);
+          renderWasmResult(res, cmd);
+        } catch (e) {}
+      }
     } catch (err) {
       console.warn("Direct WASM init fallback:", err);
       try {
@@ -258,6 +272,15 @@ function initApp() {
         if (runBtn) runBtn.disabled = false;
         if (typecheckBtn) typecheckBtn.disabled = false;
         if (transpileBtn) transpileBtn.disabled = false;
+
+        if (codeEditor) {
+          const src = codeEditor.value;
+          const cmd = `neuronc run ${currentTab}.nr`;
+          try {
+            const res = eval_neuron(src);
+            renderWasmResult(res, cmd);
+          } catch (e) {}
+        }
       } catch (e2) {
         console.error("WASM load failed:", e2);
         if (wasmStatus) {
@@ -282,10 +305,35 @@ function initApp() {
       currentTab = button.dataset.tab;
       updateEditor();
 
-      clearTerminal();
-      appendPrompt(`neuronc check examples/${currentTab}.nr`);
-      appendLine(`Loaded "${button.textContent.trim()}" example.`);
-      appendLine(`Click "Run" to execute in WASM, "Type Check" to verify types, or "→ Python" to transpile.`);
+      if (wasmReady && codeEditor) {
+        const src = codeEditor.value;
+        if (currentTab === "temporal" || currentTab === "causal") {
+          const cmd = `neuronc check ${currentTab}.nr`;
+          try {
+            const res = type_check(src);
+            renderWasmResult(res, cmd);
+          } catch (err) {
+            clearTerminal();
+            appendPrompt(cmd);
+            appendLine(`Type check error: ${err.message || err}`, "error");
+          }
+        } else {
+          const cmd = `neuronc run ${currentTab}.nr`;
+          try {
+            const res = eval_neuron(src);
+            renderWasmResult(res, cmd);
+          } catch (err) {
+            clearTerminal();
+            appendPrompt(cmd);
+            appendLine(`Runtime error: ${err.message || err}`, "error");
+          }
+        }
+      } else {
+        clearTerminal();
+        appendPrompt(`neuronc check examples/${currentTab}.nr`);
+        appendLine(`Loaded "${button.textContent.trim()}" example.`);
+        appendLine(`Click "Run" to execute in WASM, "Type Check" to verify types, or "→ Python" to transpile.`);
+      }
     });
   }
 
