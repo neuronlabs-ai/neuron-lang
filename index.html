@@ -190,9 +190,9 @@
   <section class="playground-section" id="playground">
     <div class="container">
       <div class="text-center reveal">
-        <span class="section-label">Interactive Demo</span>
-        <h2 class="section-title">Experience <span class="gradient-text">Type Safety</span> in Action</h2>
-        <p class="section-subtitle">Select an example, then click Compile &amp; Run to see NEURON's compiler catch bugs.</p>
+        <span class="section-label">Live WASM Playground</span>
+        <h2 class="section-title">Try <span class="gradient-text">NEURON</span> in Your Browser</h2>
+        <p class="section-subtitle">Real compiler running via WebAssembly — edit code, then type-check, run, or transpile to Python.</p>
       </div>
       <div class="playground-card reveal">
         <div class="editor-side">
@@ -209,15 +209,10 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 <span>Copy</span>
               </button>
-              <button class="run-btn" id="run-btn">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                Compile &amp; Run
-              </button>
             </div>
           </div>
           <div class="editor-body">
-            <div class="line-numbers" id="line-numbers"></div>
-            <div class="code-content" id="code-container"></div>
+            <textarea class="code-editor" id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
           </div>
         </div>
         <div class="terminal-side">
@@ -226,12 +221,25 @@
               <span class="code-window-dot" style="background:#ff5f56"></span>
               <span class="code-window-dot" style="background:#ffbd2e"></span>
               <span class="code-window-dot" style="background:#27c93f"></span>
-              <span style="margin-left:0.5rem;font-size:0.75rem;color:var(--text-muted)">terminal — neuronc</span>
+              <span id="wasm-status" style="margin-left:0.5rem;font-size:0.75rem;color:var(--text-muted)">loading WASM engine…</span>
+            </div>
+            <div class="panel-actions">
+              <button class="run-btn run-btn-secondary" id="typecheck-btn" disabled>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                Type Check
+              </button>
+              <button class="run-btn" id="run-btn" disabled>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Run
+              </button>
+              <button class="run-btn run-btn-secondary" id="transpile-btn" disabled>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                → Python
+              </button>
             </div>
           </div>
           <div class="terminal-body" id="terminal-body">
-            <div class="term-line"><span class="term-prompt">$ </span>neuronc check examples/demo.nr</div>
-            <div class="term-line" style="color:var(--text-muted)">Ready. Click "Compile &amp; Run" to execute.</div>
+            <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> Initializing WASM compiler…</div>
           </div>
         </div>
       </div>
@@ -468,7 +476,7 @@
             <span class="faq-icon">+</span>
           </button>
           <div class="faq-answer">
-            <p>The BSL allows 100% free use for development, testing, research, and non-production deployments. For proprietary commercial workloads, it requires a commercial license. This ensures sustainable funding while guaranteeing the code becomes fully open-source (Apache 2.0) on January 1, 2030.</p>
+            <p>The BSL allows 100% free use for development, testing, research, and non-production deployments. For proprietary commercial workloads, it requires a commercial license. This ensures sustainable funding while guaranteeing the code becomes fully open-source (Apache 2.0) on January 1, 2035.</p>
           </div>
         </div>
       </div>
@@ -538,7 +546,7 @@
             <ul>
               <li><strong>100% Free:</strong> Full access to the compiler, JIT, interpreter, GPU backend, and stdlib.</li>
               <li><strong>Educational &amp; Research:</strong> Completely unrestricted for academic papers, prototyping, and learning.</li>
-              <li><strong>Eventual Open Source:</strong> On January 1, 2030, automatically converts to the permissive Apache License 2.0.</li>
+              <li><strong>Eventual Open Source:</strong> On January 1, 2035, automatically converts to the permissive Apache License 2.0.</li>
             </ul>
           </div>
           <div class="license-tier commercial">
@@ -615,6 +623,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

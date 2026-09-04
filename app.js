@@ -1,316 +1,337 @@
-// NEURON Website Simulation Logic
+// NEURON Website — Live In-Browser WebAssembly Engine & UI Logic
+import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js';
 
-document.addEventListener("DOMContentLoaded", () => {
-  // 1. Code Snippets with Pre-Highlighted Syntax
+document.addEventListener("DOMContentLoaded", async () => {
+  // ══════════════════════════════════════════════════
+  // 1. Curated Code Snippets for Interactive Playground
+  // ══════════════════════════════════════════════════
   const codeSnippets = {
-    temporal: `fn predict_price(prices: <span class="hl-type">Temporal</span>[Tensor, past_to_future]) -> <span class="hl-type">Tensor</span>:
-    <span class="hl-keyword">let</span> prev_price = prices.before(<span class="hl-number">1</span>) <span class="hl-comment"># OK: reading historical price</span>
-    <span class="hl-keyword">let</span> future_leak = prices.after(<span class="hl-number">2</span>)  <span class="hl-comment"># COMPILE ERROR: lookahead bias!</span>
-    <span class="hl-keyword">return</span> future_leak`,
+    temporal: `// Temporal Safety — Lookahead Leaks Detected at Compile Time
+fn predict_price(prices: Temporal[Tensor[10, 1], -1]) -> Tensor[10, 1]:
+  let prev_price: Temporal[Tensor[10, 1], -2] = prices.before(1)
 
-    causal: `<span class="hl-keyword">fn</span> treatment_analysis(patient_data: <span class="hl-type">Dataset</span>):
-    <span class="hl-keyword">let</span> obs = observe(patient_data, treatment=<span class="hl-number">1</span>)  <span class="hl-comment"># P(Y|X)</span>
-    <span class="hl-keyword">let</span> intervened = intervene(treatment=<span class="hl-number">1</span>)      <span class="hl-comment"># P(Y|do(X))</span>
-    
-    <span class="hl-comment"># TYPE ERROR: Cannot mix conditional observations with interventions</span>
-    <span class="hl-keyword">let</span> effect: <span class="hl-type">Causal</span>[Intervention] = obs`,
+  // COMPILE ERROR: Lookahead violation! Reading future timestamp (+1)
+  let future_leak: Temporal[Tensor[10, 1], 0] = prices.after(1)
+  return future_leak.snapshot()
+`,
 
-    uncertainty: `<span class="hl-keyword">fn</span> autonomous_driving(lidar: <span class="hl-type">Uncertain</span>[Tensor[1, 3]]) -> <span class="hl-type">Tensor</span>:
-    <span class="hl-keyword">let</span> distance = preprocess(lidar)
-    
-    <span class="hl-comment"># COMPILER WARNING: returning Uncertain prediction without check</span>
-    <span class="hl-keyword">return</span> distance`,
+    causal: `// Causal Safety — Cannot Conflate Observations with Interventions
+fn should_prescribe(effect: Causal[Float, intervened]) -> Float:
+  return effect.extract()
 
-    autograd: `<span class="hl-decorator">@differentiable</span>
-<span class="hl-keyword">model</span> LinearNet:
-  w: <span class="hl-type">Tensor</span>[4, 1] = glorot(<span class="hl-number">4</span>, <span class="hl-number">1</span>)
+fn main():
+  // Observational evidence: correlation from historical patient data
+  let obs: Causal[Float, observed] = 0.85
 
-  <span class="hl-keyword">fn</span> train(self, x: <span class="hl-type">Tensor</span>[B, 4], y: <span class="hl-type">Tensor</span>[B, 1]) [<span class="hl-type">Effect</span>[Mut[self]]]:
-    <span class="hl-keyword">let</span> loss = mse(x @ self.w, y)
-    <span class="hl-keyword">update</span> self.w <span class="hl-keyword">by</span> sgd(grad(loss), lr=<span class="hl-number">0.1</span>)`,
+  // COMPILE ERROR: Cannot pass observational data where intervention is required!
+  let decision = should_prescribe(obs)
+  print(decision)
+`,
 
-    forgetting: `<span class="hl-keyword">fn</span> patient_right_to_be_forgotten(net: <span class="hl-type">DiagnosisModel</span>, data: <span class="hl-type">Tensor</span>) [<span class="hl-type">Effect</span>[Mut[net]]]:
-    <span class="hl-comment"># Selective unlearning using Fisher Information Noise Scrubbing</span>
-    <span class="hl-keyword">let</span> cert = forget(net, data, method=<span class="hl-string">"FisherScrubbing"</span>, strength=<span class="hl-number">0.1</span>)
-    <span class="hl-keyword">return</span> cert`
-  };
+    uncertainty: `// Uncertainty Tracking — Warns When Accessing Unguarded Predictions
+fn predict_dosage(vitals: Tensor[1, 4]) -> Uncertain[Float]:
+  let dose = 50.0
+  let conf = 0.65
+  return Uncertain(dose, conf)
 
-  // 1b. Raw Code Snippets for Copy-to-Clipboard
-  const rawSnippets = {
-    temporal: `fn predict_price(prices: Temporal[Tensor, past_to_future]) -> Tensor:
-    let prev_price = prices.before(1) # OK: reading historical price
-    let future_leak = prices.after(2)  # COMPILE ERROR: lookahead bias!
-    return future_leak`,
+fn administer(dose: Float):
+  print("Administering dose:")
+  print(dose)
 
-    causal: `fn treatment_analysis(patient_data: Dataset):
-    let obs = observe(patient_data, treatment=1)  # P(Y|X)
-    let intervened = intervene(treatment=1)      # P(Y|do(X))
-    
-    # TYPE ERROR: Cannot mix conditional observations with interventions
-    let effect: Causal[Intervention] = obs`,
+fn main():
+  let p = predict_dosage(zeros(1, 4))
+  // COMPILER WARNING: accessing uncertain value without confidence check!
+  administer(p)
+`,
 
-    uncertainty: `fn autonomous_driving(lidar: Uncertain[Tensor[1, 3]]) -> Tensor:
-    let distance = preprocess(lidar)
-    
-    # COMPILER WARNING: returning Uncertain prediction without check
-    return distance`,
-
-    autograd: `@differentiable
-model LinearNet:
+    autograd: `// Native Autograd — Differentiable ML Model Training in Browser WASM
+model TinyNet:
   w: Tensor[4, 1] = glorot(4, 1)
 
-  fn train(self, x: Tensor[B, 4], y: Tensor[B, 1]) [Effect[Mut[self]]]:
-    let loss = mse(x @ self.w, y)
-    update self.w by sgd(grad(loss), lr=0.1)`,
+  fn forward(self, x: Tensor[1, 4]) -> Tensor[1, 1]:
+    return x @ self.w
 
-    forgetting: `fn patient_right_to_be_forgotten(net: DiagnosisModel, data: Tensor) [Effect[Mut[net]]]:
-    # Selective unlearning using Fisher Information Noise Scrubbing
-    let cert = forget(net, data, method="FisherScrubbing", strength=0.1)
-    return cert`
+fn main():
+  let net = TinyNet()
+  let x = zeros(1, 4) + 0.5
+  let y = zeros(1, 1) + 1.0
+
+  let epoch = 0
+  while epoch < 25:
+    let pred = net.forward(x)
+    let loss = mse(pred, y)
+    update net by adam(grad(loss), lr=0.05)
+    let epoch = epoch + 1
+
+  let final_pred = net.forward(x)
+  print("Training 25 steps with Adam complete!")
+  print("Trained prediction:")
+  print(final_pred)
+`,
+
+    forgetting: `// Provable Machine Unlearning — Fisher Information Noise Scrubbing
+model SafetyNet:
+  w: Tensor[4, 1] = glorot(4, 1)
+
+fn main():
+  let net = SafetyNet()
+  let sensitive_data = zeros(1, 4) + 0.9
+
+  print("Executing Fisher Information Noise Scrubbing...")
+  let cert = forget(net, sensitive_data, method="FisherScrubbing", strength=0.1)
+  print("Unlearning verified & certificate signed.")
+`
   };
 
-  // 2. Line counts for each snippet
-  const lineCounts = {
-    temporal: 4,
-    causal: 6,
-    uncertainty: 5,
-    autograd: 8,
-    forgetting: 4
-  };
-
-  // 3. Simulated Compiler Outputs
-  const compilerLogs = {
-    temporal: [
-      { text: "visitor@neuron:~$ neuronc check examples/temporal_leak.nr", type: "prompt" },
-      { text: "Analyzing temporal data dependencies...", type: "info" },
-      { text: "[ERROR] Line 3: TemporalLeak detected.", type: "error" },
-      { text: "  --> examples/temporal_leak.nr:3:21", type: "info" },
-      { text: "   |", type: "info" },
-      { text: " 3 |     let future_leak = prices.after(2)", type: "info" },
-      { text: "   |                       ^^^^^^^^^^^^^^^ Lookahead violation: reading future timestamps.", type: "error" },
-      { text: "   |", type: "info" },
-      { text: "Compilation failed: 1 temporal type violation found.", type: "error" }
-    ],
-    causal: [
-      { text: "visitor@neuron:~$ neuronc check examples/causal_engine.nr", type: "prompt" },
-      { text: "Type-checking structural causal model variables...", type: "info" },
-      { text: "[ERROR] Line 6: CausalTypeMismatch", type: "error" },
-      { text: "  --> examples/causal_engine.nr:6:40", type: "info" },
-      { text: "   |", type: "info" },
-      { text: " 6 |     let effect: Causal[Intervention] = obs", type: "info" },
-      { text: "   |                                        ^^^ expected Causal[Intervention], found Causal[Observation]", type: "error" },
-      { text: "   |", type: "info" },
-      { text: "Compilation failed: 1 causal type violation found.", type: "error" }
-    ],
-    uncertainty: [
-      { text: "visitor@neuron:~$ neuronc check examples/lidar_test.nr", type: "prompt" },
-      { text: "Analyzing uncertainty propagation pathways...", type: "info" },
-      { text: "[WARNING] Line 5: UncheckedUncertainty", type: "warning" },
-      { text: "  --> examples/lidar_test.nr:5:12", type: "info" },
-      { text: "   |", type: "info" },
-      { text: " 5 |     return distance", type: "info" },
-      { text: "   |            ^^^^^^^^ returning Uncertain value without explicit confidence threshold check.", type: "warning" },
-      { text: "   |", type: "info" },
-      { text: "Compilation succeeded with 1 warning.", type: "success" }
-    ],
-    autograd: [
-      { text: "visitor@neuron:~$ neuronc run examples/linear_regression.nr", type: "prompt" },
-      { text: "Initializing AD tape & allocating tensors on JIT backend...", type: "info" },
-      { text: "Compilation succeeded. Running JIT interpreter...", type: "success" },
-      { text: "Iter 000/100: Loss = 16.000 (starting weight = 5.0)", type: "info" },
-      { text: "Iter 020/100: Loss = 5.7600", type: "info" },
-      { text: "Iter 040/100: Loss = 2.0736", type: "info" },
-      { text: "Iter 060/100: Loss = 0.7464", type: "info" },
-      { text: "Iter 080/100: Loss = 0.2687", type: "info" },
-      { text: "Iter 100/100: Loss = 0.0001 (weight converged to 3.0)", type: "success" },
-      { text: "Execution complete. Tape reset, 0 memory leaks.", type: "success" }
-    ],
-    forgetting: [
-      { text: "visitor@neuron:~$ neuronc run examples/unlearning_demo.nr", type: "prompt" },
-      { text: "Resolving model dependency tree for DiagnosisModel...", type: "info" },
-      { text: "Training model on patient dataset for 3 propagation epochs...", type: "info" },
-      { text: "  -> Epoch 1: Loss = 0.311934", type: "info" },
-      { text: "  -> Epoch 2: Loss = 0.177842", type: "info" },
-      { text: "  -> Epoch 3: Loss = 0.106163", type: "info" },
-      { text: "Measuring baseline model parameter norms before modification...", type: "info" },
-      { text: "  -> baseline total norm: 1.158016", type: "info" },
-      { text: "Computing Fisher Information diagonal expectation on target dataset...", type: "info" },
-      { text: "Executing tape-based backward pass for targeted noise injection...", type: "info" },
-      { text: "Applying Fisher Information Noise Scrubbing (strength = 0.50)...", type: "success" },
-      { text: "✓ Modifying 4 parameter tensors in-place. Rescrambled norms: 0.932155", type: "success" },
-      { text: "Evaluating residual capabilities & safety bounds: bounds satisfied.", type: "success" },
-      { text: "<ForgetCertificate>", type: "info" },
-      { text: "  certificate_id: CERT-AF3A67EA1F65D64A", type: "info" },
-      { text: "  forgotten_loss_before: 0.469637", type: "info" },
-      { text: "  forgotten_loss_after: 0.567157", type: "info" },
-      { text: "  method: FisherScrubbing", type: "info" },
-      { text: "  param_norm_before: 1.158016", type: "info" },
-      { text: "  param_norm_after: 0.932155", type: "info" },
-      { text: "  params_modified: 4", type: "info" },
-      { text: "  residual_loss_retained: 0.195042", type: "info" },
-      { text: "  bounds_satisfied: true", type: "info" },
-      { text: "  strength: 0.500000", type: "info" },
-      { text: "</ForgetCertificate>", type: "info" },
-      { text: "Execution complete. Certificate generated.", type: "success" }
-    ]
-  };
-
-  // 4. State Management
+  // ══════════════════════════════════════════════════
+  // 2. State & Elements
+  // ══════════════════════════════════════════════════
   let currentTab = "temporal";
-  let isRunning = false;
+  let wasmReady = false;
 
-  // 5. DOM Elements
   const tabContainer = document.getElementById("editor-tabs");
-  const codeContainer = document.getElementById("code-container");
-  const lineNumbersContainer = document.getElementById("line-numbers");
+  const codeEditor = document.getElementById("code-editor");
   const terminalBody = document.getElementById("terminal-body");
   const runBtn = document.getElementById("run-btn");
+  const typecheckBtn = document.getElementById("typecheck-btn");
+  const transpileBtn = document.getElementById("transpile-btn");
   const copyBtn = document.getElementById("copy-btn");
+  const wasmStatus = document.getElementById("wasm-status");
   const navToggle = document.getElementById("nav-toggle");
   const navLinks = document.querySelector(".nav-links");
 
-  // 6. Initialize UI
-  function initPlayground() {
-    updateEditor();
+  // ══════════════════════════════════════════════════
+  // 3. ANSI Escape Code Converter to Formatted HTML
+  // ══════════════════════════════════════════════════
+  function ansiToHtml(text) {
+    if (!text) return "";
+    let escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    // Color mappings
+    escaped = escaped
+      .replace(/\u001b\[1;31m/g, '<span style="color:var(--rose);font-weight:600">')
+      .replace(/\u001b\[31m/g, '<span style="color:var(--rose)">')
+      .replace(/\u001b\[1;32m/g, '<span style="color:var(--emerald);font-weight:600">')
+      .replace(/\u001b\[32m/g, '<span style="color:var(--emerald)">')
+      .replace(/\u001b\[1;33m/g, '<span style="color:var(--amber);font-weight:600">')
+      .replace(/\u001b\[33m/g, '<span style="color:var(--amber)">')
+      .replace(/\u001b\[1;34m/g, '<span style="color:var(--violet-light);font-weight:600">')
+      .replace(/\u001b\[34m/g, '<span style="color:var(--violet-light)">')
+      .replace(/\u001b\[1;36m/g, '<span style="color:#38bdf8;font-weight:600">')
+      .replace(/\u001b\[36m/g, '<span style="color:#38bdf8">')
+      .replace(/\u001b\[1m/g, '<span style="font-weight:bold;color:var(--text-primary)">')
+      .replace(/\u001b\[0m/g, '</span>')
+      .replace(/\u001b\[[0-9;]*m/g, ''); // strip any remaining
+
+    return escaped;
   }
 
-  function updateEditor() {
-    codeContainer.style.display = "block";
-    codeContainer.innerHTML = `<div class="code-block active">${codeSnippets[currentTab]}</div>`;
-    
-    let lineHtml = "";
-    for (let i = 1; i <= lineCounts[currentTab]; i++) {
-      lineHtml += `${i}<br>`;
-    }
-    lineNumbersContainer.innerHTML = lineHtml;
-  }
-
-  // 7. Tab Switching Event Listeners
-  tabContainer.addEventListener("click", (e) => {
-    if (isRunning) return;
-    
-    const button = e.target.closest(".tab-btn");
-    if (!button) return;
-    
-    document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
-    button.classList.add("active");
-    
-    currentTab = button.dataset.tab;
-    updateEditor();
-    
-    let cmd = `check examples/${currentTab}_leak.nr`;
-    if (currentTab === 'causal') cmd = "check examples/causal_engine.nr";
-    else if (currentTab === 'uncertainty') cmd = "check examples/lidar_test.nr";
-    else if (currentTab === 'autograd') cmd = "run examples/linear_regression.nr";
-    else if (currentTab === 'forgetting') cmd = "run examples/unlearning_demo.nr";
-
-    terminalBody.innerHTML = `
-      <div class="term-line"><span class="term-prompt">visitor@neuron:~$</span> neuronc ${cmd}</div>
-      <div class="term-line">Ready to compile. Click "Compile & Run" above to execute.</div>
-    `;
-  });
-
-  // 8. Copy Snippet Event Listener
-  copyBtn.addEventListener("click", () => {
-    const rawText = rawSnippets[currentTab];
-    navigator.clipboard.writeText(rawText).then(() => {
-      const span = copyBtn.querySelector("span");
-      span.textContent = "Copied!";
-      setTimeout(() => {
-        span.textContent = "Copy";
-      }, 2000);
-    }).catch(err => {
-      console.error("Clipboard copy failed: ", err);
-    });
-  });
-
-  // 9. Run Simulation
-  runBtn.addEventListener("click", () => {
-    if (isRunning) return;
-    
-    isRunning = true;
-    runBtn.style.opacity = "0.6";
-    runBtn.innerHTML = `
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="animation: spin 1s linear infinite"><circle cx="12" cy="12" r="10"></circle><path d="M12 2v4"></path></svg>
-      Compiling...
-    `;
-    
+  function clearTerminal() {
     terminalBody.innerHTML = "";
-    let logQueue = compilerLogs[currentTab];
-    let logIndex = 0;
-    
-    function printNextLine() {
-      if (logIndex >= logQueue.length) {
-        isRunning = false;
-        runBtn.style.opacity = "1";
-        runBtn.innerHTML = `
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          Compile & Run
-        `;
-        return;
-      }
-      
-      const log = logQueue[logIndex];
-      const div = document.createElement("div");
-      div.className = "term-line";
-      
-      if (log.type === "prompt") {
-        div.innerHTML = `<span class="term-prompt">visitor@neuron:~$</span> ${log.text.replace("visitor@neuron:~$ ", "")}`;
-      } else if (log.type === "error") {
-        div.innerHTML = `<span class="term-error">${log.text}</span>`;
-      } else if (log.type === "warning") {
-        div.innerHTML = `<span class="term-warning">${log.text}</span>`;
-      } else if (log.type === "success") {
-        div.innerHTML = `<span class="term-success">${log.text}</span>`;
-      } else {
-        div.textContent = log.text;
-      }
-      
-      terminalBody.appendChild(div);
-      terminalBody.scrollTop = terminalBody.scrollHeight;
-      
-      logIndex++;
-      
-      let delay = 120;
-      if (log.type === "prompt") delay = 300;
-      if (log.text.includes("Executing") || log.text.includes("allocating")) delay = 500;
-      if (log.text.includes("Iter 000")) delay = 400;
-      if (log.text.includes("Iter 0") && !log.text.includes("Iter 000")) delay = 100;
-      
-      setTimeout(printNextLine, delay);
-    }
-    
-    printNextLine();
-  });
+  }
 
-  // 10. Mobile Navbar Toggle
+  function appendPrompt(cmd) {
+    const div = document.createElement("div");
+    div.className = "term-line";
+    div.innerHTML = `<span class="term-prompt">visitor@neuron:~$</span> ${cmd}`;
+    terminalBody.appendChild(div);
+  }
+
+  function appendLine(html, type = "") {
+    const div = document.createElement("div");
+    div.className = "term-line";
+    if (type === "error") div.className += " term-error";
+    else if (type === "warning") div.className += " term-warning";
+    else if (type === "success") div.className += " term-success";
+    div.innerHTML = html;
+    terminalBody.appendChild(div);
+    terminalBody.scrollTop = terminalBody.scrollHeight;
+  }
+
+  function renderWasmResult(jsonStr, command) {
+    clearTerminal();
+    appendPrompt(command);
+
+    try {
+      const res = JSON.parse(jsonStr);
+
+      if (res.warnings && res.warnings.length > 0) {
+        res.warnings.forEach(w => {
+          appendLine(ansiToHtml(w), "warning");
+        });
+      }
+
+      if (!res.success || (res.errors && res.errors.length > 0)) {
+        if (res.errors && res.errors.length > 0) {
+          res.errors.forEach(e => {
+            appendLine(ansiToHtml(e), "error");
+          });
+        }
+        if (res.output && res.output !== "Type check failed.") {
+          appendLine(ansiToHtml(res.output));
+        }
+        appendLine("Compilation / Execution failed.", "error");
+      } else {
+        if (res.output) {
+          appendLine(ansiToHtml(res.output));
+        }
+        appendLine("✓ Succeeded (0 errors)", "success");
+      }
+    } catch (e) {
+      appendLine(ansiToHtml(jsonStr));
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // 4. Initialize WASM Engine
+  // ══════════════════════════════════════════════════
+  async function loadWasmEngine() {
+    try {
+      const t0 = performance.now();
+      await init('neuron_wasm_bg.wasm');
+      const elapsed = Math.round(performance.now() - t0);
+
+      wasmReady = true;
+      wasmStatus.textContent = `WASM engine ready (${elapsed}ms) ✓`;
+      wasmStatus.style.color = "var(--emerald)";
+
+      runBtn.disabled = false;
+      typecheckBtn.disabled = false;
+      transpileBtn.disabled = false;
+
+      clearTerminal();
+      appendPrompt("neuronc --version");
+      appendLine("NEURON Compiler v1.0.0 (WebAssembly, 100% In-Browser Runtime)");
+      appendLine("Ready. Edit code or select an example above, then click an action.", "success");
+    } catch (err) {
+      console.warn("Direct WASM init fallback:", err);
+      try {
+        await init();
+        wasmReady = true;
+        wasmStatus.textContent = "WASM engine ready ✓";
+        wasmStatus.style.color = "var(--emerald)";
+        runBtn.disabled = false;
+        typecheckBtn.disabled = false;
+        transpileBtn.disabled = false;
+      } catch (e2) {
+        console.error("WASM load failed completely:", e2);
+        wasmStatus.textContent = "WASM unavailable";
+        wasmStatus.style.color = "var(--rose)";
+        appendPrompt("neuronc check");
+        appendLine(`WebAssembly failed to initialize: ${e2.message || e2}.`, "error");
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // 5. Playground Events & Actions
+  // ══════════════════════════════════════════════════
+  function updateEditor() {
+    codeEditor.value = codeSnippets[currentTab] || "";
+  }
+
+  if (tabContainer) {
+    tabContainer.addEventListener("click", (e) => {
+      const button = e.target.closest(".tab-btn");
+      if (!button) return;
+
+      document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
+      button.classList.add("active");
+
+      currentTab = button.dataset.tab;
+      updateEditor();
+
+      clearTerminal();
+      appendPrompt(`neuronc check examples/${currentTab}.nr`);
+      appendLine(`Loaded ${currentTab} example. Click Type Check, Run, or → Python.`);
+    });
+  }
+
+  if (copyBtn) {
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(codeEditor.value).then(() => {
+        const span = copyBtn.querySelector("span");
+        span.textContent = "Copied!";
+        setTimeout(() => { span.textContent = "Copy"; }, 2000);
+      }).catch(err => console.error("Clipboard copy failed:", err));
+    });
+  }
+
+  if (typecheckBtn) {
+    typecheckBtn.addEventListener("click", () => {
+      if (!wasmReady) return;
+      const src = codeEditor.value;
+      const cmd = `neuronc check ${currentTab}.nr`;
+      try {
+        const res = type_check(src);
+        renderWasmResult(res, cmd);
+      } catch (err) {
+        clearTerminal();
+        appendPrompt(cmd);
+        appendLine(`Type check crashed: ${err.message || err}`, "error");
+      }
+    });
+  }
+
+  if (runBtn) {
+    runBtn.addEventListener("click", () => {
+      if (!wasmReady) return;
+      const src = codeEditor.value;
+      const cmd = `neuronc run ${currentTab}.nr`;
+      try {
+        const res = eval_neuron(src);
+        renderWasmResult(res, cmd);
+      } catch (err) {
+        clearTerminal();
+        appendPrompt(cmd);
+        appendLine(`Runtime execution crashed: ${err.message || err}`, "error");
+      }
+    });
+  }
+
+  if (transpileBtn) {
+    transpileBtn.addEventListener("click", () => {
+      if (!wasmReady) return;
+      const src = codeEditor.value;
+      const cmd = `neuronc transpile --target python ${currentTab}.nr`;
+      try {
+        const res = transpile_to_python(src);
+        renderWasmResult(res, cmd);
+      } catch (err) {
+        clearTerminal();
+        appendPrompt(cmd);
+        appendLine(`Transpiler crashed: ${err.message || err}`, "error");
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════
+  // 6. Navigation, Scroll, and Interactive Effects
+  // ══════════════════════════════════════════════════
   if (navToggle) {
     navToggle.addEventListener("click", () => {
       navLinks.classList.toggle("active");
     });
   }
 
-  // 11. Smooth Scroll for Anchor Links
   document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', function (e) {
       const href = this.getAttribute('href');
       if (href === "#") return;
-      
       e.preventDefault();
       const targetElement = document.querySelector(href);
       if (targetElement) {
-        if (navLinks.classList.contains("active")) {
+        if (navLinks && navLinks.classList.contains("active")) {
           navLinks.classList.remove("active");
         }
-        targetElement.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start'
-        });
+        targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
   });
 
-  // 12. Reveal Animations on Scroll
   const revealElements = document.querySelectorAll(".reveal");
   if ('IntersectionObserver' in window) {
     const revealObserver = new IntersectionObserver((entries, observer) => {
@@ -320,28 +341,21 @@ model LinearNet:
           observer.unobserve(entry.target);
         }
       });
-    }, {
-      threshold: 0.1,
-      rootMargin: "0px 0px -40px 0px"
-    });
+    }, { threshold: 0.1, rootMargin: "0px 0px -40px 0px" });
     revealElements.forEach(el => revealObserver.observe(el));
   } else {
     revealElements.forEach(el => el.classList.add("revealed"));
   }
 
-  // 13. Premium Cursor-Tracking Hover Effect
   const cards = document.querySelectorAll(".feature-card, .pricing-card, .benchmark-card, .cta-card");
   cards.forEach(card => {
     card.addEventListener("mousemove", (e) => {
       const rect = card.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      card.style.setProperty("--mouse-x", `${x}px`);
-      card.style.setProperty("--mouse-y", `${y}px`);
+      card.style.setProperty("--mouse-x", `${e.clientX - rect.left}px`);
+      card.style.setProperty("--mouse-y", `${e.clientY - rect.top}px`);
     });
   });
 
-  // 14. Stats Count-Up Animation
   const statsElements = document.querySelectorAll(".hero-stat-value");
   if (statsElements.length > 0 && 'IntersectionObserver' in window) {
     const statsObserver = new IntersectionObserver((entries, observer) => {
@@ -350,34 +364,19 @@ model LinearNet:
           const stat = entry.target;
           const target = parseInt(stat.getAttribute("data-target"));
           if (isNaN(target)) return;
-          if (target === 0) {
-            stat.textContent = "0";
-            observer.unobserve(stat);
-            return;
-          }
+          if (target === 0) { stat.textContent = "0"; observer.unobserve(stat); return; }
           let current = 0;
-          const duration = 1500;
-          const steps = 50;
-          const stepTime = duration / steps;
-          const increment = target / steps;
-          
+          const duration = 1500, steps = 50;
+          const stepTime = duration / steps, increment = target / steps;
           let step = 0;
           const timer = setInterval(() => {
             current += increment;
             step++;
             if (step >= steps) {
               clearInterval(timer);
-              if (target >= 100000) {
-                stat.textContent = "100k+";
-              } else {
-                stat.textContent = Math.round(target).toString();
-              }
+              stat.textContent = target >= 100000 ? "100k+" : Math.round(target).toString();
             } else {
-              if (target >= 100000) {
-                stat.textContent = Math.round(current / 1000) + "k+";
-              } else {
-                stat.textContent = Math.round(current).toString();
-              }
+              stat.textContent = target >= 100000 ? Math.round(current / 1000) + "k+" : Math.round(current).toString();
             }
           }, stepTime);
           observer.unobserve(stat);
@@ -392,16 +391,18 @@ model LinearNet:
     });
   }
 
-  // Initialize playground on startup
-  initPlayground();
+  document.querySelectorAll(".faq-question").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const item = btn.closest(".faq-item");
+      const isActive = item.classList.contains("active");
+      document.querySelectorAll(".faq-item").forEach(i => i.classList.remove("active"));
+      if (!isActive) item.classList.add("active");
+    });
+  });
 
-  // CSS Spin keyframes injection for runner loading icon
-  const style = document.createElement('style');
-  style.innerHTML = `
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-  `;
-  document.head.appendChild(style);
+  // ══════════════════════════════════════════════════
+  // 7. Startup
+  // ══════════════════════════════════════════════════
+  updateEditor();
+  loadWasmEngine();
 });

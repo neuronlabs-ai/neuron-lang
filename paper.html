@@ -134,8 +134,11 @@
       const mathBlocks = [];
 
       function preprocessMath(text) {
+        // 0. Protect escaped dollar signs: \$ → placeholder
+        let processed = text.replace(/\\\$/g, '%%ESCAPED_DOLLAR%%');
+        
         // 1. Extract display math blocks: $$ ... $$
-        let processed = text.replace(/\$\$\s*([\s\S]+?)\s*\$\$/g, (match, formula) => {
+        processed = processed.replace(/\$\$\s*([\s\S]+?)\s*\$\$/g, (match, formula) => {
           const id = `%%MATH_DISPLAY_${mathBlocks.length}%%`;
           mathBlocks.push({ id, formula, display: true });
           return id;
@@ -166,6 +169,8 @@
             result = result.replace(new RegExp(item.id, 'g'), `<span class="math-error">${item.formula}</span>`);
           }
         });
+        // Restore escaped dollar signs
+        result = result.replace(/%%ESCAPED_DOLLAR%%/g, '$');
         return result;
       }
 
