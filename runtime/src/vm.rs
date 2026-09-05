@@ -787,6 +787,228 @@ impl VM {
         0
     }
 
+    /// Deterministic Miller-Rabin test for any 64-bit integer.
+    pub fn is_prime_u64(n: u64) -> bool {
+        if n < 2 { return false; }
+        if n == 2 || n == 3 || n == 5 || n == 7 { return true; }
+        if n % 2 == 0 || n % 3 == 0 || n % 5 == 0 || n % 7 == 0 { return false; }
+        if n < 121 { return true; }
+
+        let mut d = n - 1;
+        let mut s = 0;
+        while d % 2 == 0 {
+            d /= 2;
+            s += 1;
+        }
+
+        let bases = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+        'witness: for &a in &bases {
+            if a >= n { break; }
+            let mut x = {
+                let mut base = (a as u128) % (n as u128);
+                let mut exp = d;
+                let mut res = 1u128;
+                let m = n as u128;
+                while exp > 0 {
+                    if exp & 1 == 1 {
+                        res = (res * base) % m;
+                    }
+                    base = (base * base) % m;
+                    exp >>= 1;
+                }
+                res as u64
+            };
+            if x == 1 || x == n - 1 {
+                continue 'witness;
+            }
+            for _ in 1..s {
+                x = ((x as u128 * x as u128) % (n as u128)) as u64;
+                if x == n - 1 {
+                    continue 'witness;
+                }
+            }
+            return false;
+        }
+        true
+    }
+
+    /// Evaluates F_{p - (p/5)} mod p^2. Returns true if residue is 0 (Wall-Sun-Sun prime).
+    pub fn is_wall_sun_sun(p: u64) -> bool {
+        if p <= 5 { return false; }
+        let rem5 = p % 5;
+        if rem5 == 0 { return false; }
+        let k = if rem5 == 1 || rem5 == 4 { p - 1 } else { p + 1 };
+
+        if p <= (u32::MAX as u64) {
+            let m = (p as u128) * (p as u128);
+            let mut a: u128 = 0;
+            let mut b: u128 = 1;
+            let highest_bit = 63 - k.leading_zeros();
+            for i in (0..=highest_bit).rev() {
+                let two_b = (b * 2) % m;
+                let diff = if two_b >= a { two_b - a } else { two_b + m - a };
+                let c = (a * diff) % m;
+                let d = ((a * a) % m + (b * b) % m) % m;
+                if (k >> i) & 1 == 1 {
+                    a = d;
+                    b = (c + d) % m;
+                } else {
+                    a = c;
+                    b = d;
+                }
+            }
+            a == 0
+        } else {
+            let p_big = BigUint::from(p);
+            let m = &p_big * &p_big;
+            let zero = BigUint::from(0u32);
+            let mut a = BigUint::from(0u32);
+            let mut b = BigUint::from(1u32);
+            let two = BigUint::from(2u32);
+            let k_big = BigUint::from(k);
+            let bits = k_big.bits();
+            for i in (0..bits).rev() {
+                let two_b = (&b * &two) % &m;
+                let diff = if two_b >= a { &two_b - &a } else { &two_b + &m - &a };
+                let c = (&a * &diff) % &m;
+                let d = ((&a * &a) % &m + (&b * &b) % &m) % &m;
+                if ((&k_big >> i) & BigUint::from(1u32)) == BigUint::from(1u32) {
+                    a = d.clone();
+                    b = (&c + &d) % &m;
+                } else {
+                    a = c;
+                    b = d;
+                }
+            }
+            a == zero
+        }
+    }
+
+    /// Evaluates 2^(p-1) mod p^2. Returns true if residue is 1 (Wieferich prime).
+    pub fn is_wieferich(p: u64) -> bool {
+        if p <= 2 { return false; }
+        if p <= (u32::MAX as u64) {
+            let m = (p as u128) * (p as u128);
+            let mut base: u128 = 2 % m;
+            let mut exp = p - 1;
+            let mut res: u128 = 1 % m;
+            while exp > 0 {
+                if exp & 1 == 1 {
+                    res = (res * base) % m;
+                }
+                base = (base * base) % m;
+                exp >>= 1;
+            }
+            res == 1
+        } else {
+            let p_big = BigUint::from(p);
+            let m = &p_big * &p_big;
+            let base = BigUint::from(2u32);
+            let exp = BigUint::from(p - 1);
+            let res = base.modpow(&exp, &m);
+            res == BigUint::from(1u32)
+        }
+    }
+
+    /// Searches for Wall-Sun-Sun (Fibonacci-Wieferich) primes in [start_p, end_p].
+    pub fn wall_sun_sun_hunt(start_p: u64, end_p: u64) -> u64 {
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║  ◈ NEURON WALL-SUN-SUN (FIBONACCI-WIEFERICH) PRIME HUNTER    ║");
+        println!("║  ◈ Target: F_{{p - (p/5)}} = 0 (mod p^2)                     ║");
+        println!("║  ◈ Status: ZERO known in human history                       ║");
+        println!("║  ◈ Search Range: p in [{}, {}]", start_p, end_p);
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        let t0 = std::time::Instant::now();
+        let mut tested_count = 0u64;
+
+        for p in start_p..=end_p {
+            if p % 2 == 0 || p % 3 == 0 || p % 5 == 0 {
+                continue;
+            }
+            if !Self::is_prime_u64(p) {
+                continue;
+            }
+
+            tested_count += 1;
+            if Self::is_wall_sun_sun(p) {
+                println!("\n╔══════════════════════════════════════════════════════════════╗");
+                println!("║  >>> ◈ [HISTORIC DISCOVERY] WALL-SUN-SUN PRIME FOUND! ◈ <<<  ║");
+                println!("╚══════════════════════════════════════════════════════════════╝");
+                println!("  ◈ Prime: p = {}", p);
+                println!("  ◈ Verification: F_{{p - (p/5)}} = 0 (mod p^2)");
+                println!("  ◈ SOLVED 65-YEAR-OLD UNSOLVED CONJECTURE IN MATHEMATICS!");
+
+                let cert_filename = format!("discovered_wall_sun_sun_prime_{}.json", p);
+                let cert = serde_json::json!({
+                    "prime": p,
+                    "conjecture": "Wall-Sun-Sun (Fibonacci-Wieferich)",
+                    "property": "F_{p - (p/5)} = 0 (mod p^2)",
+                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    "discovered_by": "NEURON Programming Language"
+                });
+                let _ = std::fs::write(&cert_filename, cert.to_string());
+                return p;
+            }
+
+            if tested_count % 50_000 == 0 {
+                let elapsed = t0.elapsed().as_secs_f64();
+                let sps = tested_count as f64 / elapsed.max(0.001);
+                println!("  [PROGRESS] Evaluated {:>8} primes | Speed: {:>8.0} primes/s | Current p = {}", 
+                    tested_count, sps, p);
+            }
+        }
+
+        let elapsed = t0.elapsed().as_secs_f64();
+        println!("  ◈ Completed range [{}, {}]: {} primes evaluated in {:.2}s ({:.0} primes/s).", 
+            start_p, end_p, tested_count, elapsed, tested_count as f64 / elapsed.max(0.001));
+        println!("  ◈ No Wall-Sun-Sun prime in this band. The mystery continues!");
+        0
+    }
+
+    /// Searches for Wieferich primes in [start_p, end_p]: 2^(p-1) == 1 (mod p^2).
+    pub fn wieferich_hunt(start_p: u64, end_p: u64) -> u64 {
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║  ◈ NEURON WIEFERICH PRIME HUNTER (2^(p-1) = 1 mod p^2)       ║");
+        println!("║  ◈ Known Primes: Only two in history (1093, 3511)            ║");
+        println!("║  ◈ Search Range: p in [{}, {}]", start_p, end_p);
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        let t0 = std::time::Instant::now();
+        let mut tested_count = 0u64;
+
+        for p in start_p..=end_p {
+            if p % 2 == 0 || p % 3 == 0 || p % 5 == 0 {
+                continue;
+            }
+            if !Self::is_prime_u64(p) {
+                continue;
+            }
+
+            tested_count += 1;
+            if Self::is_wieferich(p) {
+                println!("\n╔══════════════════════════════════════════════════════════════╗");
+                println!("║  >>> ◈ [WIEFERICH PRIME HIT] 2^(p-1) == 1 (mod p^2)! ◈ <<<   ║");
+                println!("╚══════════════════════════════════════════════════════════════╝");
+                println!("  ◈ Prime: p = {}", p);
+                println!("  ◈ Verification: 2^{{p-1}} = 1 (mod p^2)");
+                return p;
+            }
+
+            if tested_count % 100_000 == 0 {
+                let elapsed = t0.elapsed().as_secs_f64();
+                let sps = tested_count as f64 / elapsed.max(0.001);
+                println!("  [PROGRESS] Evaluated {:>8} primes | Speed: {:>8.0} primes/s | Current p = {}", 
+                    tested_count, sps, p);
+            }
+        }
+
+        let elapsed = t0.elapsed().as_secs_f64();
+        println!("  ◈ Completed range [{}, {}]: {} primes evaluated in {:.2}s ({:.0} primes/s).", 
+            start_p, end_p, tested_count, elapsed, tested_count as f64 / elapsed.max(0.001));
+        0
+    }
+
     /// Execute a function by name.
     pub fn execute(&mut self, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
         let mut resolved_name = fn_name.to_string();
@@ -1181,6 +1403,42 @@ impl VM {
             }
             let res = base.modpow(&exp, &modulus);
             return Ok(Value::BigInt(BigInt::from(res)));
+        }
+
+        if resolved_name == "is_wall_sun_sun" {
+            if args.is_empty() {
+                return Err("is_wall_sun_sun requires 1 argument: (p)".into());
+            }
+            let p = args[0].as_int() as u64;
+            return Ok(Value::Bool(Self::is_wall_sun_sun(p)));
+        }
+
+        if resolved_name == "wall_sun_sun_hunt" {
+            if args.len() < 2 {
+                return Err("wall_sun_sun_hunt requires 2 arguments: (start_p, end_p)".into());
+            }
+            let start_p = args[0].as_int() as u64;
+            let end_p = args[1].as_int() as u64;
+            let res = Self::wall_sun_sun_hunt(start_p, end_p);
+            return Ok(Value::Int(res as i64));
+        }
+
+        if resolved_name == "is_wieferich" {
+            if args.is_empty() {
+                return Err("is_wieferich requires 1 argument: (p)".into());
+            }
+            let p = args[0].as_int() as u64;
+            return Ok(Value::Bool(Self::is_wieferich(p)));
+        }
+
+        if resolved_name == "wieferich_hunt" {
+            if args.len() < 2 {
+                return Err("wieferich_hunt requires 2 arguments: (start_p, end_p)".into());
+            }
+            let start_p = args[0].as_int() as u64;
+            let end_p = args[1].as_int() as u64;
+            let res = Self::wieferich_hunt(start_p, end_p);
+            return Ok(Value::Int(res as i64));
         }
 
         if resolved_name == "shl" {

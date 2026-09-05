@@ -437,6 +437,10 @@ impl SymbolTable {
         global.define("cuda_device_name", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));
         global.define("proth_hunt", NType::Fn_(vec![int.clone(), int.clone(), int.clone(), int.clone()], Box::new(int.clone()), None));
         global.define("modpow", NType::Fn_(vec![int.clone(), int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("is_wall_sun_sun", NType::Fn_(vec![int.clone()], Box::new(bool_type.clone()), None));
+        global.define("wall_sun_sun_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("is_wieferich", NType::Fn_(vec![int.clone()], Box::new(bool_type.clone()), None));
+        global.define("wieferich_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
 
         // Built-in type names
         global.define("Int", NType::Base("Int".into()));
