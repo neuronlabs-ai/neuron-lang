@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use neuron_compiler::ir::*;
+use num_bigint::BigInt;
+use num_traits::{ToPrimitive, Zero};
 use crate::tensor::*;
 use crate::autograd::*;
 use crate::buffer::Buffer;
@@ -69,6 +71,7 @@ fn validate_static_shape(shape: &[i64]) -> Result<Vec<usize>, String> {
 pub enum Value {
     Tensor(Tensor),
     Int(i64),
+    BigInt(BigInt),
     Float(f64),
     Bool(bool),
     Str(String),
@@ -164,6 +167,7 @@ impl Value {
         match self.unwrap_ref() {
             Value::Float(f) => *f,
             Value::Int(i) => *i as f64,
+            Value::BigInt(b) => b.to_f64().unwrap_or(f64::INFINITY),
             Value::Bool(b) => if *b { 1.0 } else { 0.0 },
             Value::Uncertain { value, .. } => *value,
             Value::Tensor(t) if t.numel() == 1 => t.data[0],
@@ -173,6 +177,7 @@ impl Value {
     pub fn as_int(&self) -> i64 {
         match self.unwrap_ref() {
             Value::Int(i) => *i,
+            Value::BigInt(b) => b.to_i64().unwrap_or_else(|| panic!("Runtime IntegerOverflow: BigInt exceeds i64")),
             Value::Float(f) => *f as i64,
             _ => panic!("Runtime TypeError: Expected Int, found {:?}", self),
         }
@@ -181,6 +186,7 @@ impl Value {
         match self.unwrap_ref() {
             Value::Bool(b) => *b,
             Value::Int(i) => *i != 0,
+            Value::BigInt(b) => !b.is_zero(),
             Value::Float(f) => *f != 0.0,
             _ => panic!("Runtime TypeError: Expected Bool, found {:?}", self),
         }
@@ -189,6 +195,7 @@ impl Value {
         match self {
             Value::Tensor(t) => format!("{}", t),
             Value::Int(i) => i.to_string(),
+            Value::BigInt(b) => b.to_string(),
             Value::Float(f) => format!("{:.6}", f),
             Value::Bool(b) => b.to_string(),
             Value::Str(s) => s.clone(),
@@ -1158,7 +1165,25 @@ impl VM {
                         let r = self.tape.add(&ta, tb);
                         Ok(Value::Tensor(r))
                     }
-                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
+                    (Value::Tensor(ta), Value::BigInt(y)) => {
+                        let mut tb = Tensor::full(&ta.shape, y.to_f64().unwrap_or(f64::INFINITY));
+                        tb.id = self.tape.alloc_id();
+                        let r = self.tape.add(ta, &tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::BigInt(x), Value::Tensor(tb)) => {
+                        let mut ta = Tensor::full(&tb.shape, x.to_f64().unwrap_or(f64::INFINITY));
+                        ta.id = self.tape.alloc_id();
+                        let r = self.tape.add(&ta, tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Int(x), Value::Int(y)) => match x.checked_add(*y) {
+                        Some(sum) => Ok(Value::Int(sum)),
+                        None => Ok(Value::BigInt(BigInt::from(*x) + BigInt::from(*y))),
+                    },
+                    (Value::BigInt(x), Value::BigInt(y)) => Ok(Value::BigInt(x + y)),
+                    (Value::BigInt(x), Value::Int(y)) => Ok(Value::BigInt(x + BigInt::from(*y))),
+                    (Value::Int(x), Value::BigInt(y)) => Ok(Value::BigInt(BigInt::from(*x) + y)),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
                     (Value::List(x), Value::List(y)) => {
                         let mut res = x.clone();
@@ -1238,7 +1263,13 @@ impl VM {
                     (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
                         Ok(Value::Uncertain { value: *x as f64 - v, std: *std, confidence: *confidence })
                     }
-                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
+                    (Value::Int(x), Value::Int(y)) => match x.checked_sub(*y) {
+                        Some(diff) => Ok(Value::Int(diff)),
+                        None => Ok(Value::BigInt(BigInt::from(*x) - BigInt::from(*y))),
+                    },
+                    (Value::BigInt(x), Value::BigInt(y)) => Ok(Value::BigInt(x - y)),
+                    (Value::BigInt(x), Value::Int(y)) => Ok(Value::BigInt(x - BigInt::from(*y))),
+                    (Value::Int(x), Value::BigInt(y)) => Ok(Value::BigInt(BigInt::from(*x) - y)),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
                     _ => Ok(Value::Float(a.as_float() - b.as_float())),
                 };
@@ -1297,7 +1328,13 @@ impl VM {
                         let xf = *x as f64;
                         Ok(Value::Uncertain { value: xf * v, std: std * xf.abs(), confidence: *confidence })
                     }
-                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
+                    (Value::Int(x), Value::Int(y)) => match x.checked_mul(*y) {
+                        Some(prod) => Ok(Value::Int(prod)),
+                        None => Ok(Value::BigInt(BigInt::from(*x) * BigInt::from(*y))),
+                    },
+                    (Value::BigInt(x), Value::BigInt(y)) => Ok(Value::BigInt(x * y)),
+                    (Value::BigInt(x), Value::Int(y)) => Ok(Value::BigInt(x * BigInt::from(*y))),
+                    (Value::Int(x), Value::BigInt(y)) => Ok(Value::BigInt(BigInt::from(*x) * y)),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
                     _ => Ok(Value::Float(a.as_float() * b.as_float())),
                 };
@@ -1373,6 +1410,24 @@ impl VM {
                         }
                         Ok(Value::Int(x / y))
                     }
+                    (Value::BigInt(x), Value::BigInt(y)) => {
+                        if y.is_zero() {
+                            return Err("Runtime Error: Division by zero".to_string());
+                        }
+                        Ok(Value::BigInt(x / y))
+                    }
+                    (Value::BigInt(x), Value::Int(y)) => {
+                        if *y == 0 {
+                            return Err("Runtime Error: Division by zero".to_string());
+                        }
+                        Ok(Value::BigInt(x / BigInt::from(*y)))
+                    }
+                    (Value::Int(x), Value::BigInt(y)) => {
+                        if y.is_zero() {
+                            return Err("Runtime Error: Division by zero".to_string());
+                        }
+                        Ok(Value::BigInt(BigInt::from(*x) / y))
+                    }
                     _ => Ok(Value::Float(a.as_float() / b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -1386,6 +1441,24 @@ impl VM {
                             return Err("Runtime Error: Division by zero in modulo operation".to_string());
                         }
                         Ok(Value::Int(x % y))
+                    }
+                    (Value::BigInt(x), Value::BigInt(y)) => {
+                        if y.is_zero() {
+                            return Err("Runtime Error: Division by zero in modulo operation".to_string());
+                        }
+                        Ok(Value::BigInt(x % y))
+                    }
+                    (Value::BigInt(x), Value::Int(y)) => {
+                        if *y == 0 {
+                            return Err("Runtime Error: Division by zero in modulo operation".to_string());
+                        }
+                        Ok(Value::BigInt(x % BigInt::from(*y)))
+                    }
+                    (Value::Int(x), Value::BigInt(y)) => {
+                        if y.is_zero() {
+                            return Err("Runtime Error: Division by zero in modulo operation".to_string());
+                        }
+                        Ok(Value::BigInt(BigInt::from(*x) % y))
                     }
                     _ => {
                         let y_val = b.as_float();
@@ -1401,7 +1474,11 @@ impl VM {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = match &a {
                     Value::Tensor(t) => Ok(Value::Tensor(self.tape.neg(t))),
-                    Value::Int(i) => Ok(Value::Int(-i)),
+                    Value::Int(i) => match i.checked_neg() {
+                        Some(neg) => Ok(Value::Int(neg)),
+                        None => Ok(Value::BigInt(-BigInt::from(*i))),
+                    },
+                    Value::BigInt(b) => Ok(Value::BigInt(-b)),
                     _ => Ok(Value::Float(-a.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(wraps))
@@ -1917,28 +1994,55 @@ impl VM {
             IROp::Lt => {
                 let a = get(&node.inputs[0]);
                 let b = get(&node.inputs[1]);
-                Ok(Value::Bool(a.as_float() < b.as_float()))
+                Ok(Value::Bool(match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => x < y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x < y,
+                    (Value::BigInt(x), Value::Int(y)) => x < &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) < y,
+                    _ => a.as_float() < b.as_float(),
+                }))
             }
             IROp::Lte => {
                 let a = get(&node.inputs[0]);
                 let b = get(&node.inputs[1]);
-                Ok(Value::Bool(a.as_float() <= b.as_float()))
+                Ok(Value::Bool(match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => x <= y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x <= y,
+                    (Value::BigInt(x), Value::Int(y)) => x <= &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) <= y,
+                    _ => a.as_float() <= b.as_float(),
+                }))
             }
             IROp::Gt => {
                 let a = get(&node.inputs[0]);
                 let b = get(&node.inputs[1]);
-                Ok(Value::Bool(a.as_float() > b.as_float()))
+                Ok(Value::Bool(match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => x > y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x > y,
+                    (Value::BigInt(x), Value::Int(y)) => x > &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) > y,
+                    _ => a.as_float() > b.as_float(),
+                }))
             }
             IROp::Gte => {
                 let a = get(&node.inputs[0]);
                 let b = get(&node.inputs[1]);
-                Ok(Value::Bool(a.as_float() >= b.as_float()))
+                Ok(Value::Bool(match (&a, &b) {
+                    (Value::Int(x), Value::Int(y)) => x >= y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x >= y,
+                    (Value::BigInt(x), Value::Int(y)) => x >= &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) >= y,
+                    _ => a.as_float() >= b.as_float(),
+                }))
             }
             IROp::Eq => {
                 let a = get(&node.inputs[0]);
                 let b = get(&node.inputs[1]);
                 Ok(Value::Bool(match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => x == y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x == y,
+                    (Value::BigInt(x), Value::Int(y)) => x == &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) == y,
                     (Value::Bool(x), Value::Bool(y)) => x == y,
                     (Value::Str(x), Value::Str(y)) => x == y,
                     _ => a.as_float() == b.as_float(),
@@ -1949,6 +2053,9 @@ impl VM {
                 let b = get(&node.inputs[1]);
                 Ok(Value::Bool(match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => x != y,
+                    (Value::BigInt(x), Value::BigInt(y)) => x != y,
+                    (Value::BigInt(x), Value::Int(y)) => x != &BigInt::from(*y),
+                    (Value::Int(x), Value::BigInt(y)) => &BigInt::from(*x) != y,
                     (Value::Bool(x), Value::Bool(y)) => x != y,
                     (Value::Str(x), Value::Str(y)) => x != y,
                     _ => a.as_float() != b.as_float(),
