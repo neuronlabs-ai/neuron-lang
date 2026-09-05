@@ -1,0 +1,128 @@
+\documentclass[11pt,twocolumn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  commentstyle=\color{gray},
+  keywordstyle=\color{blue}\bfseries,
+  stringstyle=\color{red}
+}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{definition}{Definition}
+
+\title{\textbf{NEURON: The AI-Native Programming Language\\Architectural Overview, Type Safety Foundations, and Compiler Engine}}
+\author{
+  \textbf{Fayo Ibrahim} \and \textbf{The NEURON Development Team} \\
+  \textit{Neuron Labs} \\
+  \texttt{\{fayo, team\}@neuron-lab.org}
+}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Machine learning systems are increasingly deployed in high-stakes domains—including algorithmic finance, clinical healthcare, autonomous robotics, and legal compliance—where software failures carry severe physical, monetary, and ethical costs. Yet existing ML frameworks construct models within dynamically typed host languages (principally Python), delegating critical invariants such as temporal causality, experimental intervention integrity, and uncertainty propagation to runtime libraries or ad-hoc programmer discipline.
+
+We present \textbf{NEURON}, a complete, statically typed, natively differentiable programming language designed from first principles for trustworthy machine learning. NEURON provides: (1) compile-time temporal safety via an offset-based algebra ($\texttt{Temporal}[T, d]$, $\texttt{Stream}[T, k]$) with proven Temporal Non-Interference; (2) causal mode integrity ($\texttt{Causal}[T, m]$) distinguishing observational associations from Pearl's $do$-calculus; (3) uncertainty propagation ($\texttt{Uncertain}[T]$); (4) verifiable machine unlearning ($\texttt{forget()}$) issuing cryptographic audit certificates; and (5) a sovereign 5-target compiler toolchain implemented in $\sim$29,000 lines of pure Rust.
+\end{abstract}
+
+\section{Introduction}
+Contemporary artificial intelligence development relies almost universally on Python frameworks such as PyTorch, TensorFlow, and JAX. While these libraries provide powerful tensor abstractions and automatic differentiation, the underlying runtime models suffer from structural safety gaps:
+\begin{itemize}
+  \item \textbf{Lookahead Bias (Temporal Data Leakage):} In time-series forecasting, quantitative finance, and sequence prediction, feeding future data $t+k$ into a decision function at time $t$ silently produces stellar validation scores that collapse into catastrophic failure when deployed in production.
+  \item \textbf{Confounding Bias (Causal Mode Confusion):} Standard tensor types represent observational correlations ($P(Y \mid X)$) and interventional effects ($P(Y \mid \text{do}(X))$) identically as floating-point arrays. When practitioners subtract observational statistics to estimate treatment efficacy, unobserved confounders ($X \leftarrow U \to Y$) introduce bias.
+  \item \textbf{Unguarded Uncertainty:} Downstream control loops and clinical models treat low-confidence predictions identically to high-confidence predictions because both are scalar floats.
+  \item \textbf{Irremediable Training Data:} When regulations mandate removal of copyrighted or private data, existing practice requires complete retraining from scratch or unverified parameter tweaks.
+\end{itemize}
+
+NEURON posits that \textbf{AI safety cannot be solved at the library or policy layer—it must be enforced by the compiler's type system.}
+
+\section{System Architecture}
+NEURON is an end-to-end sovereign language and compiler infrastructure written from scratch in pure Rust.
+The compiler comprises:
+\begin{enumerate}
+  \item \textbf{Lexer \& Parser:} Hand-crafted recursive-descent parser producing a rich Abstract Syntax Tree (AST) with exact span tracking.
+  \item \textbf{AST Type Checker:} Unifies tensor dimensions, verifies side-effect sets ($\texttt{Effect}[\texttt{Mut}, \texttt{IO}, \texttt{Rand}]$), and enforces temporal, causal, and uncertainty rules.
+  \item \textbf{Flat Three-Address IR:} Lowers high-level AST constructs into an SSA-like IR.
+  \item \textbf{6-Pass IR Optimizer:} Constant Folding, Algebraic Simplification, Common Subexpression Elimination (CSE), Dead Code Elimination (DCE), Loop-Invariant Code Motion (LICM), and Tensor Operator Kernel Fusion.
+  \item \textbf{Five Execution Backends:} Stack-based VM Interpreter with autograd tape, dynamic Rust JIT compiler ($\texttt{libloading}$), ahead-of-time (AOT) native executable compiler ($\texttt{target-cpu=native}$), in-browser WebAssembly target ($\texttt{wasm-bindgen}$), and PyTorch Python transpiler.
+\end{enumerate}
+
+\section{Type System Foundations}
+NEURON's type system is formalized in the core calculus $\lambda_{\text{neuron}}$.
+
+\subsection{Temporal Offset Algebra}
+Streams accumulate access offsets algebraically before data materialization:
+\begin{equation}
+\frac{\Gamma \vdash_s s : \texttt{Stream}[\tau, k]}{\Gamma \vdash_s s.\text{shift}(d) : \texttt{Stream}[\tau, k+d]}
+\end{equation}
+Evaluating a stream produces a temporal value bound by the cumulative offset:
+\begin{equation}
+\frac{\Gamma \vdash_s s : \texttt{Stream}[\tau, k]}{\Gamma \vdash s.\text{eval}() : \texttt{Temporal}[\tau, k]}
+\end{equation}
+Binary operations compute the upper-bound horizon:
+\begin{equation}
+\frac{\Gamma \vdash e_1 : \texttt{Temporal}[\tau_1, k_1] \quad \Gamma \vdash e_2 : \texttt{Temporal}[\tau_2, k_2]}{\Gamma \vdash e_1 \oplus e_2 : \texttt{Temporal}[\tau_3, \max(k_1, k_2)]}
+\end{equation}
+Safe declassification to raw base types via $\texttt{.snapshot()}$ is restricted to past or present data ($k \le 0$):
+\begin{equation}
+\frac{\Gamma \vdash e : \texttt{Temporal}[\tau, k] \quad k \le 0}{\Gamma \vdash e.\text{snapshot}() : \tau}
+\end{equation}
+Calling $\texttt{.snapshot()}$ on $k > 0$ emits $\texttt{error[TemporalLeak]}$.
+
+\begin{theorem}[Temporal Non-Interference]
+Let $e$ be a closed expression with $\emptyset \vdash e : \texttt{Temporal}[\tau, \Delta]$ where $\Delta \le 0$. If two temporal stores $\sigma_1, \sigma_2$ agree on all timestamps $t' \le t$ ($\sigma_1 \approx_{\le t} \sigma_2$), then evaluation under both stores yields identical values:
+\[
+\langle e, \sigma_1, t \rangle \Downarrow \mathbf{temp}(v_1, \Delta_1) \land \langle e, \sigma_2, t \rangle \Downarrow \mathbf{temp}(v_2, \Delta_2) \implies v_1 = v_2
+\]
+\end{theorem}
+
+\subsection{Causal Mode Isolation}
+Causal types distinguish observational and interventional modes:
+\[
+\texttt{Causal}[\tau, \mathbf{obs}] \not\le \texttt{Causal}[\tau, \mathbf{int}] \quad \land \quad \texttt{Causal}[\tau, \mathbf{int}] \not\le \texttt{Causal}[\tau, \mathbf{obs}]
+\]
+Binary operations require mode equality ($m_1 = m_2$). Observational conditionals cannot be silently subtracted from interventional estimates without explicit identification and extraction.
+
+\section{Provable Machine Unlearning}
+NEURON introduces $\texttt{forget()}$ as a first-class language primitive. It supports three algorithms:
+\begin{itemize}
+  \item \textbf{Fisher Information Scrubbing:} $\mathcal{N}(0, \sigma^2 F^{-1})$ noise injection along sensitive parameter manifolds.
+  \item \textbf{Gradient Ascent:} Loss maximization over target data.
+  \item \textbf{Task Negation:} Orthogonal gradient subspace projection.
+\end{itemize}
+Every unlearning invocation produces a verifiable $\texttt{ForgetCertificate}$ recording parameter modifications, loss bounds, and cryptographic certificate IDs.
+
+\section{Empirical Evaluation}
+NEURON's test suite includes:
+\begin{itemize}
+  \item 126 unit/integration tests with 100\% pass rate.
+  \item 66 adversarial attack tests targeting lookahead and causal edge cases.
+  \item 1,000 fuzz-generated AST variations with zero compiler crashes.
+  \item 100,000 endurance training iterations with zero memory leaks.
+  \item 100 differential property runs confirming VM/JIT parity.
+\end{itemize}
+
+\section{Conclusion}
+NEURON establishes that foundational AI safety guarantees can be enforced directly by the compiler's type system, providing an airtight foundation for next-generation trustworthy intelligent systems.
+
+\bibliographystyle{plain}
+\begin{thebibliography}{5}
+\bibitem{pearl2009} J. Pearl. \textit{Causality: Models, Reasoning, and Inference}. Cambridge University Press, 2009.
+\bibitem{pierce2002} B. C. Pierce. \textit{Types and Programming Languages}. MIT Press, 2002.
+\bibitem{bourtoule2021} L. Bourtoule et al. \textit{Machine Unlearning}. IEEE S\&P, 2021.
+\bibitem{neuron2026} F. Ibrahim. \textit{NEURON: Compile-Time Prevention of Temporal, Causal, and Uncertainty Errors}. Technical Report, Neuron Labs, 2026.
+\bibitem{semantics2026} F. Ibrahim et al. \textit{Formal Semantics and Metatheoretical Soundness of NEURON ($\lambda_{\text{neuron}}$)}. Technical Report, Neuron Labs, 2026.
+\end{thebibliography}
+
+\end{document}

@@ -143,7 +143,7 @@ fn test_temporal() -> Any:
   let x: Temporal[Float, past_to_future] = load("dummy")
   let y = x.before()
   let z = x.after()
-  let s = z.snapshot()
+  let s = y.snapshot()
   return [y, z, s]
 
 fn test_concat() -> Tensor[2]:

@@ -112,8 +112,8 @@ fn main():
 #[test]
 fn test_temporal_offset_multi_horizon_matching() {
     let valid_code = r#"
-fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Tensor:
-    return (pred - target).snapshot()
+fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Temporal[Tensor, 5]:
+    return pred - target
 
 fn main():
     let p: Temporal[Tensor, 5] = zeros(10, 1)
@@ -123,8 +123,8 @@ fn main():
     assert!(check_src(valid_code).is_ok(), "Expected matching +5 step horizons to pass");
 
     let invalid_code = r#"
-fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Tensor:
-    return (pred - target).snapshot()
+fn evaluate_horizon(pred: Temporal[Tensor, 5], target: Temporal[Tensor, 5]) -> Temporal[Tensor, 5]:
+    return pred - target
 
 fn main():
     let p: Temporal[Tensor, 5] = zeros(10, 1)

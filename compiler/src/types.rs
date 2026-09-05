@@ -1498,6 +1498,31 @@ impl TypeChecker {
                         return NType::Temporal(inner.clone(), TemporalSpec::Offset(1_000_000));
                     }
                 } else if d.field == "snapshot" {
+                    // Formal semantics rule T-Snapshot-Safe: snapshot is only
+                    // permitted when the temporal offset k ≤ 0 (past/present data).
+                    // Allowing snapshot on k > 0 would declassify future-provenanced
+                    // data into a raw type, breaking temporal non-interference.
+                    let is_future = match spec {
+                        TemporalSpec::Offset(n) => *n > 0,
+                        TemporalSpec::Direction(dir) => dir == "future_to_past",
+                    };
+                    if is_future {
+                        let leak_desc = match spec {
+                            TemporalSpec::Offset(n) => format!(
+                                "snapshot() on Temporal with future offset +{} would declassify future data — use only on past/present offsets (≤ 0)",
+                                n
+                            ),
+                            TemporalSpec::Direction(dir) => format!(
+                                "snapshot() on Temporal with direction '{}' would declassify future data — use only on past_to_future data",
+                                dir
+                            ),
+                        };
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TemporalLeak,
+                            leak_desc,
+                            c.span.clone(),
+                        ));
+                    }
                     return *inner.clone();
                 }
             }
@@ -1669,7 +1694,33 @@ impl TypeChecker {
                 "shift" | "lag" | "lead" => {
                     return NType::Fn_(vec![NType::Base("Int".into())], Box::new(obj_ty.clone()), None);
                 }
-                "snapshot" => return *inner.clone(),
+                "snapshot" => {
+                    // T-Snapshot-Safe: reject snapshot on future-provenanced data
+                    let is_future = match spec {
+                        TemporalSpec::Offset(n) => *n > 0,
+                        TemporalSpec::Direction(dir) => dir == "future_to_past",
+                    };
+                    if is_future {
+                        let leak_desc = match spec {
+                            TemporalSpec::Offset(n) => format!(
+                                "snapshot() on Temporal with future offset +{} would declassify future data — use only on past/present offsets (≤ 0)",
+                                n
+                            ),
+                            TemporalSpec::Direction(dir) => format!(
+                                "snapshot() on Temporal with direction '{}' would declassify future data — use only on past_to_future data",
+                                dir
+                            ),
+                        };
+                        // Use a zero-span since DotExpr doesn't carry its own span easily;
+                        // the error message is self-descriptive.
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TemporalLeak,
+                            leak_desc,
+                            d.obj.span().clone(),
+                        ));
+                    }
+                    return *inner.clone();
+                }
                 _ => {}
             }
         }

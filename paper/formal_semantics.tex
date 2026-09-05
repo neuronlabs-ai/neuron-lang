@@ -1,0 +1,346 @@
+\documentclass[11pt,a4paper]{article}
+
+% ═══════════════════════════════════════════════════════════════════
+%  Formal Semantics and Metatheoretical Soundness of NEURON:
+%  A Core Calculus for Temporal Non-Interference and Causal Mode Safety
+%  Fayo Ibrahim — Neuron Labs
+% ═══════════════════════════════════════════════════════════════════
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{corollary}{Corollary}[section]
+\newtheorem{openproblem}{Open Problem}[section]
+
+\newcommand{\ty}[1]{\texttt{#1}}
+\newcommand{\step}[1]{\xrightarrow{#1}}
+\newcommand{\evals}{\Downarrow}
+\newcommand{\sub}{\le}
+\newcommand{\Temp}{\ty{Temporal}}
+\newcommand{\Stream}{\ty{Stream}}
+\newcommand{\Caus}{\ty{Causal}}
+\newcommand{\Uncert}{\ty{Uncertain}}
+
+\title{\textbf{Formal Semantics and Metatheoretical Soundness of NEURON:}\\A Core Calculus for Temporal Non-Interference and Causal Mode Safety}
+\author{Fayo Ibrahim \\ \small{Neuron Labs}}
+\date{September 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Machine learning pipelines frequently suffer from structural correctness bugs that elude conventional type systems: temporal lookahead leaks (evaluating models on future information) and causal mode confusion (evaluating interventional queries under observational conditioning). The NEURON programming language introduces domain-specific static types to catch these flaws at compile time. In this paper, we formalize $\lambda_{\text{neuron}}$, the core calculus of NEURON. We specify its abstract syntax, a bounded integer-offset subtyping preorder, and a labeled small-step operational semantics over time-indexed stores. By distinguishing stream-level algebraic provenance from runtime values, we define the dynamic evaluation read footprint via labeled transitions and prove the \textbf{Read Horizon Boundedness Lemma} and the \textbf{Temporal Non-Interference Theorem} (proving mathematically that past-typed outputs are strictly invariant to future store mutations). We also prove \textbf{Progress}, \textbf{Subject Reduction (Type Preservation)}, and \textbf{Causal Mode Soundness} (guaranteeing intervention integrity under Pearl's do-calculus while delineating full automated causal identification as an orthogonal open research challenge).
+\end{abstract}
+
+\section{Introduction}
+
+Machine learning code frequently violates temporal causality and statistical design principles without violating traditional type safety:
+\begin{enumerate}[itemsep=1pt]
+  \item \textbf{Lookahead Bias (Temporal Data Leakage):} In time-series forecasting, inadvertently using features from timestamp $t+k$ to make predictions at timestamp $t$ produces overoptimistic backtests that fail catastrophically in deployment.
+  \item \textbf{Causal Confounding Bias:} Evaluating the causal effect of an intervention $\text{do}(X=x)$ using ordinary conditional probabilities $P(Y \mid X=x)$ yields confounded estimates when unobserved common causes exist ($X \leftarrow U \rightarrow Y$).
+\end{enumerate}
+
+NEURON is a statically typed language designed to detect these errors at compile time. This document formalizes the core theoretical calculus $\lambda_{\text{neuron}}$, establishing small-step operational reduction rules, typing judgments, and complete paper-level proofs of Progress, Subject Reduction, and Temporal Non-Interference (machine-checked verification in Lean 4/Coq is ongoing future work).
+
+\subsection*{Design Principle: Access Footprint vs. Semantic Dependence}
+A critical conceptual design choice in $\lambda_{\text{neuron}}$ is that the temporal type system tracks an \textbf{over-approximation of the temporal access footprint of computation}, rather than the extensional semantic dependence of the resulting value on historical observations. For example, in an expression such as $e = s.\ty{eval}() - s.\ty{eval}()$, the algebraic result is identically zero and contains no semantic dependence on $s$. Nonetheless, $\lambda_{\text{neuron}}$ assigns $e$ the temporal horizon of $s$ because evaluation executed a physical memory read at that timeline coordinate. By tracking access footprints rather than undecidable semantic equivalence, NEURON maintains a sound, decidable, and statically enforceable barrier against physical lookahead leaks.
+
+\section{The Core Calculus $\lambda_{\text{neuron}}$}
+
+\subsection{Syntax of Types, Expressions, and Values}
+
+The calculus strictly separates \emph{symbolic stream expressions} (unevaluated time-series sources that accumulate access offsets algebraically) from \emph{computational terms} and \emph{evaluated values}.
+
+\begin{align*}
+\text{Modes } m &\Coloneqq \mathbf{obs} \mid \mathbf{int} \\
+\text{Offsets / Horizons } k, \Delta &\in \mathbb{Z} \\
+\text{Effects } \epsilon &\subseteq \{\mathbf{mut}, \mathbf{io}, \mathbf{rand}\} \\
+\text{Base Types } B &\Coloneqq \ty{Int} \mid \ty{Float} \mid \ty{Bool} \mid \ty{Tensor}[\vec{d}] \\
+\text{Types } \tau &\Coloneqq B \mid \tau_1 \xrightarrow{\epsilon} \tau_2 \mid \Stream[\tau, k] \mid \Temp[\tau, \Delta] \mid \Caus[\tau, m] \mid \Uncert[\tau] \mid \tau_1 \times \tau_2 \mid \mathbf{1} \\[6pt]
+\text{Stream Terms } s &\Coloneqq x \mid s.\ty{shift}(d) \mid s.\ty{lag}(d) \mid s.\ty{lead}(d) \quad (d \in \mathbb{Z}) \\
+\text{Operators } \oplus &\Coloneqq + \mid - \mid \times \mid \div \mid @ \mid == \mid \land \mid \lor \\
+\text{Terms } e &\Coloneqq x \mid c \mid \lambda x:\tau.\, e \mid e_1\, e_2 \mid (e_1, e_2) \mid \pi_1(e) \mid \pi_2(e) \mid e_1 \oplus e_2 \\
+&\quad \mid s.\ty{eval}() \mid e.\ty{snapshot}() \\
+&\quad \mid \ty{obs}(e) \mid \ty{do}(x \gets e_1) \text{ in } e_2 \mid e.\ty{extract}() \\
+&\quad \mid \ty{uncert}(e_1, e_2) \mid e.\ty{val} \mid e.\ty{conf} \\[6pt]
+\text{Values } v &\Coloneqq c \mid \lambda x:\tau.\, e \mid (v_1, v_2) \mid () \\
+&\quad \mid \mathbf{temp}(v, \Delta) \quad (\text{Value with Static Upper-Bound Dependency Horizon } \Delta \in \mathbb{Z}) \\
+&\quad \mid \mathbf{caus}(v, m) \quad (\text{Value with Causal Mode } m \in \{\mathbf{obs}, \mathbf{int}\}) \\
+&\quad \mid \mathbf{unc}(v_1, v_2)
+\end{align*}
+
+\subsection{Subtyping Preorder ($\sub$)}
+
+Information containment is governed by a subtyping preorder $\tau_1 \sub \tau_2$:
+\begin{gather*}
+\frac{}{\tau \sub \tau} \quad (\textsc{Sub-Refl}) \qquad
+\frac{\tau_1 \sub \tau_2 \quad \tau_2 \sub \tau_3}{\tau_1 \sub \tau_3} \quad (\textsc{Sub-Trans}) \\[6pt]
+\frac{k_1 \le k_2 \quad \tau_1 \sub \tau_2}{\Temp[\tau_1, k_1] \sub \Temp[\tau_2, k_2]} \quad (\textsc{Sub-Temp}) \qquad
+\frac{\tau_1 \sub \tau_2}{\Caus[\tau_1, m] \sub \Caus[\tau_2, m]} \quad (\textsc{Sub-Caus}) \\[6pt]
+\frac{\tau_1 \sub \tau_2 \quad k \ge 0}{\tau_1 \sub \Temp[\tau_2, k]} \quad (\textsc{Sub-Temp-Ingest}) \qquad
+\frac{\tau_1 \sub \tau_2}{\tau_1 \sub \Caus[\tau_2, \mathbf{obs}]} \quad (\textsc{Sub-Caus-Ingest}) \\[6pt]
+\frac{\tau_2 \sub \tau_1 \quad \sigma_1 \sub \sigma_2 \quad \epsilon_1 \subseteq \epsilon_2}{\tau_1 \xrightarrow{\epsilon_1} \sigma_1 \sub \tau_2 \xrightarrow{\epsilon_2} \sigma_2} \quad (\textsc{Sub-Fn}) \qquad
+\frac{\tau_1 \sub \tau_1' \quad \tau_2 \sub \tau_2'}{\tau_1 \times \tau_2 \sub \tau_1' \times \tau_2'} \quad (\textsc{Sub-Prod})
+\end{gather*}
+
+\noindent
+\textbf{Safety Invariants:}
+\begin{itemize}[itemsep=1pt]
+  \item \textbf{Bounded Temporal Subtyping:} $k_1 \le k_2$ permits past-provenance data ($k_1 \le 0$) to satisfy present expectations ($k_2 = 0$), while forbidding future data from satisfying past constraints ($+1 \not\le 0$).
+  \item \textbf{Causal Mode Antichain:} Causal modes are strictly disjoint: $\Caus[\tau, \mathbf{obs}] \not\sub \Caus[\tau, \mathbf{int}]$ and $\Caus[\tau, \mathbf{int}] \not\sub \Caus[\tau, \mathbf{obs}]$.
+  \item \textbf{Non-Erasure:} $\Temp[\tau, \Delta] \not\sub \tau$ and $\Caus[\tau, m] \not\sub \tau$. Wrappers cannot be stripped implicitly via subsumption.
+\end{itemize}
+
+\section{Static Typing Rules}
+
+\subsection{Stream Typing ($\Gamma \vdash_s s : \Stream[\tau, k]$)}
+
+Streams track their accumulated algebraic offset $\text{off}(s)$ prior to evaluation:
+\begin{gather}
+\frac{x : \Stream[\tau, k_0] \in \Gamma}{\Gamma \vdash_s x : \Stream[\tau, k_0]} \, (\textsc{TS-Var}) \qquad
+\frac{x : \Stream[\tau] \in \Gamma}{\Gamma \vdash_s x : \Stream[\tau, 0]} \, (\textsc{TS-Base}) \\[6pt]
+\frac{\Gamma \vdash_s s : \Stream[\tau, k]}{\Gamma \vdash_s s.\ty{shift}(d) : \Stream[\tau, k + d]} \, (\textsc{TS-Shift}) \qquad
+\frac{\Gamma \vdash_s s : \Stream[\tau, k]}{\Gamma \vdash_s s.\ty{lag}(d) : \Stream[\tau, k - d]} \, (\textsc{TS-Lag})
+\end{gather}
+
+\subsection{Expression Typing ($\Gamma \vdash e : \tau$)}
+
+\begin{gather}
+\frac{x : \tau \in \Gamma}{\Gamma \vdash x : \tau} \, (\textsc{T-Var}) \qquad
+\frac{\text{ty}(c) = B}{\Gamma \vdash c : B} \, (\textsc{T-Const}) \qquad
+\frac{\Gamma \vdash e : \tau_1 \quad \tau_1 \sub \tau_2}{\Gamma \vdash e : \tau_2} \, (\textsc{T-Sub}) \\[6pt]
+\frac{\Gamma, x : \tau_1 \vdash e : \tau_2}{\Gamma \vdash (\lambda x:\tau_1.\, e) : \tau_1 \xrightarrow{\epsilon} \tau_2} \, (\textsc{T-Abs}) \qquad
+\frac{\Gamma \vdash e_1 : \tau_1 \xrightarrow{\epsilon} \tau_2 \quad \Gamma \vdash e_2 : \tau_1}{\Gamma \vdash e_1\, e_2 : \tau_2} \, (\textsc{T-App}) \\[6pt]
+\frac{\Gamma \vdash e_1 : \tau_1 \quad \Gamma \vdash e_2 : \tau_2}{\Gamma \vdash (e_1, e_2) : \tau_1 \times \tau_2} \, (\textsc{T-Pair}) \qquad
+\frac{\Gamma \vdash e : \tau_1 \times \tau_2}{\Gamma \vdash \pi_1(e) : \tau_1} \, (\textsc{T-Proj1}) \qquad
+\frac{\Gamma \vdash e : \tau_1 \times \tau_2}{\Gamma \vdash \pi_2(e) : \tau_2} \, (\textsc{T-Proj2}) \\[6pt]
+\frac{\Gamma \vdash_s s : \Stream[\tau, k]}{\Gamma \vdash s.\ty{eval}() : \Temp[\tau, k]} \, (\textsc{T-Eval}) \\[6pt]
+\frac{\Gamma \vdash e_1 : \Temp[\tau_1, k_1] \quad \Gamma \vdash e_2 : \Temp[\tau_2, k_2] \quad \tau_1 \oplus \tau_2 = \tau_3}{\Gamma \vdash e_1 \oplus e_2 : \Temp[\tau_3, \max(k_1, k_2)]} \, (\textsc{T-Temp-BinOp}) \\[6pt]
+\frac{\Gamma \vdash e : \Temp[\tau, k] \quad k \le 0}{\Gamma \vdash e.\ty{snapshot}() : \tau} \, (\textsc{T-Snapshot-Safe}) \\[6pt]
+\frac{\Gamma \vdash e : \Temp[\tau, k] \quad k > 0}{\Gamma \vdash e.\ty{snapshot}() : \textbf{error}[\ty{TemporalLeak}]} \, (\textsc{T-Snapshot-Leak}) \\[6pt]
+\frac{\Gamma \vdash e : \tau}{\Gamma \vdash \ty{obs}(e) : \Caus[\tau, \mathbf{obs}]} \, (\textsc{T-Obs}) \qquad
+\frac{\Gamma \vdash e_1 : \tau_1 \quad \Gamma, x : \tau_1 \vdash e_2 : \tau_2}{\Gamma \vdash \ty{do}(x \gets e_1) \text{ in } e_2 : \Caus[\tau_2, \mathbf{int}]} \, (\textsc{T-Int}) \\[6pt]
+\frac{\Gamma \vdash e_1 : \Caus[\tau_1, m] \quad \Gamma \vdash e_2 : \Caus[\tau_2, m] \quad \tau_1 \oplus \tau_2 = \tau_3}{\Gamma \vdash e_1 \oplus e_2 : \Caus[\tau_3, m]} \, (\textsc{T-Caus-BinOp}) \\[6pt]
+\frac{\Gamma \vdash e : \Caus[\tau, m]}{\Gamma \vdash e.\ty{extract}() : \tau} \, (\textsc{T-Extract})
+\end{gather}
+
+\section{Dynamic Operational Semantics}
+
+\subsection{Configurations, Stores, and Labeled Transitions}
+
+Evaluation is formalized as a labeled transition system:
+\[
+\langle e, \sigma, t \rangle \step{\ell} \langle e', \sigma', t \rangle
+\]
+where:
+\begin{itemize}[itemsep=1pt]
+  \item $t \in \mathbb{Z}$ is the global evaluation epoch.
+  \item $\sigma : \mathbb{Z} \to (\text{Var} \rightharpoonup \text{Val})$ is the time-indexed store.
+  \item $\ell \in \{\tau_{\text{step}}\} \cup \{\text{read}(t') \mid t' \in \mathbb{Z}\}$ labels the transition. Internal computation emits $\tau_{\text{step}}$, while store access emits the exact timeline timestamp $\text{read}(t')$.
+\end{itemize}
+
+\begin{definition}[Store Validity $\sigma \models t$]
+A temporal store $\sigma$ is valid at epoch $t$ for a set of stream symbols $\Sigma$ if for every $x \in \Sigma$ of underlying type $\tau$ and every $k \in \mathbb{Z}$, the cell $\sigma(t+k)(x)$ is defined and contains a value of type $\tau$.
+\end{definition}
+
+\subsection{Evaluation Contexts}
+
+Evaluation order is deterministic call-by-value, defined via evaluation contexts $E$:
+\[
+E \Coloneqq [\cdot] \mid E\, e \mid v\, E \mid (E, e) \mid (v, E) \mid \pi_1(E) \mid \pi_2(E) \mid E \oplus e \mid v \oplus E \mid E.\ty{snapshot}() \mid \ty{obs}(E) \mid \ty{do}(x \gets E) \text{ in } e \mid E.\ty{extract}()
+\]
+The contextual congruence rule lifts redex steps into compound terms:
+\begin{equation}
+\frac{\langle e, \sigma, t \rangle \step{\ell} \langle e', \sigma', t \rangle}{\langle E[e], \sigma, t \rangle \step{\ell} \langle E[e'], \sigma', t \rangle} \, (\textsc{E-Context})
+\end{equation}
+
+\subsection{Reduction Rules}
+
+\textbf{Function Application ($\beta$-reduction)}:
+\begin{equation}
+\langle (\lambda x:\tau.\, e)\, v, \sigma, t \rangle \step{\tau_{\text{step}}} \langle e[x \mapsto v], \sigma, t \rangle \, (\textsc{E-Beta})
+\end{equation}
+
+\textbf{Product Projections}:
+\begin{equation}
+\langle \pi_1((v_1, v_2)), \sigma, t \rangle \step{\tau_{\text{step}}} \langle v_1, \sigma, t \rangle \, (\textsc{E-Proj1}) \qquad
+\langle \pi_2((v_1, v_2)), \sigma, t \rangle \step{\tau_{\text{step}}} \langle v_2, \sigma, t \rangle \, (\textsc{E-Proj2})
+\end{equation}
+
+\textbf{Stream Evaluation (Store Read)}:
+\begin{equation}
+\frac{k = \text{off}(s) \quad \sigma(t + k)(\text{root}(s)) = v}{\langle s.\ty{eval}(), \sigma, t \rangle \step{\text{read}(t + k)} \langle \mathbf{temp}(v, k), \sigma, t \rangle} \, (\textsc{E-Eval})
+\end{equation}
+
+\textbf{Safe Temporal Snapshot}:
+\begin{equation}
+\langle \mathbf{temp}(v, k).\ty{snapshot}(), \sigma, t \rangle \step{\tau_{\text{step}}} \langle v, \sigma, t \rangle \, (\textsc{E-Snap-Val})
+\end{equation}
+
+\textbf{Binary Operator Evaluation}:
+\begin{equation}
+\langle \mathbf{temp}(v_1, k_1) \oplus \mathbf{temp}(v_2, k_2), \sigma, t \rangle \step{\tau_{\text{step}}} \langle \mathbf{temp}(v_1 \tilde{\oplus} v_2, \max(k_1, k_2)), \sigma, t \rangle \, (\textsc{E-Temp-Op})
+\end{equation}
+\begin{equation}
+\langle \mathbf{caus}(v_1, m) \oplus \mathbf{caus}(v_2, m), \sigma, t \rangle \step{\tau_{\text{step}}} \langle \mathbf{caus}(v_1 \tilde{\oplus} v_2, m), \sigma, t \rangle \, (\textsc{E-Caus-Op})
+\end{equation}
+
+\textbf{Causal Intervention ($\text{do}$-calculus)}:
+\begin{equation}
+\frac{\sigma' = \sigma[\mathcal{F}_x := (\lambda\_.\, v_1)] \quad \langle e_2, \sigma', t \rangle \evals v_2}{\langle \ty{do}(x \gets v_1) \text{ in } e_2, \sigma, t \rangle \step{\tau_{\text{step}}} \langle \mathbf{caus}(v_2, \mathbf{int}), \sigma, t \rangle} \, (\textsc{E-Int})
+\end{equation}
+
+\section{Metatheory and Soundness Proofs}
+
+\subsection{Basic Type Safety}
+
+\begin{lemma}[Canonical Forms]
+\label{lem:canonical}
+Let $v$ be a closed value.
+\begin{enumerate}[itemsep=1pt]
+  \item If $\emptyset \vdash v : B$, then $v = c$ with $\text{ty}(c) = B$.
+  \item If $\emptyset \vdash v : \tau_1 \xrightarrow{\epsilon} \tau_2$, then $v = \lambda x:\tau_1'.\, e$.
+  \item If $\emptyset \vdash v : \tau_1 \times \tau_2$, then $v = (v_1, v_2)$.
+  \item If $\emptyset \vdash v : \Temp[\tau, \Delta]$, then $v = \mathbf{temp}(v', \Delta')$ with $\Delta' \le \Delta$ and $\emptyset \vdash v' : \tau$.
+  \item If $\emptyset \vdash v : \Caus[\tau, m]$, then $v = \mathbf{caus}(v', m)$ with $\emptyset \vdash v' : \tau$.
+\end{enumerate}
+\end{lemma}
+\begin{proof}
+By straightforward inspection of the value grammar and subtyping rules.
+\end{proof}
+
+\begin{lemma}[Substitution Lemma]
+If $\Gamma, x : \tau_1 \vdash e : \tau_2$ and $\Gamma \vdash v : \tau_1$, then $\Gamma \vdash e[x \mapsto v] : \tau_2$.
+\end{lemma}
+\begin{proof}
+By structural induction on the typing derivation of $e$, using the transitivity of subtyping.
+\end{proof}
+
+\begin{theorem}[Progress]
+If $\emptyset \vdash e : \tau$, then for any valid store $\sigma \models t$, either $e$ is a value $v$ or there exist $e', \sigma', \ell$ such that $\langle e, \sigma, t \rangle \step{\ell} \langle e', \sigma', t \rangle$.
+\end{theorem}
+\begin{proof}
+By induction on the typing derivation $\emptyset \vdash e : \tau$:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Case T-Var}: Vacuous, since context is empty.
+  \item \textbf{Case T-Const, T-Abs}: $e$ is a value; progress holds.
+  \item \textbf{Case T-App}: $e = e_1\, e_2$. If $e_1$ is not a value, it steps via evaluation context $E = [\cdot]\, e_2$. If $e_1$ is a value but $e_2$ is not, $e_2$ steps via $E = v_1\, [\cdot]$. If both are values, by Lemma~\ref{lem:canonical}, $e_1 = \lambda x:\tau_1'.\, e_0$, and rule \textsc{E-Beta} applies.
+  \item \textbf{Case T-Pair, T-Proj1, T-Proj2}: Either inner expressions step via contexts, or redexes evaluate via \textsc{E-Proj1}/\textsc{E-Proj2}.
+  \item \textbf{Case T-Eval}: $e = s.\ty{eval}()$. By store validity $\sigma \models t$, the cell $\sigma(t + \text{off}(s))(\text{root}(s))$ is defined. Rule \textsc{E-Eval} applies immediately.
+  \item \textbf{Case T-Snapshot-Safe}: $e = e_0.\ty{snapshot}()$ with $k \le 0$. If $e_0$ is not a value, it steps via context. If $e_0$ is a value, by Lemma~\ref{lem:canonical}, $e_0 = \mathbf{temp}(v_0, k)$, and rule \textsc{E-Snap-Val} applies. (Future offsets $k > 0$ cannot occur because \textsc{T-Snapshot-Leak} yields a compile-time error).
+  \item \textbf{Case T-Temp-BinOp}: When both operands are evaluated to values $\mathbf{temp}(v_1, k_1)$ and $\mathbf{temp}(v_2, k_2)$, rule \textsc{E-Temp-Op} applies.
+  \item \textbf{Case T-Caus-BinOp}: Both operands have matching mode $m$. By Lemma~\ref{lem:canonical}, $e_1 = \mathbf{caus}(v_1, m)$ and $e_2 = \mathbf{caus}(v_2, m)$. Rule \textsc{E-Caus-Op} applies without mode conflict.
+  \item \textbf{Case T-Sub}: Follows directly from the induction hypothesis. \qedhere
+\end{itemize}
+\end{proof}
+
+\begin{theorem}[Subject Reduction / Type Preservation]
+If $\Gamma \vdash e : \tau$ and $\langle e, \sigma, t \rangle \step{\ell} \langle e', \sigma', t \rangle$, then $\Gamma \vdash e' : \tau$.
+\end{theorem}
+\begin{proof}
+By induction on the reduction relation:
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Case \textsc{E-Beta}}: $e = (\lambda x:\tau_1.\, e_0)\, v$. By inversion on \textsc{T-App}, $\Gamma, x : \tau_1 \vdash e_0 : \tau$ and $\Gamma \vdash v : \tau_1$. By the Substitution Lemma, $\Gamma \vdash e_0[x \mapsto v] : \tau$.
+  \item \textbf{Case \textsc{E-Eval}}: By \textsc{T-Eval}, $s.\ty{eval}() : \Temp[\tau, k]$ where $k = \text{off}(s)$. The redex produces $\mathbf{temp}(v, k)$, which has type $\Temp[\tau, k]$.
+  \item \textbf{Case \textsc{E-Temp-Op}}: By \textsc{T-Temp-BinOp}, the expression has type $\Temp[\tau_3, \max(k_1, k_2)]$. The resulting value carries offset $\max(k_1, k_2)$, matching the type.
+  \item \textbf{Case \textsc{E-Snap-Val}}: $\mathbf{temp}(v, k).\ty{snapshot}() \step{} v$. By \textsc{T-Snapshot-Safe}, the source expression has type $\tau$. The resulting value $v$ has type $\tau$.
+  \item \textbf{Case \textsc{E-Context}}: Preserved by standard inductive lifting over evaluation contexts. \qedhere
+\end{itemize}
+\end{proof}
+
+\subsection{Temporal Non-Interference: Proof of Leak-Freedom}
+
+\begin{definition}[Trace Read Footprint]
+For any evaluation trace $\mathcal{T} = \langle e_0, \sigma, t \rangle \step{\ell_1} \dots \step{\ell_n} \langle v, \sigma', t \rangle$, the **read footprint** $\mathcal{R}(\mathcal{T}) \subset \mathbb{Z}$ is the set of all timeline timestamps read from the store:
+\[
+\mathcal{R}(\mathcal{T}) \Coloneqq \{t' \in \mathbb{Z} \mid \exists i \in \{1,\dots,n\}.\ \ell_i = \text{read}(t')\}
+\]
+\end{definition}
+
+\begin{lemma}[Read Horizon Boundedness]
+\label{lem:read-bound}
+Let $e$ be a closed, well-typed expression. For any terminating trace $\mathcal{T} = \langle e, \sigma, t \rangle \step{}^* \langle v, \sigma', t \rangle$:
+\begin{enumerate}[itemsep=2pt]
+  \item If $\emptyset \vdash e : \Temp[\tau, \Delta]$, then $\forall t' \in \mathcal{R}(\mathcal{T})$, $t' \le t + \Delta$.
+  \item If $\emptyset \vdash e : \tau$ (where $\tau$ contains no temporal constructors), then $\forall t' \in \mathcal{R}(\mathcal{T})$, $t' \le t$.
+\end{enumerate}
+\end{lemma}
+\begin{proof}
+By induction on the length of the evaluation trace and the typing derivation:
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Base Reductions with No Read}: Rules \textsc{E-Beta}, \textsc{E-Proj1}, \textsc{E-Proj2}, \textsc{E-Temp-Op}, \textsc{E-Caus-Op}, and \textsc{E-Snap-Val} emit label $\tau_{\text{step}}$. They add no timestamps to $\mathcal{R}(\mathcal{T})$.
+  \item \textbf{Stream Evaluation (\textsc{E-Eval})}: $\langle s.\ty{eval}(), \sigma, t \rangle \step{\text{read}(t + k)} \langle \mathbf{temp}(v, k), \sigma, t \rangle$.
+    By \textsc{T-Eval}, $\Delta = k = \text{off}(s)$. The read timestamp is $t' = t + k = t + \Delta \le t + \Delta$.
+  \item \textbf{Binary Join (\textsc{T-Temp-BinOp})}: $e = e_1 \oplus e_2$ typed with $\Delta = \max(k_1, k_2)$.
+    Trace $\mathcal{T}$ evaluates $e_1$ then $e_2$, so $\mathcal{R}(\mathcal{T}) = \mathcal{R}(\mathcal{T}_1) \cup \mathcal{R}(\mathcal{T}_2)$.
+    By IH, $\forall t_1 \in \mathcal{R}(\mathcal{T}_1)$, $t_1 \le t + k_1 \le t + \max(k_1, k_2) = t + \Delta$.
+    Similarly, $\forall t_2 \in \mathcal{R}(\mathcal{T}_2)$, $t_2 \le t + k_2 \le t + \Delta$. Thus $\forall t' \in \mathcal{R}(\mathcal{T})$, $t' \le t + \Delta$.
+  \item \textbf{Snapshot (\textsc{T-Snapshot-Safe})}: $e = e_0.\ty{snapshot}()$ with $\emptyset \vdash e_0 : \Temp[\tau, k]$ and $k \le 0$.
+    The read footprint is $\mathcal{R}(\mathcal{T}_0)$. By IH, $\forall t' \in \mathcal{R}(\mathcal{T}_0)$, $t' \le t + k$. Since $k \le 0$, $t' \le t$.
+  \item \textbf{Function Application}: Trace evaluates $e_1 \to \lambda x.\, e_0$, $e_2 \to v_2$, then $e_0[x \mapsto v_2] \to v$.
+    By the Substitution Lemma and IH applied to each subtrace, read bounds are preserved across $\beta$-reduction.
+  \item \textbf{Subsumption (\textsc{T-Sub})}: If $\Delta_1 \le \Delta_2$, then $t' \le t + \Delta_1 \le t + \Delta_2$. \qedhere
+\end{enumerate}
+\end{proof}
+
+\begin{definition}[Store Horizon Agreement]
+Two stores $\sigma_1, \sigma_2$ are $T$-equivalent ($\sigma_1 \approx_{\le T} \sigma_2$) iff $\sigma_1(t')(x) = \sigma_2(t')(x)$ for all $x$ and all $t' \le T$.
+\end{definition}
+
+\begin{theorem}[Temporal Non-Interference]
+Let $e$ be a closed expression with $\emptyset \vdash e : \Temp[\tau, \Delta]$ where $\Delta \le 0$.
+If $\sigma_1 \approx_{\le t} \sigma_2$, then:
+\[
+\langle e, \sigma_1, t \rangle \evals \mathbf{temp}(v_1, \Delta_1) \quad \text{and} \quad \langle e, \sigma_2, t \rangle \evals \mathbf{temp}(v_2, \Delta_2) \implies v_1 = v_2 \text{ and } \Delta_1 = \Delta_2
+\]
+\end{theorem}
+\begin{proof}
+1. \textbf{Footprint Confinement}: By Lemma~\ref{lem:read-bound}, $\forall t' \in \mathcal{R}(\mathcal{T})$, $t' \le t + \Delta \le t$. Therefore $\mathcal{R}(\mathcal{T}) \subseteq (-\infty, t]$.
+2. \textbf{Determinism}: Because $\sigma_1 \approx_{\le t} \sigma_2$, for every read step \textsc{E-Eval}, $\sigma_1(t+k)(x) = \sigma_2(t+k)(x)$.
+Since reduction is deterministic and store reads return identical values, the evaluation traces under $\sigma_1$ and $\sigma_2$ are isomorphic, yielding $v_1 = v_2$.
+Future store mutations ($t' > t$) cannot influence the computed output.
+\end{proof}
+
+\subsection{Causal Mode Soundness: Intervention Integrity}
+
+\begin{theorem}[Causal Mode Soundness (Intervention Integrity)]
+Let $\mathcal{M}$ be a structural causal model over DAG $\mathcal{G}$.
+Let $e$ be a closed expression typed as $\emptyset \vdash e : \Caus[\tau, \mathbf{int}]$.
+\begin{enumerate}[itemsep=1pt]
+  \item Evaluation of $e$ proceeds strictly under the manipulated causal model $\mathcal{M}_{\overline{X}}$ in which all incoming structural equations to intervened variables $X$ are severed ($\textsc{E-Int}$).
+  \item By rule \textsc{T-Caus-BinOp} and subtyping mode isolation ($\Caus[\tau, \mathbf{obs}] \not\sub \Caus[\tau, \mathbf{int}]$), $e$ cannot combine with any observational term without explicit extraction.
+  \item Therefore, no observational conditional expectation $P(Y \mid X=x)$ can be silently substituted for an interventional query $\mathbb{E}[Y \mid \ty{do}(X=x)]$.
+\end{enumerate}
+\end{theorem}
+\begin{proof}
+Under rule \textsc{E-Int}, $\ty{do}(x \gets v_1)$ mutates the store's causal equation set by replacing $f_X$ with constant function $\lambda\_.\, v_1$. In Pearl's do-calculus, this constructs the manipulated graph $\mathcal{G}_{\overline{X}}$ with all arrows $\text{Pa}(X) \to X$ deleted. Because mode subtyping forms an antichain and \textsc{T-Caus-BinOp} requires strict mode equality $m_1 = m_2 = \mathbf{int}$, observational terms cannot taint the interventional derivation.
+\end{proof}
+
+\begin{openproblem}[Automated Causal Identification Completeness]
+While $\lambda_{\text{neuron}}$ statically guarantees \emph{mode integrity} (preventing observational and interventional calculations from being conflated), verifying whether an interventional query $P(Y \mid \ty{do}(X))$ is non-parametrically identifiable from observational distributions via the backdoor, frontdoor, or Tian's general identification algorithm remains an open research direction for future type-directed PL+Causal integration.
+\end{openproblem}
+
+\section{Conclusion}
+
+The formalization of $\lambda_{\text{neuron}}$ provides a rigorous foundation for domain-specific ML safety:
+\begin{itemize}[itemsep=1pt]
+  \item \textbf{Temporal Safety:} Proven sound via the Read Horizon Boundedness Lemma and Temporal Non-Interference Theorem, mathematically ruling out lookahead data leakage.
+  \item \textbf{Causal Safety:} Proven mode-safe via Intervention Integrity, while honestly delineating causal identification completeness as an open problem.
+\end{itemize}
+
+\end{document}

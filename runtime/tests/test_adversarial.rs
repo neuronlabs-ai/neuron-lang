@@ -997,6 +997,40 @@ fn main() -> Tensor:
     assert!(should_compile_error(src), "Indexing a Temporal tensor must preserve the Temporal wrapper and offset");
 }
 
+#[test]
+fn adversarial_snapshot_future_offset_rejected() {
+    let src = r#"
+fn main() -> Tensor:
+  let future_data: Temporal[Tensor[2, 2], 5] = randn(2, 2)
+  let laundered: Tensor[2, 2] = future_data.snapshot()
+  return laundered
+"#;
+    assert!(should_compile_error(src), "snapshot() on Temporal with positive offset (+5) must be rejected to prevent declassification of future data");
+}
+
+#[test]
+fn adversarial_snapshot_future_direction_rejected() {
+    let src = r#"
+fn main() -> Tensor:
+  let future_data: Temporal[Tensor[2, 2], future_to_past] = randn(2, 2)
+  let laundered: Tensor[2, 2] = future_data.snapshot()
+  return laundered
+"#;
+    assert!(should_compile_error(src), "snapshot() on Temporal with direction future_to_past must be rejected");
+}
+
+#[test]
+fn adversarial_snapshot_past_offset_allowed() {
+    let src = r#"
+fn main() -> Tensor:
+  let past_data: Temporal[Tensor[2, 2], -2] = randn(2, 2)
+  let safe: Tensor = past_data.snapshot()
+  return safe
+"#;
+    assert!(should_run_ok(src).is_ok(), "snapshot() on Temporal with past offset (-2) must succeed");
+}
+
+
 
 
 

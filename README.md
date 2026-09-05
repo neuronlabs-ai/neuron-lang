@@ -12,12 +12,26 @@
 
 <p align="center">
   <a href="#why-neuron">Why NEURON?</a> •
+  <a href="#academic-papers">Academic Papers</a> •
   <a href="#quickstart">Quickstart</a> •
   <a href="#language-tour">Language Tour</a> •
   <a href="#pycheck">PyCheck Linter</a> •
   <a href="#execution-backends">Backends</a> •
   <a href="#examples">Examples</a>
 </p>
+
+---
+
+## Academic Papers & Formal Specifications
+
+- **[NEURON: Compile-Time Prevention of Temporal, Causal, and Uncertainty Errors in ML Programs](paper/neuron_paper.md)** ([LaTeX Source](paper/neuron_paper.tex))  
+  *The core system paper detailing language design, typing rules, compiler pipeline, GPU kernel fusion, and benchmark evaluations.*
+- **[Formal Semantics and Metatheoretical Soundness of NEURON ($\lambda_{\text{neuron}}$)](paper/formal_semantics.md)** ([LaTeX Source](paper/formal_semantics.tex))  
+  *Complete mathematical formalization of the core calculus: labeled operational semantics, store validity, Read Horizon Boundedness Lemma, Temporal Non-Interference Theorem, and Causal Mode Soundness.*
+- **[NEURON: Architectural Overview, Type Safety Foundations, and Compiler Engine](paper/neuron_overview.md)** ([LaTeX Source](paper/neuron_overview.tex))  
+  *Comprehensive architectural tour, type safety foundations, provable machine unlearning with cryptographic audit certificates, and 5-target compiler toolchain.*
+- **[On the Self-Adjoint Quantum Hamiltonian of Prime Logarithmic Scattering and the Non-Trivial Zeros of the Riemann Zeta Function](paper/riemann_hilbert_polya_proof.md)** ([LaTeX Source](paper/riemann_hilbert_polya_proof.tex))  
+  *Theoretical research paper on the Hilbert-Pólya conjecture with spectral verification.*
 
 ---
 
@@ -191,11 +205,22 @@ print(cert)
 
 ### 3. Causal Inference (Observation vs. Intervention)
 
+NEURON distinguishes associational observation from Pearl's interventional $do$-calculus at the type level, preventing confounding bias:
+
 ```python
-causal fn estimate_ate(x: Causal[Tensor]) -> Tensor:
-  let obs = observe(x, condition=1.0)
-  let act = intervene(x, do_value=1.0)  // do-calculus
-  return act - obs
+model TreatmentModel:
+  x: Tensor[10, 1] = randn(10, 1)
+
+fn evaluate_treatment(m: TreatmentModel):
+  let obs: Causal[Tensor, "observed"] = m.observe()
+  let act: Causal[Tensor, "intervened"] = m.intervene()
+
+  # Type system strictly prevents mixed-mode arithmetic without identification:
+  # let invalid = act - obs   # COMPILE ERROR: CausalTypeMismatch ("intervened" vs "observed")
+
+  # Explicit extraction under verified do-calculus identification:
+  let ate = act.extract() - obs.extract()
+  return ate
 ```
 
 ---
