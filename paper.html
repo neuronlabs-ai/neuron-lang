@@ -42,9 +42,9 @@
           <li><a href="index.html#faq">FAQ</a></li>
           <li><a href="index.html#licensing">Licensing</a></li>
           <li>
-            <a href="neuron_paper.md" target="_blank" class="nav-btn nav-btn-secondary">
+            <a href="neuron_paper.md" target="_blank" class="nav-btn nav-btn-secondary" id="raw-markdown-link">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-              View Raw Markdown
+              <span id="raw-markdown-label">View Raw Markdown</span>
             </a>
           </li>
           <li>
@@ -65,6 +65,21 @@
 
   <!-- Main Paper Layout -->
   <main class="container">
+    <!-- Paper Switcher Tabs -->
+    <div class="paper-header-bar">
+      <div class="paper-nav-tabs">
+        <button class="paper-tab-btn active" data-paper="neuron_paper" id="tab-neuron-paper">
+          <span class="tab-badge">Core System</span> Technical Paper
+        </button>
+        <button class="paper-tab-btn" data-paper="formal_semantics" id="tab-formal-semantics">
+          <span class="tab-badge">Formal Theory</span> Formal Semantics ($\lambda_{\text{neuron}}$)
+        </button>
+        <button class="paper-tab-btn" data-paper="neuron_overview" id="tab-neuron-overview">
+          <span class="tab-badge">Overview</span> Architecture & Language Tour
+        </button>
+      </div>
+    </div>
+
     <div class="paper-layout">
       <!-- Sidebar / Table of Contents -->
       <aside class="paper-sidebar">
@@ -130,10 +145,33 @@
         });
       }
 
+      const rawMarkdownLink = document.getElementById("raw-markdown-link");
+      const rawMarkdownLabel = document.getElementById("raw-markdown-label");
+      const tabButtons = document.querySelectorAll(".paper-tab-btn");
+
+      const PAPERS = {
+        "neuron_paper": {
+          file: "neuron_paper.md",
+          title: "NEURON Paper — Technical Specification & Evaluation",
+          label: "View Technical Paper MD"
+        },
+        "formal_semantics": {
+          file: "formal_semantics.md",
+          title: "NEURON — Formal Semantics and Soundness (λ_neuron)",
+          label: "View Semantics MD"
+        },
+        "neuron_overview": {
+          file: "neuron_overview.md",
+          title: "NEURON — Architectural Overview & Foundations",
+          label: "View Overview MD"
+        }
+      };
+
       // Math parsing state
-      const mathBlocks = [];
+      let mathBlocks = [];
 
       function preprocessMath(text) {
+        mathBlocks = []; // Reset on each load
         // 0. Protect escaped dollar signs: \$ → placeholder
         let processed = text.replace(/\\\$/g, '%%ESCAPED_DOLLAR%%');
         
@@ -162,7 +200,6 @@
               displayMode: item.display,
               throwOnError: false
             });
-            // Replace exact matches of the ID placeholder
             result = result.replace(new RegExp(item.id, 'g'), rendered);
           } catch (err) {
             console.error("KaTeX error for:", item.formula, err);
@@ -174,44 +211,87 @@
         return result;
       }
 
-      // Fetch and render the paper
-      fetch("neuron_paper.md")
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Failed to load paper: ${response.status} ${response.statusText}`);
-          }
-          return response.text();
-        })
-        .then(markdownText => {
-          // Preprocess math formulas
-          const preprocessed = preprocessMath(markdownText);
-          
-          // Parse markdown to HTML
-          const rawHtml = marked.parse(preprocessed);
-          
-          // Postprocess math placeholders to rendered HTML
-          const finalHtml = postprocessMath(rawHtml);
-          
-          // Set to DOM
-          contentEl.innerHTML = finalHtml;
-          
-          // Generate TOC dynamically
-          buildTOC();
-          
-          // Add copy buttons to code blocks
-          addCodeCopyButtons();
-        })
-        .catch(err => {
-          console.error("Error displaying paper:", err);
-          contentEl.innerHTML = `
-            <div style="text-align: center; padding: 3rem 0; color: var(--accent-error);">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-              <h3>Failed to load scientific paper</h3>
-              <p style="margin-top: 0.5rem; opacity: 0.8;">${err.message}</p>
-              <a href="index.html" class="nav-btn nav-btn-primary" style="display: inline-flex; margin-top: 1.5rem; text-decoration: none;">Return to Home</a>
-            </div>
-          `;
+      function loadPaper(paperKey, pushState = true) {
+        const config = PAPERS[paperKey] || PAPERS["neuron_paper"];
+        
+        // Update active tab
+        tabButtons.forEach(btn => {
+          btn.classList.toggle("active", btn.dataset.paper === paperKey);
         });
+
+        // Update raw markdown link
+        if (rawMarkdownLink) {
+          rawMarkdownLink.href = config.file;
+        }
+        if (rawMarkdownLabel) {
+          rawMarkdownLabel.textContent = config.label;
+        }
+
+        // Update document title
+        document.title = config.title;
+
+        // Update URL query string
+        if (pushState && window.history && window.history.pushState) {
+          const newUrl = `${window.location.pathname}?doc=${paperKey}`;
+          window.history.pushState({ paperKey }, config.title, newUrl);
+        }
+
+        // Show loading state
+        contentEl.innerHTML = `
+          <div style="text-align: center; padding: 4rem 0;">
+            <p style="color: var(--text-muted); font-size: 1.1rem;">Loading scientific paper (${config.file})...</p>
+          </div>
+        `;
+        tocEl.innerHTML = '<li class="paper-toc-item"><span class="paper-toc-link">Loading...</span></li>';
+
+        fetch(config.file)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Failed to load ${config.file}: ${response.status} ${response.statusText}`);
+            }
+            return response.text();
+          })
+          .then(markdownText => {
+            const preprocessed = preprocessMath(markdownText);
+            const rawHtml = marked.parse(preprocessed);
+            const finalHtml = postprocessMath(rawHtml);
+            contentEl.innerHTML = finalHtml;
+            buildTOC();
+            addCodeCopyButtons();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          })
+          .catch(err => {
+            console.error("Error displaying paper:", err);
+            contentEl.innerHTML = `
+              <div style="text-align: center; padding: 3rem 0; color: var(--accent-error);">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                <h3>Failed to load scientific paper</h3>
+                <p style="margin-top: 0.5rem; opacity: 0.8;">${err.message}</p>
+                <a href="index.html" class="nav-btn nav-btn-primary" style="display: inline-flex; margin-top: 1.5rem; text-decoration: none;">Return to Home</a>
+              </div>
+            `;
+          });
+      }
+
+      // Tab click events
+      tabButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          const paperKey = btn.dataset.paper;
+          loadPaper(paperKey, true);
+        });
+      });
+
+      // Browser Back/Forward navigation
+      window.addEventListener("popstate", (e) => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const doc = urlParams.get("doc") || "neuron_paper";
+        loadPaper(doc, false);
+      });
+
+      // Initial paper determination
+      const urlParams = new URLSearchParams(window.location.search);
+      const initialDoc = urlParams.get("doc") || "neuron_paper";
+      loadPaper(initialDoc, false);
 
       // Build Table of Contents dynamically
       function buildTOC() {

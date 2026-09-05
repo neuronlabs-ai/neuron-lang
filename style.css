@@ -1085,11 +1085,67 @@ table.comparison-table {
 }
 
 /* ── Paper Page ── */
+.paper-header-bar {
+  padding-top: 5.5rem;
+  margin-bottom: -4rem;
+}
+.paper-nav-tabs {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(12px);
+}
+.paper-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--dur-fast);
+}
+.paper-tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.paper-tab-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.tab-badge {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+}
+.paper-tab-btn.active .tab-badge {
+  background: #6366f1;
+  color: #fff;
+}
 .paper-layout {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 2.5rem;
-  padding: 6rem 0 3rem;
+  padding: 5.5rem 0 3rem;
 }
 .paper-sidebar {
   position: sticky;
