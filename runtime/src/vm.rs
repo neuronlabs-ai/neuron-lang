@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 use neuron_compiler::ir::*;
-use num_bigint::BigInt;
+use num_bigint::{BigInt, BigUint};
 use num_traits::{ToPrimitive, Zero};
 use crate::tensor::*;
 use crate::autograd::*;
@@ -589,24 +589,24 @@ impl VM {
             if p == 2 {
                 return Ok(Value::Bool(true));
             }
-            let mask = (BigInt::from(1) << p) - 1;
-            let mut s = BigInt::from(4);
-            let two = BigInt::from(2);
-            let zero = BigInt::from(0);
+            let mask = (BigUint::from(1u32) << p) - BigUint::from(1u32);
+            let mut s = BigUint::from(4u32);
+            let two = BigUint::from(2u32);
             let steps = p - 2;
             for _ in 0..steps {
-                let mut s2 = &s * &s - &two;
-                while s2 > mask {
-                    let high = &s2 >> p;
-                    let low = &s2 & &mask;
-                    s2 = high + low;
+                let prod = &s * &s;
+                let high = &prod >> p;
+                let low = &prod & &mask;
+                let mut s_next = high + low;
+                if s_next >= two {
+                    s_next -= &two;
+                } else {
+                    s_next = s_next + &mask - &two;
                 }
-                if s2 == mask {
-                    s2 = zero.clone();
-                } else if s2 < zero {
-                    s2 += &mask;
+                if s_next >= mask {
+                    s_next -= &mask;
                 }
-                s = s2;
+                s = s_next;
             }
             return Ok(Value::Bool(s.is_zero()));
         }
