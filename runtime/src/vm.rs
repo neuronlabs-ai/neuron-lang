@@ -1652,16 +1652,32 @@ impl VM {
             if args.is_empty() {
                 return Err("sin requires 1 argument: (x)".into());
             }
-            let val = args[0].as_float();
-            return Ok(Value::Float(val.sin()));
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.sin();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => Ok(Value::Float(v.as_float().sin())),
+            };
         }
 
         if resolved_name == "cos" {
             if args.is_empty() {
                 return Err("cos requires 1 argument: (x)".into());
             }
-            let val = args[0].as_float();
-            return Ok(Value::Float(val.cos()));
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.cos();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => Ok(Value::Float(v.as_float().cos())),
+            };
         }
 
         if resolved_name == "load_ohlcv" {
