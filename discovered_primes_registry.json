@@ -1,0 +1,110 @@
+[
+  {
+    "formula": "48511 * 2^3552 + 1",
+    "k": 48511,
+    "n": 3552,
+    "digits": 1074,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "48511 * 2^3932 + 1",
+    "k": 48511,
+    "n": 3932,
+    "digits": 1189,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "79183 * 2^4036 + 1",
+    "k": 79183,
+    "n": 4036,
+    "digits": 1220,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "104729 * 2^3577 + 1",
+    "k": 104729,
+    "n": 3577,
+    "digits": 1082,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "127903 * 2^3878 + 1",
+    "k": 127903,
+    "n": 3878,
+    "digits": 1173,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "158887 * 2^3754 + 1",
+    "k": 158887,
+    "n": 3754,
+    "digits": 1136,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "169903 * 2^3544 + 1",
+    "k": 169903,
+    "n": 3544,
+    "digits": 1073,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "178901 * 2^3437 + 1",
+    "k": 178901,
+    "n": 3437,
+    "digits": 1040,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "201121 * 2^3380 + 1",
+    "k": 201121,
+    "n": 3380,
+    "digits": 1023,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "201121 * 2^4176 + 1",
+    "k": 201121,
+    "n": 4176,
+    "digits": 1263,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "224489 * 2^4333 + 1",
+    "k": 224489,
+    "n": 4333,
+    "digits": 1310,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  },
+  {
+    "formula": "281147 * 2^4115 + 1",
+    "k": 281147,
+    "n": 4115,
+    "digits": 1245,
+    "proth_base": 3,
+    "proof": "Unconditional primality certified by Proth's Theorem (1878)",
+    "discovered_by": "NEURON Autonomous Discovery Engine"
+  }
+]
