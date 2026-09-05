@@ -62,3 +62,4 @@ wasm/pkg/
 test_math_cap.nr
 tools/submission.csv
 checkpoint_*.json
+discovered_prime_*.json
