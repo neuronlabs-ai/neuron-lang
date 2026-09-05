@@ -418,6 +418,15 @@ impl SymbolTable {
         global.define("mean", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
         global.define("sum", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
 
+        // High-performance Mersenne and bitwise built-ins
+        let bool_type = NType::Base("Bool".into());
+        global.define("pow2_sub1", NType::Fn_(vec![int.clone()], Box::new(int.clone()), None));
+        global.define("mersenne_mod", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("mersenne_lucas_lehmer", NType::Fn_(vec![int.clone()], Box::new(bool_type.clone()), None));
+        global.define("shl", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("shr", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("band", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+
         // Built-in type names
         global.define("Int", NType::Base("Int".into()));
         global.define("Float", NType::Base("Float".into()));

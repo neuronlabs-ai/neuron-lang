@@ -546,6 +546,114 @@ impl VM {
             return Ok(Value::List(list));
         }
 
+        if resolved_name == "pow2_sub1" {
+            if args.is_empty() {
+                return Err("pow2_sub1 requires 1 argument: (p)".into());
+            }
+            let p = args[0].as_int() as usize;
+            let val = (BigInt::from(1) << p) - 1;
+            return Ok(Value::BigInt(val));
+        }
+
+        if resolved_name == "mersenne_mod" {
+            if args.len() < 2 {
+                return Err("mersenne_mod requires 2 arguments: (x, p)".into());
+            }
+            let p = args[1].as_int() as usize;
+            let x_big = match &args[0] {
+                Value::BigInt(b) => b.clone(),
+                Value::Int(i) => BigInt::from(*i),
+                _ => return Err("mersenne_mod expects an integer as first argument".into()),
+            };
+            let mask = (BigInt::from(1) << p) - 1;
+            let mut cur = x_big;
+            if cur < BigInt::from(0) {
+                cur = (cur % &mask + &mask) % &mask;
+            }
+            while cur > mask {
+                let high = &cur >> p;
+                let low = &cur & &mask;
+                cur = high + low;
+            }
+            if cur == mask {
+                cur = BigInt::from(0);
+            }
+            return Ok(Value::BigInt(cur));
+        }
+
+        if resolved_name == "mersenne_lucas_lehmer" {
+            if args.is_empty() {
+                return Err("mersenne_lucas_lehmer requires 1 argument: (p)".into());
+            }
+            let p = args[0].as_int() as usize;
+            if p == 2 {
+                return Ok(Value::Bool(true));
+            }
+            let mask = (BigInt::from(1) << p) - 1;
+            let mut s = BigInt::from(4);
+            let two = BigInt::from(2);
+            let zero = BigInt::from(0);
+            let steps = p - 2;
+            for _ in 0..steps {
+                let mut s2 = &s * &s - &two;
+                while s2 > mask {
+                    let high = &s2 >> p;
+                    let low = &s2 & &mask;
+                    s2 = high + low;
+                }
+                if s2 == mask {
+                    s2 = zero.clone();
+                } else if s2 < zero {
+                    s2 += &mask;
+                }
+                s = s2;
+            }
+            return Ok(Value::Bool(s.is_zero()));
+        }
+
+        if resolved_name == "shl" {
+            if args.len() < 2 {
+                return Err("shl requires 2 arguments: (x, shift)".into());
+            }
+            let shift = args[1].as_int() as usize;
+            let res = match &args[0] {
+                Value::BigInt(b) => Value::BigInt(b << shift),
+                Value::Int(i) => Value::BigInt(BigInt::from(*i) << shift),
+                _ => return Err("shl expects an integer as first argument".into()),
+            };
+            return Ok(res);
+        }
+
+        if resolved_name == "shr" {
+            if args.len() < 2 {
+                return Err("shr requires 2 arguments: (x, shift)".into());
+            }
+            let shift = args[1].as_int() as usize;
+            let res = match &args[0] {
+                Value::BigInt(b) => Value::BigInt(b >> shift),
+                Value::Int(i) => Value::Int(i >> shift),
+                _ => return Err("shr expects an integer as first argument".into()),
+            };
+            return Ok(res);
+        }
+
+        if resolved_name == "band" {
+            if args.len() < 2 {
+                return Err("band requires 2 arguments: (a, b)".into());
+            }
+            let a_big = match &args[0] {
+                Value::BigInt(b) => b.clone(),
+                Value::Int(i) => BigInt::from(*i),
+                _ => return Err("band expects integers".into()),
+            };
+            let b_big = match &args[1] {
+                Value::BigInt(b) => b.clone(),
+                Value::Int(i) => BigInt::from(*i),
+                _ => return Err("band expects integers".into()),
+            };
+            return Ok(Value::BigInt(a_big & b_big));
+        }
+
         if resolved_name == "load" {
             let mut t = Tensor::zeros(&[1, 20]);
             t.id = self.tape.alloc_id();
