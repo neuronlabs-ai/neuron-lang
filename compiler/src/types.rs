@@ -431,6 +431,7 @@ impl SymbolTable {
         global.define("mersenne_find_factor", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
         global.define("mersenne_find_factor_gpu", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
         global.define("mersenne_hunt_53rd", NType::Fn_(vec![int.clone(), int.clone(), NType::Base("String".into())], Box::new(bool_type.clone()), None));
+        global.define("mersenne_step_candidate", NType::Fn_(vec![int.clone(), int.clone(), NType::Base("String".into()), int.clone()], Box::new(bool_type.clone()), None));
         global.define("cuda_available", NType::Fn_(vec![], Box::new(bool_type.clone()), None));
         global.define("is_cuda_available", NType::Fn_(vec![], Box::new(bool_type.clone()), None));
         global.define("cuda_device_name", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));

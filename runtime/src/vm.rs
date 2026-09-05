@@ -552,7 +552,7 @@ impl VM {
     }
 
     /// Checkpointed Lucas-Lehmer test with real-time ETA, throughput telemetry, and fault-tolerant resume.
-    pub fn mersenne_lucas_lehmer_checkpoint(p: usize, interval: usize, checkpoint_path: &str) -> bool {
+    pub fn mersenne_lucas_lehmer_checkpoint(p: usize, interval: usize, checkpoint_path: &str, max_steps: usize) -> bool {
         if p < 2 { return false; }
         if p == 2 { return true; }
 
@@ -585,15 +585,27 @@ impl VM {
             }
         }
 
+        let target_steps = if max_steps > 0 {
+            (start_step + max_steps).min(total_steps)
+        } else {
+            total_steps
+        };
+
+        let is_53rd_candidate = p > 136_279_841;
+
         println!("╔══════════════════════════════════════════════════════════════╗");
-        println!("║  ◈ NEURON 53RD FRONTIER PRIMALITY ENGINE                     ║");
+        if is_53rd_candidate {
+            println!("║  ◈ NEURON 53RD MERSENNE PRIME FRONTIER ENGINE                ║");
+        } else {
+            println!("║  ◈ NEURON HISTORICAL MERSENNE PRIME VALIDATION ENGINE        ║");
+        }
         println!("║  ◈ Exponent p = {:<44} ║", p);
         println!("║  ◈ Digits     = {:<44} ║", (p as f64 * std::f64::consts::LOG10_2).floor() as usize + 1);
-        println!("║  ◈ Total LL Squarings: {:<37} ║", total_steps);
+        println!("║  ◈ Target Squarings: {:<38} ║", target_steps);
         println!("╚══════════════════════════════════════════════════════════════╝");
 
         let start_time = std::time::Instant::now();
-        for step in start_step..total_steps {
+        for step in start_step..target_steps {
             let prod = &s * &s;
             let high = &prod >> p;
             let low = &prod & &mask;
@@ -608,12 +620,12 @@ impl VM {
             }
             s = s_next;
 
-            if interval > 0 && (step + 1) % interval == 0 {
+            if interval > 0 && ((step + 1) % interval == 0 || step + 1 == target_steps) {
                 let progress = ((step + 1) as f64 / total_steps as f64) * 100.0;
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let sps = (step + 1 - start_step) as f64 / elapsed.max(0.001);
                 let remaining_secs = (total_steps - (step + 1)) as f64 / sps.max(1.0);
-                println!("  [CHECKPOINT] Step {:>10}/{} ({:.2}%) | Speed: {:.1} it/s | ETA: {:.1}m", 
+                println!("  [CHECKPOINT] Step {:>10}/{} ({:.4}%) | Speed: {:.1} it/s | ETA: {:.1}m", 
                     step + 1, total_steps, progress, sps, remaining_secs / 60.0);
 
                 let checkpoint_data = serde_json::json!({
@@ -626,9 +638,19 @@ impl VM {
             }
         }
 
+        if target_steps < total_steps {
+            println!("  ◈ Batch complete: {} squarings performed on M_{}. State persisted to '{}'!", 
+                target_steps - start_step, p, checkpoint_path);
+            return false;
+        }
+
         let is_prime = s.is_zero();
         if is_prime {
-            println!("  >>> [!!!] 53RD FRONTIER HIT: M_{} IS PRIME! [!!!] <<<", p);
+            if is_53rd_candidate {
+                println!("  >>> [WORLD DISCOVERY] NEW 53RD MERSENNE PRIME HIT: M_{} IS PRIME! [!!!] <<<", p);
+            } else {
+                println!("  >>> [VERIFIED PRIME] Historical Mersenne Prime M_{} Validated! Residue is 0! <<<", p);
+            }
             let _ = std::fs::remove_file(checkpoint_path);
         } else {
             println!("  [RESULT] M_{} residue != 0 (Composite).", p);
@@ -981,7 +1003,7 @@ impl VM {
             return Ok(Value::Str("CPU (SIMD / Multi-Limb)".to_string()));
         }
 
-        if resolved_name == "mersenne_hunt_53rd" {
+        if resolved_name == "mersenne_hunt_53rd" || resolved_name == "mersenne_step_candidate" {
             if args.is_empty() {
                 return Err("mersenne_hunt_53rd requires at least 1 argument: (p)".into());
             }
@@ -995,7 +1017,8 @@ impl VM {
             } else {
                 format!("checkpoint_M{}.json", p)
             };
-            let is_prime = Self::mersenne_lucas_lehmer_checkpoint(p, interval, &ckpt_path);
+            let max_steps = if args.len() > 3 { args[3].as_int() as usize } else { 0 };
+            let is_prime = Self::mersenne_lucas_lehmer_checkpoint(p, interval, &ckpt_path, max_steps);
             return Ok(Value::Bool(is_prime));
         }
 

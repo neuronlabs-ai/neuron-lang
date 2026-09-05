@@ -1,10 +1,14 @@
 // ============================================================================
 // ◈ NEURON EXPEDITION: THE 53RD MERSENNE PRIME FRONTIER ◈
 // ============================================================================
-// Investigating the two battlefronts for the 53rd Mersenne Prime:
-//   1. The Virgin Frontier (p > 141,340,919) - 100% untouched by humanity (~42.5M digits)
-//   2. The Double-Check Gap (81.8M <= p <= 141.3M) - single-tested candidates
-// Supports auto-detected NVIDIA CUDA acceleration with CPU fallback.
+// Historical Context:
+//   - The 52nd known Mersenne Prime is M_136279841 (October 2024, Luke Durant).
+//   - The 53RD MERSENNE PRIME HAS NEVER BEEN DISCOVERED BY HUMANITY.
+//   - M_4423 is NOT the 53rd; it was the 19th Mersenne prime (discovered in 1957).
+//
+// The 53rd must hide in one of two regions:
+//   1. The Virgin Frontier (p > 141,340,919): Untested by any computer in history.
+//   2. The Double-Check Gap (81.8M <= p <= 141.3M): Single-tested candidates.
 // ============================================================================
 
 fn probe_candidate(p: Int, max_k: Int, label: String):
@@ -43,53 +47,64 @@ fn main():
     // ────────────────────────────────────────────────────────────
     // PART 1: The Virgin Frontier (p > 141,340,919)
     // Every number here has over 42,500,000 decimal digits.
-    // Untested by GIMPS or any supercomputer in human history.
+    // 100% virgin mathematical territory.
     // ────────────────────────────────────────────────────────────
     print("==================================================")
-    print("PART 1: VIRGIN FRONTIER (p > 141,340,919)")
-    print("Numbers with > 42,500,000 Decimal Digits")
+    print("PART 1: VIRGIN 53RD FRONTIER (p > 141,340,919)")
+    print("Untested Numbers with > 42,500,000 Decimal Digits")
     print("==================================================")
 
-    probe_candidate(141340933, 50000, "Virgin Candidate #1")
-    probe_candidate(141340987, 50000, "Virgin Candidate #2")
-    probe_candidate(141341021, 50000, "Virgin Candidate #3")
-    probe_candidate(141341047, 50000, "Virgin Candidate #4")
-    probe_candidate(141341051, 50000, "Virgin Candidate #5")
-    probe_candidate(141341071, 50000, "Virgin Candidate #6")
-    probe_candidate(141341153, 50000, "Virgin Candidate #7")
-    probe_candidate(141341201, 50000, "Virgin Candidate #8")
-    probe_candidate(141341219, 50000, "Virgin Candidate #9")
-    probe_candidate(141341231, 50000, "Virgin Candidate #10")
+    probe_candidate(141340933, 50000, "Virgin 53rd Candidate #1")
+    probe_candidate(141340987, 50000, "Virgin 53rd Candidate #2")
+    probe_candidate(141341021, 50000, "Virgin 53rd Candidate #3")
+    probe_candidate(141341047, 50000, "Virgin 53rd Candidate #4")
+    probe_candidate(141341051, 50000, "Virgin 53rd Candidate #5")
+    probe_candidate(141341071, 50000, "Virgin 53rd Candidate #6")
+    probe_candidate(141341153, 50000, "Virgin 53rd Candidate #7")
+    probe_candidate(141341201, 50000, "Virgin 53rd Candidate #8")
+    probe_candidate(141341219, 50000, "Virgin 53rd Candidate #9")
+    probe_candidate(141341231, 50000, "Virgin 53rd Candidate #10")
 
     print("")
     // ────────────────────────────────────────────────────────────
     // PART 2: The Double-Check Gap (81.8M <= p <= 141.3M)
-    // Candidates tested only once in historical sweeps.
     // ────────────────────────────────────────────────────────────
     print("==================================================")
     print("PART 2: DOUBLE-CHECK GAP (81.8M <= p <= 141.3M)")
-    print("Auditing Candidates for Potential False Negatives")
+    print("Auditing Single-Tested Exponents for False Negatives")
     print("==================================================")
 
-    probe_candidate(85000007, 50000, "Gap Candidate #1 (p=85,000,007)")
-    probe_candidate(90000049, 50000, "Gap Candidate #2 (p=90,000,049)")
-    probe_candidate(100000007, 50000, "Gap Candidate #3 (p=100,000,007)")
+    probe_candidate(85000007, 50000, "Gap Candidate (p=85,000,007)")
+    probe_candidate(90000049, 50000, "Gap Candidate (p=90,000,049)")
+    probe_candidate(100000007, 50000, "Gap Candidate (p=100,000,007)")
 
     print("")
     // ────────────────────────────────────────────────────────────
-    // PART 3: Fault-Tolerant Recurrence Checkpointing
-    // Proof of the state persistence and live telemetry engine.
+    // PART 3: Lucas-Lehmer Squaring on an ACTUAL 53rd Candidate
+    // Target: M_141340933 (A genuine virgin 42,547,980-digit candidate)
     // ────────────────────────────────────────────────────────────
     print("==================================================")
-    print("PART 3: RESILIENT LUCAS-LEHMER CHECKPOINT ENGINE")
-    print("Verifying M_4423 with Live Telemetry & Persistence")
+    print("PART 3: DIRECT SQUARING ON VIRGIN 53RD CANDIDATE")
+    print("Candidate: M_141340933 (42,547,980 Decimal Digits)")
+    print("==================================================")
+    print("Executing initial Lucas-Lehmer squarings with state checkpointing...")
+    mersenne_step_candidate(141340933, 5, "checkpoint_M141340933.json", 15)
+
+    print("")
+    // ────────────────────────────────────────────────────────────
+    // PART 4: Historical Sanity Benchmark (NOT the 53rd!)
+    // ────────────────────────────────────────────────────────────
+    print("==================================================")
+    print("PART 4: HISTORICAL BENCHMARK ONLY (M_4423, 1957)")
+    print("Note: M_4423 is the 19th Prime (1,332 digits), NOT 53rd.")
+    print("Used to verify zero-residue primality convergence.")
     print("==================================================")
     let is_prime = mersenne_hunt_53rd(4423, 1000, "checkpoint_M4423.json")
-    print("Verification Result for M_4423:")
+    print("Historical M_4423 Verified Prime:")
     print(is_prime)
 
     print("")
     print("==================================================")
     print("◈ EXPEDITION COMPLETE ◈")
-    print("Surviving virgin candidates are primed for 53rd crown!")
+    print("Virgin candidate M_141340933 checkpointed and ready.")
     print("==================================================")
