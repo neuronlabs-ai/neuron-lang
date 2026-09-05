@@ -429,6 +429,7 @@ impl SymbolTable {
         global.define("parallel_mersenne_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::List(Box::new(int.clone()))), None));
         global.define("mersenne_factor_sift", NType::Fn_(vec![int.clone(), int.clone()], Box::new(bool_type.clone()), None));
         global.define("mersenne_find_factor", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
+        global.define("mersenne_hunt_53rd", NType::Fn_(vec![int.clone(), int.clone(), NType::Base("String".into())], Box::new(bool_type.clone()), None));
 
         // Built-in type names
         global.define("Int", NType::Base("Int".into()));

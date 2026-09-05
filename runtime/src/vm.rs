@@ -429,6 +429,92 @@ impl VM {
         res
     }
 
+    /// Checkpointed Lucas-Lehmer test with real-time ETA, throughput telemetry, and fault-tolerant resume.
+    pub fn mersenne_lucas_lehmer_checkpoint(p: usize, interval: usize, checkpoint_path: &str) -> bool {
+        if p < 2 { return false; }
+        if p == 2 { return true; }
+
+        if Self::mersenne_has_small_factor(p, 5000) {
+            println!("  [SIEVE] M_{} filtered by Euler-Fermat trial factor!", p);
+            return false;
+        }
+
+        let mut start_step = 0;
+        let mask = (BigUint::from(1u32) << p) - BigUint::from(1u32);
+        let mut s = BigUint::from(4u32);
+        let two = BigUint::from(2u32);
+        let total_steps = p - 2;
+
+        // Check for existing checkpoint to resume from
+        if let Ok(content) = std::fs::read_to_string(checkpoint_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if json["p"].as_u64() == Some(p as u64) {
+                    if let Some(step) = json["step"].as_u64() {
+                        if let Some(s_hex) = json["s_hex"].as_str() {
+                            if let Some(loaded_s) = BigUint::parse_bytes(s_hex.as_bytes(), 16) {
+                                s = loaded_s;
+                                start_step = step as usize;
+                                println!("  ◈ [RESUMING] Found checkpoint at step {}/{} ({:.1}%)", 
+                                    start_step, total_steps, (start_step as f64 / total_steps as f64) * 100.0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║  ◈ NEURON 53RD FRONTIER PRIMALITY ENGINE                     ║");
+        println!("║  ◈ Exponent p = {:<44} ║", p);
+        println!("║  ◈ Digits     = {:<44} ║", (p as f64 * std::f64::consts::LOG10_2).floor() as usize + 1);
+        println!("║  ◈ Total LL Squarings: {:<37} ║", total_steps);
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        let start_time = std::time::Instant::now();
+        for step in start_step..total_steps {
+            let prod = &s * &s;
+            let high = &prod >> p;
+            let low = &prod & &mask;
+            let mut s_next = high + low;
+            if s_next >= two {
+                s_next -= &two;
+            } else {
+                s_next = s_next + &mask - &two;
+            }
+            if s_next >= mask {
+                s_next -= &mask;
+            }
+            s = s_next;
+
+            if interval > 0 && (step + 1) % interval == 0 {
+                let progress = ((step + 1) as f64 / total_steps as f64) * 100.0;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let sps = (step + 1 - start_step) as f64 / elapsed.max(0.001);
+                let remaining_secs = (total_steps - (step + 1)) as f64 / sps.max(1.0);
+                println!("  [CHECKPOINT] Step {:>10}/{} ({:.2}%) | Speed: {:.1} it/s | ETA: {:.1}m", 
+                    step + 1, total_steps, progress, sps, remaining_secs / 60.0);
+
+                let checkpoint_data = serde_json::json!({
+                    "p": p,
+                    "step": step + 1,
+                    "s_hex": format!("{:x}", s),
+                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+                });
+                let _ = std::fs::write(checkpoint_path, checkpoint_data.to_string());
+            }
+        }
+
+        let is_prime = s.is_zero();
+        if is_prime {
+            println!("  >>> [!!!] 53RD FRONTIER HIT: M_{} IS PRIME! [!!!] <<<", p);
+            let _ = std::fs::remove_file(checkpoint_path);
+        } else {
+            println!("  [RESULT] M_{} residue != 0 (Composite).", p);
+            let _ = std::fs::remove_file(checkpoint_path);
+        }
+        is_prime
+    }
+
     /// Execute a function by name.
     pub fn execute(&mut self, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
         let mut resolved_name = fn_name.to_string();
@@ -732,6 +818,24 @@ impl VM {
             let max_k = args[1].as_int() as usize;
             let factor = Self::mersenne_find_factor(p, max_k);
             return Ok(Value::Int(factor as i64));
+        }
+
+        if resolved_name == "mersenne_hunt_53rd" {
+            if args.is_empty() {
+                return Err("mersenne_hunt_53rd requires at least 1 argument: (p)".into());
+            }
+            let p = args[0].as_int() as usize;
+            let interval = if args.len() > 1 { args[1].as_int() as usize } else { 10000 };
+            let ckpt_path = if args.len() > 2 {
+                match &args[2] {
+                    Value::Str(s) => s.clone(),
+                    _ => format!("checkpoint_M{}.json", p),
+                }
+            } else {
+                format!("checkpoint_M{}.json", p)
+            };
+            let is_prime = Self::mersenne_lucas_lehmer_checkpoint(p, interval, &ckpt_path);
+            return Ok(Value::Bool(is_prime));
         }
 
         if resolved_name == "shl" {
