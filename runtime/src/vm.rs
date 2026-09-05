@@ -13,6 +13,7 @@ use crate::tensor::*;
 use crate::autograd::*;
 use crate::buffer::Buffer;
 
+#[derive(Debug, Clone, Copy)]
 pub struct CudaModuleFunction {
     pub module: *mut std::ffi::c_void,
     pub function: *mut std::ffi::c_void,
@@ -332,10 +333,131 @@ impl VM {
         }
     }
 
+    #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+    pub fn mersenne_find_factor_cuda(ctx: &crate::device::CudaContext, p: usize, max_k: usize) -> Option<u64> {
+        if p < 2 || p == 2 { return Some(0); }
+        let kernel_src = r#"
+        __device__ inline unsigned long long modmul64(unsigned long long a, unsigned long long b, unsigned long long m) {
+            unsigned long long hi = __umul64hi(a, b);
+            unsigned long long lo = a * b;
+            unsigned long long res = lo % m;
+            unsigned long long rem = (0ULL - m) % m;
+            while (hi > 0) {
+                if (hi & 1) {
+                    res = res + rem;
+                    if (res >= m) res -= m;
+                }
+                rem = rem + rem;
+                if (rem >= m) rem -= m;
+                hi >>= 1;
+            }
+            return res;
+        }
+
+        extern "C" __global__ void mersenne_sieve_kernel(
+            unsigned long long p,
+            unsigned long long max_k,
+            unsigned long long* factor_out
+        ) {
+            unsigned long long tid = (unsigned long long)blockDim.x * blockIdx.x + threadIdx.x + 1;
+            if (tid > max_k) return;
+            if (*factor_out != 0) return;
+
+            unsigned long long q = 2 * tid * p + 1;
+            if (p < 62 && q >= ((1ULL << p) - 1ULL)) return;
+
+            unsigned long long rem8 = q % 8;
+            if (rem8 != 1 && rem8 != 7) return;
+
+            unsigned long long base = 2 % q;
+            unsigned long long exp = p;
+            unsigned long long m = q;
+            unsigned long long res = 1 % q;
+            while (exp > 0) {
+                if (exp & 1) {
+                    res = modmul64(res, base, m);
+                }
+                base = modmul64(base, base, m);
+                exp >>= 1;
+            }
+            if (res == 1) {
+                atomicCAS(factor_out, 0ULL, q);
+            }
+        }
+        "#;
+
+        let cache_mutex = GLOBAL_KERNEL_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut cache = cache_mutex.lock().unwrap();
+        let k_func = if let Some(kf) = cache.get("mersenne_sieve_kernel") {
+            *kf
+        } else {
+            let ptx = ctx.compile_to_ptx("mersenne_sieve_kernel", kernel_src).ok()?;
+            let (module, function) = ctx.load_module_and_get_function(&ptx, "mersenne_sieve_kernel").ok()?;
+            let kf = CudaModuleFunction { module, function };
+            cache.insert("mersenne_sieve_kernel".to_string(), kf);
+            kf
+        };
+        drop(cache);
+
+        let mut dev_ptr: u64 = 0;
+        unsafe {
+            let r = (ctx.cuda.cuMemAlloc_v2)(&mut dev_ptr, 8);
+            if r != 0 { return None; }
+            (ctx.cuda.cuMemsetD8)(dev_ptr, 0, 8);
+
+            let mut p_u64 = p as u64;
+            let mut max_k_u64 = max_k as u64;
+            let mut dev_ptr_arg = dev_ptr;
+
+            let mut args: [*mut std::ffi::c_void; 3] = [
+                &mut p_u64 as *mut u64 as *mut std::ffi::c_void,
+                &mut max_k_u64 as *mut u64 as *mut std::ffi::c_void,
+                &mut dev_ptr_arg as *mut u64 as *mut std::ffi::c_void,
+            ];
+
+            let block_size = 256u32;
+            let grid_size = (((max_k as u64) + 255) / 256).min(2147483647) as u32;
+
+            let launch_r = (ctx.cuda.cuLaunchKernel)(
+                k_func.function,
+                grid_size, 1, 1,
+                block_size, 1, 1,
+                0,
+                std::ptr::null_mut(),
+                args.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+
+            if launch_r != 0 {
+                (ctx.cuda.cuMemFree_v2)(dev_ptr);
+                return None;
+            }
+
+            (ctx.cuda.cuCtxSynchronize)();
+
+            let mut found_factor: u64 = 0;
+            (ctx.cuda.cuMemcpyDtoH_v2)(&mut found_factor as *mut u64 as *mut std::ffi::c_void, dev_ptr, 8);
+            (ctx.cuda.cuMemFree_v2)(dev_ptr);
+
+            Some(found_factor)
+        }
+    }
+
     /// Fast Euler-Fermat trial factoring: tests if 2^p - 1 has a small factor q = 2kp + 1 (q = +/- 1 mod 8).
+    /// Uses massively parallel GPU CUDA acceleration when available (k >= 2048), falling back to optimized CPU loop.
     /// Returns the factor q if found, or 0 if none found within max_k.
     pub fn mersenne_find_factor(p: usize, max_k: usize) -> u64 {
         if p < 2 || p == 2 { return 0; }
+
+        #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+        if max_k >= 2048 {
+            if let Some(ctx) = crate::device::get_cuda_context() {
+                if let Some(factor) = Self::mersenne_find_factor_cuda(ctx, p, max_k) {
+                    return factor;
+                }
+            }
+        }
+
         let p_u64 = p as u64;
         for k in 1..=max_k {
             let (q_minus_1, overflow) = (2 * (k as u64)).overflowing_mul(p_u64);
@@ -818,6 +940,45 @@ impl VM {
             let max_k = args[1].as_int() as usize;
             let factor = Self::mersenne_find_factor(p, max_k);
             return Ok(Value::Int(factor as i64));
+        }
+
+        if resolved_name == "mersenne_find_factor_gpu" {
+            if args.len() < 2 {
+                return Err("mersenne_find_factor_gpu requires 2 arguments: (p, max_k)".into());
+            }
+            let p = args[0].as_int() as usize;
+            let max_k = args[1].as_int() as usize;
+            #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+            {
+                if let Some(ctx) = crate::device::get_cuda_context() {
+                    if let Some(factor) = Self::mersenne_find_factor_cuda(ctx, p, max_k) {
+                        return Ok(Value::Int(factor as i64));
+                    }
+                }
+            }
+            let factor = Self::mersenne_find_factor(p, max_k);
+            return Ok(Value::Int(factor as i64));
+        }
+
+        if resolved_name == "cuda_available" || resolved_name == "is_cuda_available" {
+            #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+            {
+                return Ok(Value::Bool(crate::device::get_cuda_context().is_some()));
+            }
+            #[cfg(any(not(feature = "native"), target_arch = "wasm32"))]
+            {
+                return Ok(Value::Bool(false));
+            }
+        }
+
+        if resolved_name == "cuda_device_name" {
+            #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+            {
+                if let Some(_ctx) = crate::device::get_cuda_context() {
+                    return Ok(Value::Str("NVIDIA GPU (CUDA)".to_string()));
+                }
+            }
+            return Ok(Value::Str("CPU (SIMD / Multi-Limb)".to_string()));
         }
 
         if resolved_name == "mersenne_hunt_53rd" {
