@@ -1238,6 +1238,8 @@ impl VM {
                     (Value::Int(x), Value::Uncertain { value: v, std, confidence }) => {
                         Ok(Value::Uncertain { value: *x as f64 - v, std: *std, confidence: *confidence })
                     }
+                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
+                    (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
                     _ => Ok(Value::Float(a.as_float() - b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -1295,6 +1297,8 @@ impl VM {
                         let xf = *x as f64;
                         Ok(Value::Uncertain { value: xf * v, std: std * xf.abs(), confidence: *confidence })
                     }
+                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
+                    (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
                     _ => Ok(Value::Float(a.as_float() * b.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
@@ -1397,6 +1401,7 @@ impl VM {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = match &a {
                     Value::Tensor(t) => Ok(Value::Tensor(self.tape.neg(t))),
+                    Value::Int(i) => Ok(Value::Int(-i)),
                     _ => Ok(Value::Float(-a.as_float())),
                 };
                 res.map(|v| v.apply_wrappers(wraps))
