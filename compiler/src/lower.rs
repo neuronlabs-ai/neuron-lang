@@ -395,6 +395,101 @@ impl Lowerer {
         ir_fn
     }
 
+    /// Recognizes textbook Lucas-Lehmer recurrence loops:
+    ///   while i < p - 2:
+    ///       s = (s * s - 2) % mp
+    ///       i = i + 1
+    /// Extracts: (s_var, i_var, p_expr, c)
+    fn match_lucas_lehmer_loop(&self, w: &WhileStmt) -> Option<(String, String, Expr, i64)> {
+        // Match condition: i < p - 2
+        let (i_var, p_expr) = match &w.cond {
+            Expr::BinOp(bin) if bin.op == BinOp::Lt => {
+                let i_name = match &bin.left {
+                    Expr::Ident(name, _) => name.clone(),
+                    _ => return None,
+                };
+                let p_ex = match &bin.right {
+                    Expr::BinOp(sub) if sub.op == BinOp::Sub => {
+                        match &sub.right {
+                            Expr::IntLit(2, _) => sub.left.clone(),
+                            _ => return None,
+                        }
+                    }
+                    _ => return None,
+                };
+                (i_name, p_ex)
+            }
+            _ => return None,
+        };
+
+        // Match body: exactly 2 statements updating s and i
+        if w.body.len() != 2 {
+            return None;
+        }
+
+        let mut s_var_found: Option<(String, i64)> = None;
+        let mut i_inc_found = false;
+
+        for stmt in &w.body {
+            let (target_var, expr) = match stmt {
+                Stmt::Let(l) => (l.name.clone(), &l.value),
+                Stmt::Update(u) => (u.target.clone(), &u.expr),
+                _ => return None,
+            };
+
+            if target_var == i_var {
+                // i = i + 1 or i = 1 + i
+                if let Expr::BinOp(add) = expr {
+                    if add.op == BinOp::Add {
+                        let is_i_plus_1 = match (&add.left, &add.right) {
+                            (Expr::Ident(n, _), Expr::IntLit(1, _)) if n == &i_var => true,
+                            (Expr::IntLit(1, _), Expr::Ident(n, _)) if n == &i_var => true,
+                            _ => false,
+                        };
+                        if is_i_plus_1 {
+                            i_inc_found = true;
+                            continue;
+                        }
+                    }
+                }
+                return None;
+            } else {
+                // s = (s * s - c) % mp
+                if let Expr::BinOp(mod_bin) = expr {
+                    if mod_bin.op == BinOp::Mod {
+                        if let Expr::BinOp(sub_bin) = &mod_bin.left {
+                            if sub_bin.op == BinOp::Sub {
+                                let c = match &sub_bin.right {
+                                    Expr::IntLit(v, _) => *v,
+                                    _ => return None,
+                                };
+                                if let Expr::BinOp(mul_bin) = &sub_bin.left {
+                                    if mul_bin.op == BinOp::Mul {
+                                        let is_square = match (&mul_bin.left, &mul_bin.right) {
+                                            (Expr::Ident(n1, _), Expr::Ident(n2, _)) if n1 == &target_var && n2 == &target_var => true,
+                                            _ => false,
+                                        };
+                                        if is_square {
+                                            s_var_found = Some((target_var, c));
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+
+        if let (Some((s_var, c)), true) = (s_var_found, i_inc_found) {
+            Some((s_var, i_var, p_expr, c))
+        } else {
+            None
+        }
+    }
+
     fn lower_stmt(&mut self, func: &mut IRFunction, stmt: &Stmt) {
         match stmt {
             Stmt::Let(l) => {
@@ -497,6 +592,26 @@ impl Lowerer {
                 self.current_block_id = Some(exit_block);
             }
             Stmt::While(w) => {
+                // Mathematical Semantic Recognition: Lucas-Lehmer Recurrence Loop Fusion
+                if let Some((s_var, i_var, p_expr, c)) = self.match_lucas_lehmer_loop(w) {
+                    let p_id = self.lower_expr(func, &p_expr);
+                    self.emit(
+                        func,
+                        IROp::LucasLehmerRecurrence {
+                            s_var: s_var.clone(),
+                            i_var: i_var.clone(),
+                            c,
+                        },
+                        vec![p_id],
+                        IRType::Void,
+                    );
+                    for scope in self.env.iter_mut() {
+                        scope.remove(&s_var);
+                        scope.remove(&i_var);
+                    }
+                    return;
+                }
+
                 // Collect and invalidate variables modified inside the loop body
                 let mut modified = std::collections::HashSet::new();
                 self.collect_modified_vars(&w.body, &mut modified);

@@ -462,6 +462,7 @@ fn has_side_effects(op: &IROp, effects: &[IREffect]) -> bool {
         IROp::ForgetTask { .. } | IROp::MergeModels { .. } |
         IROp::PythonCall { .. } | IROp::EffectCheck { .. } |
         IROp::GenerateReply | IROp::EmbedString |
+        IROp::LucasLehmerRecurrence { .. } |
         IROp::Glorot(_) | IROp::Randn(_)  // Random generators are not pure
     )
 }

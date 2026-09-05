@@ -178,6 +178,9 @@ pub enum IROp {
     
     // ── Interpretability ──
     Explain,
+
+    // ── Number Theory & Recurrence Fusion ──
+    LucasLehmerRecurrence { s_var: String, i_var: String, c: i64 },
     
     // ── Merge / Forget ──
     MergeModels { strategy: String },
