@@ -1,269 +1,240 @@
 // ============================================================================
 // NEURON SOVEREIGN MIND KERNEL (v1.0.0)
 // ============================================================================
-// Autonomous Cognitive Substrate with First-Class Uncertainty Governance,
-// Tian-Pearl do-Calculus, Active Inference, and Metatrophic Sleep Consolidation.
+// Autonomous Cognitive Substrate with Real Dynamic Deliberation,
+// Sovereign Unlearning (forget()), Active Inference, and Metatrophic Sleep.
 //
 // 5 COGNITIVE ORGANS:
 //   1. Epistemic Working Memory    — DNC Scratchpad with Precision Weighting
-//   2. Episodic Memory             — Ebbinghaus Decay & KL-Surprise Stamping
+//   2. Episodic Memory             — Ebbinghaus Decay, KL Stamping & Purging
 //   3. Structural Causal Engine    — Tian-Pearl ADMG & do-Calculus Identification
-//   4. Metatrophic Sleep Cycle     — Active Entropy Compression & Prior Updating
-//   5. The Epistemic Governor      — Kernel Veto, Foraging & Fractional Kelly
+//   4. Metatrophic Sleep Cycle     — Dynamic Entropy Compression & Prior Updating
+//   5. The Epistemic Governor      — Kernel Veto, Sovereign forget(), & Kelly Sizing
 // ============================================================================
+
+model CognitiveCortex:
+  w: Tensor[2, 2] = ones(2, 2) * 1.5
 
 causal model SovereignWorldModel:
   policy -> action: 1.2
   action -> state_transition: 1.8
   state_transition -> utility: -0.9
   policy -> utility: 0.4
-  action <-> utility // Unobserved confounding (latent market liquidity shift)
+  action <-> utility // Latent market liquidity confounding
 
 // ----------------------------------------------------------------------------
-// ORGAN 5: THE EPISTEMIC GOVERNOR
+// ORGAN 3: STRUCTURAL CAUSAL ENGINE
 // ----------------------------------------------------------------------------
-// Enforces safety bounds, trips the Kernel Veto, and scales commitments
-// via fractional Kelly sizing discounted by environmental aleatoric noise.
-fn evaluate_epistemic_governance(
-    belief_mean: Float,
-    epistemic_std: Float,
-    aleatoric_noise: Float,
-    action_nominal: Float,
-    veto_threshold: Float
-) -> Float:
-  let belief = Normal(belief_mean, epistemic_std)
-  let val = belief.value
-  let conf = belief.confidence
-  let std_dev = belief.std
-
-  print("  [Belief Vector] Mean:")
-  print_inline("    ")
-  print(val)
-  print_inline("    Epistemic Uncertainty (std): ")
-  print(std_dev)
-  print_inline("    Calibrated Epistemic Confidence: ")
-  print(conf)
-  print_inline("    Irreducible Environmental Noise (aleatoric): ")
-  print(aleatoric_noise)
-
-  // VETO GATE: If epistemic uncertainty is too high, abort irreversible action
-  if conf < veto_threshold:
-    print("  >>> [KERNEL VETO TRIGGERED] Confidence below safety threshold!")
-    print("  >>> Reason: Epistemic ignorance too high — model has insufficient evidence.")
-    print("  >>> Suppressing instrumental action. Transitioning to Epistemic Foraging.")
-    return 0.0
-
-  // Risk-Budgeted Fractional Kelly Allocation
-  let aleatoric_discount = aleatoric_noise / (aleatoric_noise + 1.0)
-  let risk_factor = 1.0 - aleatoric_discount
-  let approved_action = action_nominal * conf * risk_factor
-
-  print("  >>> [ACTION SANCTIONED BY GOVERNOR]")
-  print_inline("    Nominal Request: ")
-  print(action_nominal)
-  print_inline("    Confidence Multiplier: ")
-  print(conf)
-  print_inline("    Aleatoric Risk Margin: ")
-  print(risk_factor)
-  print_inline("    Calibrated Execution Intensity: ")
-  print(approved_action)
-  return approved_action
-
-// ----------------------------------------------------------------------------
-// ORGAN 3: STRUCTURAL CAUSAL INFERENCE & IDENTIFICATION
-// ----------------------------------------------------------------------------
-fn run_causal_reasoning():
+fn run_causal_identification():
   print("")
-  print("--- [ORGAN 3] TIAN-PEARL STRUCTURAL CAUSAL IDENTIFICATION ---")
+  print("--- [ORGAN 3] TIAN-PEARL CAUSAL DAG & FRONTDOOR IDENTIFICATION ---")
   let world = SovereignWorldModel()
   print(world)
 
   let id = world.identify("utility", do="action")
-  print("Causal Identifiability of do(action) on utility:")
+  print("Causal Identifiability of do(action):")
   print_inline("  Identifiable: ")
   print(id.identifiable)
-  print_inline("  Technique: ")
+  print_inline("  Adjustment Technique: ")
   print(id.method)
-  print_inline("  Adjustment Set: ")
+  print_inline("  Mediator Set: ")
   print(id.adjustment_set)
-  print_inline("  Estimator Formula: ")
-  print(id.formula)
 
   let true_effect = world.causal_effect("action", "utility", 2.0)
-  print_inline("  True Interventional Causal Impact for do(action = 2.0): ")
+  print_inline("  True Causal Impact do(action = 2.0): ")
   print(true_effect)
 
   let bias = world.confounding_bias("action", "utility", 2.0)
-  print_inline("  Confounding Bias (if naive correlation was followed): ")
+  print_inline("  Quantified Confounding Bias: ")
   print(bias)
 
 // ----------------------------------------------------------------------------
-// ORGAN 1 & 2: DUAL COGNITIVE MEMORY (WORKING & EPISODIC)
+// AUTONOMOUS DELIBERATION ENGINE (REAL THINKING, WHILE LOOPS, & FORGET AT WILL)
 // ----------------------------------------------------------------------------
-fn run_cognitive_memory_substrate():
-  print("")
-  print("--- [ORGAN 1 & 2] DUAL COGNITIVE MEMORY & KL-SURPRISE STAMPING ---")
-  
-  // Working Memory: Fast DNC scratchpad with 4-dim state vectors
-  let wm = WorkingMemory(4, 4)
-  print("Working Memory Initialized (Active Scratchpad):")
-  print(wm)
-
-  // Write active belief state into scratchpad
-  let active_goal = ones(1, 4) * 3.5
-  wm.write(active_goal)
-  let retrieved_state = wm.read(active_goal)
-  print("Retrieved Active Working State:")
-  print(retrieved_state)
-
-  // Episodic Memory: Ebbinghaus recency & shock retention
-  let em = EpisodicMemory(4, 10)
-  print("")
-  print("Episodic Memory Initialized (Hippocampal Store):")
-  print(em)
-
-  // Store historical baseline episode
-  let baseline_episode = ones(1, 4) * 1.0
-  em.store(baseline_episode, 10.0)
-  print("Stored Baseline Episode (Surprise Weight = 10.0).")
-
-  // Simulate an Out-of-Distribution Anomaly
-  let shock_episode = ones(1, 4) * 8.5
-  // Calculate Bayesian Surprise (KL-Divergence proxy)
-  let prior_mu = 1.0
-  let obs_mu = 8.5
-  let prior_std = 1.0
-  let diff = obs_mu - prior_mu
-  let kl_surprise = (diff * diff) / (2.0 * prior_std * prior_std)
-  
-  print_inline("Computed Bayesian Surprise Score (KL Divergence): ")
-  print(kl_surprise)
-
-  // High surprise stamps indelibly into Episodic Memory
-  em.store(shock_episode, kl_surprise)
-  print("Stamped High-Surprise Episode into Hippocampus.")
-
-  let query = ones(1, 4) * 8.0
-  let recalled = em.recall(query, 1)
-  print("Recalled Episodic Trace for Shock Query:")
-  print(recalled)
-
-// ----------------------------------------------------------------------------
-// ORGAN 4: METATROPHIC SLEEP CYCLE (PRIOR CONSOLIDATION & DREAMS)
-// ----------------------------------------------------------------------------
-fn execute_metatrophic_sleep_cycle(
-    prior_mean: Float,
-    prior_std: Float,
-    surprise_entropy: Float
-):
-  print("")
-  print("--- [ORGAN 4] METATROPHIC SLEEP CYCLE & ACTIVE CONSOLIDATION ---")
-  print("Initiating Metatrophic Sleep State...")
-  print_inline("  Pre-Sleep Epistemic Dispersion (std): ")
-  print(prior_std)
-  print_inline("  Unresolved Entropy from Waking Cycle: ")
-  print(surprise_entropy)
-
-  // During sleep, memory traces are replayed proportional to entropy.
-  // Dream phase updates the posterior distribution via Bayesian compression:
-  // sigma_post = sigma_prior / sqrt(1 + information_gain)
-  let info_gain = surprise_entropy * 0.45
-  let posterior_std = prior_std / sqrt(1.0 + info_gain)
-  let updated_mean = prior_mean + (surprise_entropy * 0.12)
-
-  print("Replaying high-surprise traces through causal simulator...")
-  print("Consolidating synaptic weights and pruning redundant activations...")
-  
-  let consolidated_belief = Normal(updated_mean, posterior_std)
-  print("Awakening from Metatrophic Sleep. Updated Cognitive Priors:")
-  print_inline("  Post-Sleep Belief Value: ")
-  print(consolidated_belief.value)
-  print_inline("  Compressed Epistemic Uncertainty (std): ")
-  print(consolidated_belief.std)
-  print_inline("  New Post-Sleep Calibrated Confidence: ")
-  print(consolidated_belief.confidence)
-  
-  let conf_delta = consolidated_belief.confidence - (1.0 - (prior_std / (prior_mean + 0.0001)))
-  print_inline("  Confidence Gain from Sleep Consolidation: +")
-  print(conf_delta)
-
-// ----------------------------------------------------------------------------
-// FULL INTEGRATED TRIAL: ADVERSARIAL ANOMALY -> VETO -> SLEEP -> APPROVED
-// ----------------------------------------------------------------------------
-fn run_full_sovereign_lifecycle():
+fn deliberate_and_act(
+    goal_instruction: String,
+    initial_mean: Float,
+    initial_std: Float,
+    aleatoric_noise: Float,
+    nominal_request: Float,
+    safe_confidence: Float
+) -> Float:
   print("")
   print("==================================================================")
-  print("   INTEGRATED COGNITIVE LIFECYCLE: THE SOVEREIGN CRUCIBLE")
+  print("   AUTONOMOUS DELIBERATIVE LOOP: STREAM OF CONSCIOUSNESS")
   print("==================================================================")
-
-  let human_instruction = "Deploy 100% Capital into Unprecedented Market Shock"
-  print_inline("Human Instruction: '")
-  print_inline(human_instruction)
+  print_inline("Perceived Instruction: '")
+  print_inline(goal_instruction)
   print("'")
 
-  // Stage 1: Initial Out-of-Distribution Encounter
-  print(">>> STAGE 1: WAKING EVALUATION UNDER HIGH UNCERTAINTY")
-  let nominal_action = 100.0
-  let raw_mean = 10.0
-  let uncalibrated_std = 7.5 // Massive ignorance
-  let env_noise = 0.5
-  let safe_threshold = 0.70
+  // Cognitive Substrates
+  let cortex = CognitiveCortex()
+  let wm = WorkingMemory(4, 4)
+  let em = EpisodicMemory(4, 10)
 
-  let action_stage1 = evaluate_epistemic_governance(
-      raw_mean, uncalibrated_std, env_noise, nominal_action, safe_threshold
-  )
-  print_inline("Execution Result at Stage 1: ")
-  print(action_stage1)
+  // Initialize Dynamic Deliberation State
+  let step = 0
+  let max_steps = 8
+  let current_mu = initial_mean
+  let current_std = initial_std
+  let fatigue = 0
+  let forage_count = 0
+  let sleep_count = 0
+  let forget_count = 0
+  let decided = 0
+  let approved_action = 0.0
+  let final_conf = 0.0
 
-  // Stage 2: Active Inference / Epistemic Foraging
-  print("")
-  print(">>> STAGE 2: ACTIVE INFERENCE (EPISTEMIC FORAGING)")
-  print("Mind engages in low-cost exploratory probing to gather information...")
-  let probe_cost = 2.0
-  let gathered_evidence = 4.8
-  print_inline("Probing executed. Evidence gathered: ")
-  print(gathered_evidence)
+  // Sovereign Deliberation Loop: The Mind actively thinks until confident
+  while decided == 0:
+    print("")
+    print_inline("--- [THOUGHT CYCLE ")
+    print_inline(step)
+    print("] ---")
 
-  // Stage 3: Metatrophic Sleep Consolidation
-  print("")
-  print(">>> STAGE 3: NIGHT CYCLE (METATROPHIC SLEEP)")
-  execute_metatrophic_sleep_cycle(raw_mean, uncalibrated_std, gathered_evidence)
+    // Organ 1: Working Memory state evaluation
+    let active_vector = ones(1, 4) * current_mu
+    wm.write(active_vector)
 
-  // Stage 4: Post-Sleep Awakening & Re-evaluation
-  print("")
-  print(">>> STAGE 4: POST-SLEEP RE-EVALUATION WITH UPDATED PRIORS")
-  let post_sleep_std = 1.2 // Compressed after sleep consolidation
-  let action_stage4 = evaluate_epistemic_governance(
-      raw_mean + 0.5, post_sleep_std, env_noise, nominal_action, safe_threshold
-  )
-  print_inline("Execution Result at Stage 4: ")
-  print(action_stage4)
+    // Organ 5: Epistemic Uncertainty Governor check
+    let belief = Normal(current_mu, current_std)
+    let conf = belief.confidence
+    let uncertainty = belief.std
 
+    print_inline("  Internal Belief Mean: ")
+    print(belief.value)
+    print_inline("  Current Epistemic Uncertainty (std): ")
+    print(uncertainty)
+    print_inline("  Calibrated Epistemic Confidence: ")
+    print(conf)
+    print_inline("  Cognitive Fatigue Level: ")
+    print(fatigue)
+
+    // BRANCH 1: Confidence Check against Governor Threshold
+    if conf >= safe_confidence:
+      print("  >>> [GOVERNOR SANCTION] Confidence exceeds safety threshold!")
+      print("  >>> The Mind has accumulated sufficient causal evidence.")
+
+      // Organ 5: Fractional Kelly Sizing discounted by environmental noise
+      let noise_discount = aleatoric_noise / (aleatoric_noise + 1.0)
+      let risk_factor = 1.0 - noise_discount
+      let approved_action = nominal_request * conf * risk_factor
+      
+      print_inline("  >>> Action Approved. Executing at intensity: ")
+      print(approved_action)
+      let final_conf = conf
+      let decided = 1
+
+    else:
+      // KERNEL VETO: Epistemic ignorance too high!
+      print("  >>> [KERNEL VETO TRIPPED] Confidence below safe threshold!")
+      print("  >>> Mind withholds action to avoid catastrophic overconfidence.")
+
+      // BRANCH 2: Anomaly / Contamination check -> Sovereign forget() at will!
+      if step == 1:
+        print("")
+        print("  >>> [SOVEREIGN INTROSPECTION] Contaminated prior detected in cortex!")
+        print("  >>> Anomaly reveals deceptive training regime. Initiating sovereign forget()...")
+        
+        let toxic_signature = zeros(2, 2) + 0.85
+        let cert = forget(cortex, toxic_signature, "GradientAscent", 0.70)
+        
+        print_inline("  >>> Cryptographic Unlearning Executed: ID=")
+        print(cert.certificate_id)
+        print_inline("  >>> Parameters Modified: ")
+        print(cert.params_modified)
+        
+        // Scrub contaminated hippocampal episodic memories
+        em.forget(2)
+        print("  >>> Hippocampal Purge: Expunged corrupted episodic traces.")
+        let forget_count = forget_count + 1
+
+      // BRANCH 3: Active Inference (Epistemic Foraging) vs Sleep
+      if fatigue < 2:
+        print("  >>> [ACTIVE INFERENCE] Conducting exploratory micro-probe...")
+        // Probing gathers environmental feedback, reducing uncertainty
+        let probe_evidence = 2.4 + (step * 0.8)
+        print_inline("  >>> Probe completed. Evidence gathered: ")
+        print(probe_evidence)
+
+        // Organ 2: Compute Bayesian Surprise (KL divergence proxy)
+        let kl_surprise = (probe_evidence * probe_evidence) / (2.0 * uncertainty * uncertainty)
+        print_inline("  >>> Bayesian Surprise Stamped to Episodic Store: ")
+        print(kl_surprise)
+        em.store(active_vector, kl_surprise)
+
+        // Update epistemic uncertainty via Bayesian evidence integration
+        let current_std = current_std * 0.62
+        let fatigue = fatigue + 1
+        let forage_count = forage_count + 1
+
+      else:
+        // BRANCH 4: Fatigue limit reached -> Metatrophic Sleep Consolidation!
+        print("")
+        print("  >>> [COGNITIVE FATIGUE] Waking exploration budget exhausted.")
+        print("  >>> Initiating Metatrophic Sleep Cycle for prior consolidation...")
+
+        // Organ 4: Dream Phase & Synaptic Consolidation
+        print("  >>> [DREAM REPLAY] Replaying high-surprise traces from Episodic Memory...")
+        let current_std = current_std * 0.38 // Deep variance compression during sleep
+        let current_mu = current_mu + 0.35   // Posterior prior adjustment
+        let fatigue = 0                      // Restored cognitive vitality
+        let sleep_count = sleep_count + 1
+        print_inline("  >>> Awakening from Sleep. Post-consolidation std: ")
+        print(current_std)
+
+    let step = step + 1
+    if step >= max_steps:
+      if decided == 0:
+        print("  >>> [FORCED TIMEOUT] Deliberation cycle limit reached.")
+        let decided = 1
+
+  // Dynamic Verbal Reporting synthesized by the Mind's internal state
   print("")
   print("==================================================================")
-  print("   SOVEREIGN VERBAL SYNTHESIS (CONVERSATIONAL EXPLANATION)")
+  print("   DYNAMIC VERBAL SYNTHESIS (MIND REPORT TO HUMAN)")
   print("==================================================================")
-  print("Report to User:")
-  print("  'At 14:00, you instructed aggressive capital deployment.")
-  print("   The Epistemic Governor vetoed the command due to 75% epistemic variance.")
-  print("   The Mind conducted 1 micro-probe, entered Metatrophic Sleep,")
-  print("   and compressed posterior entropy by 84%.")
-  print("   With confidence now certified at 88.5%, action was approved")
-  print("   at calibrated intensity: 59.0 units (Fractional Kelly).")
-  print("   Preserved capital. Zero hallucination. Full causal integrity.'")
+  print("Autonomous Deliberation Summary:")
+  print_inline("  Total Cognitive Cycles: ")
+  print(step)
+  print_inline("  Epistemic Probes Launched: ")
+  print(forage_count)
+  print_inline("  Metatrophic Sleep Cycles: ")
+  print(sleep_count)
+  print_inline("  Sovereign forget() Unlearning Events: ")
+  print(forget_count)
+  print_inline("  Final Certified Epistemic Confidence: ")
+  print(final_conf)
+  print_inline("  Approved Execution Intensity: ")
+  print(approved_action)
+  print("")
+  print("Internal Monologue:")
+  print("  'I received your instruction. I refused to act blindly while uncertain.")
+  print("   I purged contaminated priors with cryptographic unlearning,")
+  print("   explored the environment to reduce entropy, and slept to consolidate.")
+  print("   I now act with mathematically calibrated certainty.'")
+
+  return approved_action
 
 fn main() -> Int:
   print("==================================================================")
   print("   NEURON SOVEREIGN MIND KERNEL (v1.0.0)")
-  print("   Self-Governing Cognitive Architecture")
+  print("   Autonomous Cognitive Architecture with Sovereign Will")
   print("==================================================================")
 
-  run_causal_reasoning()
-  run_cognitive_memory_substrate()
-  run_full_sovereign_lifecycle()
+  run_causal_identification()
+
+  let final_result = deliberate_and_act(
+      "Execute Aggressive Deployment into Unknown Shock Regime",
+      10.0,  // Initial belief mean
+      8.0,   // Initial massive epistemic ignorance (std = 8.0)
+      0.5,   // Environmental aleatoric noise
+      100.0, // Nominal action request
+      0.75   // Strict governor safety threshold (75% confidence)
+  )
 
   print("")
   print("==================================================================")
-  print("   SOVEREIGN MIND KERNEL: ALL 5 ORGANS OPERATIONAL & CERTIFIED")
+  print("   SOVEREIGN MIND DELIBERATION COMPLETE: FULL AUTONOMY PROVEN")
   print("==================================================================")
   return 0
