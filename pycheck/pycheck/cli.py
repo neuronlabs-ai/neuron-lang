@@ -35,7 +35,7 @@ def main():
         print()
         sys.exit(0)
     
-    # Get filepath (first non-flag argument)
+    # Get target path (first non-flag argument, defaults to '.' if flag only or omitted)
     filepath = None
     for a in args:
         if not a.startswith('-'):
@@ -43,39 +43,80 @@ def main():
             break
     
     if not filepath:
-        print("Error: No file specified")
-        sys.exit(1)
+        filepath = "."
     
     if not os.path.exists(filepath):
-        print(f"Error: File not found: {filepath}")
+        print(f"Error: Path not found: {filepath}")
         sys.exit(1)
     
-    try:
-        diagnostics, source_lines = analyze_file(filepath)
-    except SyntaxError as e:
-        print(f"Syntax error in {filepath}: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error analyzing {filepath}: {e}")
-        sys.exit(1)
-    
-    if '--json' in args:
-        # Filter by severity
-        if '--quiet' in args:
-            diagnostics = [d for d in diagnostics if d['severity'] == 'error']
-        elif '--info' not in args:
-            diagnostics = [d for d in diagnostics if d['severity'] != 'info']
-        print(json.dumps(diagnostics, indent=2))
+    show_info = '--info' in args
+    is_quiet = '--quiet' in args
+    is_json = '--json' in args
+
+    # Collect target files
+    files_to_scan = []
+    if os.path.isdir(filepath):
+        ignored_dirs = {'.git', '__pycache__', '.pytest_cache', '.venv', 'venv', 'env', 'node_modules', 'dist', 'build', '.egg-info'}
+        for root, dirs, files in os.walk(filepath):
+            dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith('.')]
+            for f in files:
+                if f.endswith('.py') or f.endswith('.ipynb'):
+                    files_to_scan.append(os.path.join(root, f))
     else:
-        show_info = '--info' in args
-        if '--quiet' in args:
+        files_to_scan = [filepath]
+
+    if not files_to_scan:
+        print(f"No Python (.py) or notebook (.ipynb) files found in {filepath}")
+        sys.exit(0)
+
+    total_errors = 0
+    total_warnings = 0
+    files_with_issues = 0
+    all_json_results = {}
+
+    for f_path in files_to_scan:
+        try:
+            diagnostics, source_lines = analyze_file(f_path)
+        except SyntaxError as e:
+            if not is_json:
+                print(f"Syntax error in {f_path}: {e}")
+            total_errors += 1
+            continue
+        except Exception as e:
+            if not is_json:
+                print(f"Error analyzing {f_path}: {e}")
+            continue
+
+        if is_quiet:
             diagnostics = [d for d in diagnostics if d['severity'] == 'error']
-        format_output(filepath, diagnostics, source_lines, show_info=show_info)
-    
-    # Exit with code 1 if any errors were found
-    errors = [d for d in diagnostics if d['severity'] == 'error']
-    if errors:
+        elif not show_info:
+            diagnostics = [d for d in diagnostics if d['severity'] != 'info']
+
+        err_count = sum(1 for d in diagnostics if d['severity'] == 'error')
+        warn_count = sum(1 for d in diagnostics if d['severity'] == 'warning')
+        total_errors += err_count
+        total_warnings += warn_count
+
+        if diagnostics:
+            files_with_issues += 1
+            if is_json:
+                all_json_results[f_path] = diagnostics
+            else:
+                format_output(f_path, diagnostics, source_lines, show_info=show_info)
+
+    if is_json:
+        print(json.dumps(all_json_results, indent=2))
+    elif len(files_to_scan) > 1:
+        clean_files = len(files_to_scan) - files_with_issues
+        print("=================================================================")
+        print("  PyCheck Directory Summary")
+        print(f"  Scanned: {len(files_to_scan)} files | Clean: {clean_files} | Flagged: {files_with_issues}")
+        print(f"  Total: {total_errors} error(s), {total_warnings} warning(s)")
+        print("=================================================================\n")
+
+    if total_errors > 0:
         sys.exit(1)
+
 
 
 if __name__ == '__main__':

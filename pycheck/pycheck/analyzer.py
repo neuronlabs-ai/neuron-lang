@@ -82,11 +82,29 @@ class PyCheckAnalyzer(ast.NodeVisitor):
 
 def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     """
-    Analyze a Python file for ML safety issues.
+    Analyze a Python (.py) or Jupyter notebook (.ipynb) file for ML safety issues.
     Returns (diagnostics_list, source_lines).
     """
-    with open(filepath, 'r', encoding='utf-8') as f:
-        source = f.read()
+    if filepath.endswith('.ipynb'):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            nb = json.load(f)
+        code_lines = []
+        for cell in nb.get('cells', []):
+            if cell.get('cell_type') == 'code':
+                raw = cell.get('source', [])
+                if isinstance(raw, str):
+                    raw = raw.splitlines(True)
+                for line in raw:
+                    s_line = line.strip()
+                    if s_line.startswith('%') or s_line.startswith('!'):
+                        code_lines.append(f"# {line}")
+                    else:
+                        code_lines.append(line)
+                code_lines.append('\n')
+        source = "".join(code_lines)
+    else:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            source = f.read()
     
     source_lines = source.split('\n')
     tree = ast.parse(source, filename=filepath)

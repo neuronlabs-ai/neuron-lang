@@ -1,0 +1,31 @@
+name: 'PyCheck ML Safety Analyzer'
+description: 'Detect temporal lookahead bias, causal confusion, and data leaks in Python ML code before merge'
+author: 'NEURON Team'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Path or directory to scan'
+    required: false
+    default: '.'
+  fail-on-warning:
+    description: 'Fail the action if warnings are found (default fails only on errors)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install PyCheck
+      shell: bash
+      run: pip install pycheck-neuron
+    - name: Run PyCheck
+      shell: bash
+      run: |
+        python -m pycheck.cli "${{ inputs.path }}"

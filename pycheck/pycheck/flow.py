@@ -132,8 +132,12 @@ class TaintTracker:
             # Check if indexing a tainted column name
             if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
                 col_lower = node.slice.value.lower()
+                # Only flag column names that unambiguously refer to future data.
+                # 'target' and 'label' are intentionally excluded — they are standard
+                # ML label column names and produce false positives when accessed on a
+                # correctly split train/test dataset.
                 future_cols = {'future_price', 'future_return', 'next_close', 'next_price',
-                               'target', 'next_day', 'tomorrow', 'future'}
+                               'next_day', 'tomorrow', 'price_change_next_day', 'future_avg_price'}
                 if any(f in col_lower for f in future_cols):
                     return f"accessing future-named column '{node.slice.value}'"
         

@@ -1,0 +1,7 @@
+- id: pycheck
+  name: pycheck
+  description: Static AST analyzer detecting lookahead bias, temporal leaks, and causal bugs in Python ML code
+  entry: pycheck
+  language: python
+  types: [python]
+  require_serial: true

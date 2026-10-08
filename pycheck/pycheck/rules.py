@@ -323,6 +323,16 @@ class T010_FitBeforeSplit(Rule):
                             'parser', 'formatter', 'logger', 'handler'}
             if obj_name and obj_name.lower() in safe_objects:
                 return []
+            # Suppress if all positional arguments are clearly train-only variables
+            # (names containing _train, train_, X_tr, y_tr, etc.)
+            train_markers = ('_train', 'train_', 'X_tr', 'y_tr', '_trn', 'trn_')
+            if node.args:
+                all_train = all(
+                    isinstance(a, ast.Name) and any(m in a.id for m in train_markers)
+                    for a in node.args
+                )
+                if all_train:
+                    return []
             return [Diagnostic(
                 node.lineno, node.col_offset, "warning", self.code,
                 ".fit() may be called on the full dataset including test data",

@@ -168,7 +168,8 @@ class TestT010:
         _check(T010_FitBeforeSplit(), "X = scaler.fit_transform(df)", expect_hit=True)
 
     def test_fires_on_fit(self):
-        _check(T010_FitBeforeSplit(), "scaler.fit(X_train)", expect_hit=True)
+        # scaler.fit(X) — full dataset, leaky — should warn
+        _check(T010_FitBeforeSplit(), "scaler.fit(X)", expect_hit=True)
 
     def test_silent_on_transform(self):
         _check(T010_FitBeforeSplit(), "X = scaler.transform(X_test)", expect_hit=False)
