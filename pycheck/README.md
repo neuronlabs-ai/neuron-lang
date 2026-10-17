@@ -1,6 +1,6 @@
 # PyCheck — ML Safety Analyzer
 
-**30 rules. Zero dependencies. Catches the bugs that cost millions.**
+**32 rules. Zero dependencies. Catches the bugs that cost millions.**
 
 PyCheck is a static AST analyzer that detects **temporal lookahead bias**, **causal confusion**, and **unguarded uncertainty** in Python ML and trading scripts — before you run a single line of code.
 
@@ -30,7 +30,7 @@ PyCheck catches all three before execution:
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: strategy.py
-  Rules: 30 active
+  Rules: 32 active + Data Flow & Provenance Engine
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
@@ -62,7 +62,7 @@ PyCheck catches all three before execution:
 
 ## What It Catches
 
-### Temporal Leak Rules (15 rules — `T001`–`T015`)
+### Temporal Leak Rules (17 rules — `T001`–`T017`)
 
 | Rule | What It Catches | Severity |
 |------|----------------|----------|
@@ -81,6 +81,8 @@ PyCheck catches all three before execution:
 | `T013` | `.resample()` on full dataset before split | Warning |
 | `T014` | `.diff(-5)` — future difference computation | **Error** |
 | `T015` | Negative `.shift()` inside `groupby().transform()` | **Error** |
+| `T016` | `pd.merge_asof()` with `direction='nearest'` or `'forward'` | **Error** |
+| `T017` | Target laundering & un-split target encoding (`regime_success_rate`) | **Error** |
 
 ### Causal Confusion Rules (7 rules — `C001`–`C007`)
 
@@ -114,17 +116,30 @@ PyCheck catches all three before execution:
 
 ---
 
-## Taint Flow Analysis
+## Data Flow & Provenance Tracking Engine
 
-Beyond pattern matching, PyCheck traces how future-contaminated data **flows through your codebase**:
+Beyond syntactic pattern matching, PyCheck includes a two-pass AST data flow engine that traces data lineage across reassignments, aliases, joins, and helper functions:
 
+### 1. Future Taint Propagation (`F001`)
+Traces future-leaked signals across multi-level variable indirection:
 ```python
-future_ret = df['close'].shift(-1)        # Tainted source
-signal     = future_ret - df['close']     # Taint propagates
-model.fit(X, signal)                      # ERROR: tainted label reaches .fit() sink
+future_ret = df['close'].shift(-1)        # Future taint source
+signal     = future_ret - df['close']     # Taint propagates through arithmetic
+model.fit(X, signal)                      # ERROR[F001]: tainted data reaches .fit() sink
 ```
 
-The taint engine follows assignments across three levels of variable indirection.
+### 2. Partition Provenance & Contamination (`F002`)
+Identifies training partitions, test partitions, and cross-fold leakage:
+```python
+# Naming conventions alone are insufficient when variables get reassigned:
+X_train = pd.concat([X_train, X_test])    # Tainted with test fold data
+scaler.fit_transform(X_train)             # ERROR[F002]: test partition data in training sink
+```
+
+PyCheck follows:
+- **Concatenation & Merges**: `pd.concat`, `np.concatenate`, `.append()`, `.merge()`, `.join()`.
+- **Aliases**: `X_eval = X_test` followed by combination or fitting.
+- **Inter-Procedural Helper Functions**: Functions returning expressions derived from test partition arguments.
 
 ---
 
@@ -135,7 +150,7 @@ pycheck script.py              # Errors + warnings (default)
 pycheck script.py --info       # Include info-level diagnostics
 pycheck script.py --quiet      # Errors only
 pycheck script.py --json       # JSON output — pipe into CI/CD
-pycheck --list                 # List all 30 rules
+pycheck --list                 # List all 32 rules
 pycheck --help
 ```
 
@@ -164,7 +179,44 @@ Returns structured output for automated pipelines:
 - `0` — No errors found
 - `1` — One or more errors found
 
-Clean integration with `make`, `pre-commit`, and GitHub Actions.
+Clean integration with `make`, `pre-commit`, GitHub Actions, and GitLab CI.
+
+---
+
+## Enterprise CI/CD & GitLab Integration
+
+PyCheck natively exports into the **GitLab Code Quality** report format (`gl-codequality.json`), enabling quantitative teams, hedge funds, and enterprise banks to guard against lookahead bias directly in their Merge Requests.
+
+```bash
+# Output GitLab Code Quality JSON directly to stdout
+pycheck . --gitlab
+
+# Or write report artifact while printing directory summary in CI job trace
+pycheck . --gitlab --output gl-codequality.json
+```
+
+### Turnkey `.gitlab-ci.yml`
+
+Add this job to your repository to automatically block any Merge Request containing lookahead leaks:
+
+```yaml
+pycheck:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install pycheck-neuron
+  script:
+    - pycheck . --gitlab --output gl-codequality.json
+  artifacts:
+    reports:
+      codequality: gl-codequality.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  allow_failure: false
+```
+
+GitLab will automatically annotate the Merge Request diff with red warnings on every line where temporal data leaks or unguarded point predictions are introduced.
 
 ---
 

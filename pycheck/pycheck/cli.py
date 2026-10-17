@@ -1,10 +1,7 @@
-"""
-CLI Entrypoint for PyCheck
-"""
-
 import sys
 import json
 import os
+import hashlib
 from pycheck.analyzer import analyze_file, format_output
 from pycheck.rules import ALL_RULES
 
@@ -15,13 +12,15 @@ def main():
     if not args or '--help' in args or '-h' in args:
         print("PyCheck — NEURON ML Safety Analyzer")
         print(f"  {len(ALL_RULES)} rules for temporal leaks, causal confusion, and uncertainty bugs\n")
-        print("Usage: pycheck <script.py> [options]\n")
+        print("Usage: pycheck <path> [options]\n")
         print("Options:")
-        print("  --json       Output diagnostics as JSON")
-        print("  --info       Include info-level diagnostics")
-        print("  --quiet      Only show errors (no warnings)")
-        print("  --list       List all available rules")
-        print("  -h, --help   Show this help message")
+        print("  --json               Output diagnostics as JSON")
+        print("  --gitlab             Output diagnostics in GitLab Code Quality JSON format")
+        print("  -o, --output <file>  Write JSON / GitLab report directly to specified file")
+        print("  --info               Include info-level diagnostics")
+        print("  --quiet              Only show errors (no warnings)")
+        print("  --list               List all available rules")
+        print("  -h, --help           Show this help message")
         sys.exit(0)
     
     if '--list' in args:
@@ -35,9 +34,31 @@ def main():
         print()
         sys.exit(0)
     
-    # Get target path (first non-flag argument, defaults to '.' if flag only or omitted)
+    show_info = '--info' in args
+    is_quiet = '--quiet' in args
+    is_json = '--json' in args
+    is_gitlab = '--gitlab' in args
+
+    output_file = None
+    if '--output' in args:
+        idx = args.index('--output')
+        if idx + 1 < len(args):
+            output_file = args[idx + 1]
+    elif '-o' in args:
+        idx = args.index('-o')
+        if idx + 1 < len(args):
+            output_file = args[idx + 1]
+
+    # Get target path (first non-flag argument not consumed by an option)
     filepath = None
+    skip_next = False
     for a in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if a in ('--output', '-o'):
+            skip_next = True
+            continue
         if not a.startswith('-'):
             filepath = a
             break
@@ -48,10 +69,6 @@ def main():
     if not os.path.exists(filepath):
         print(f"Error: Path not found: {filepath}")
         sys.exit(1)
-    
-    show_info = '--info' in args
-    is_quiet = '--quiet' in args
-    is_json = '--json' in args
 
     # Collect target files
     files_to_scan = []
@@ -66,24 +83,26 @@ def main():
         files_to_scan = [filepath]
 
     if not files_to_scan:
-        print(f"No Python (.py) or notebook (.ipynb) files found in {filepath}")
+        if not is_json and not is_gitlab:
+            print(f"No Python (.py) or notebook (.ipynb) files found in {filepath}")
         sys.exit(0)
 
     total_errors = 0
     total_warnings = 0
     files_with_issues = 0
     all_json_results = {}
+    gitlab_issues = []
 
     for f_path in files_to_scan:
         try:
             diagnostics, source_lines = analyze_file(f_path)
         except SyntaxError as e:
-            if not is_json:
+            if not is_json and (not is_gitlab or output_file):
                 print(f"Syntax error in {f_path}: {e}")
             total_errors += 1
             continue
         except Exception as e:
-            if not is_json:
+            if not is_json and (not is_gitlab or output_file):
                 print(f"Error analyzing {f_path}: {e}")
             continue
 
@@ -101,22 +120,71 @@ def main():
             files_with_issues += 1
             if is_json:
                 all_json_results[f_path] = diagnostics
+            elif is_gitlab:
+                rel_path = os.path.relpath(f_path).replace("\\", "/")
+                for d in diagnostics:
+                    sev_map = {
+                        'error': 'critical',
+                        'warning': 'major',
+                        'info': 'info'
+                    }
+                    gl_sev = sev_map.get(d.get('severity', 'warning'), 'major')
+                    fp = hashlib.md5(f"{rel_path}:{d.get('line', 1)}:{d.get('code', 'P000')}".encode('utf-8')).hexdigest()
+                    gitlab_issues.append({
+                        "description": f"[{d.get('code', 'PYCHECK')}] {d.get('message', '')}. Guarded at compile-time in NEURON: https://github.com/neuronlabs-ai/neuron-lang",
+                        "check_name": d.get('code', 'pycheck'),
+                        "fingerprint": fp,
+                        "severity": gl_sev,
+                        "location": {
+                            "path": rel_path,
+                            "lines": {
+                                "begin": d.get('line', 1)
+                            }
+                        }
+                    })
+                if output_file:
+                    format_output(f_path, diagnostics, source_lines, show_info=show_info)
             else:
                 format_output(f_path, diagnostics, source_lines, show_info=show_info)
 
-    if is_json:
-        print(json.dumps(all_json_results, indent=2))
-    elif len(files_to_scan) > 1:
-        clean_files = len(files_to_scan) - files_with_issues
-        print("=================================================================")
-        print("  PyCheck Directory Summary")
-        print(f"  Scanned: {len(files_to_scan)} files | Clean: {clean_files} | Flagged: {files_with_issues}")
-        print(f"  Total: {total_errors} error(s), {total_warnings} warning(s)")
-        print("=================================================================\n")
+    if is_gitlab:
+        gl_content = json.dumps(gitlab_issues, indent=2)
+        if output_file:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(gl_content)
+        else:
+            print(gl_content)
+    elif is_json:
+        json_content = json.dumps(all_json_results, indent=2)
+        if output_file:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(json_content)
+        else:
+            print(json_content)
+
+    # Print summary if human output or if output was redirected to a file
+    if (not is_json and not is_gitlab) or output_file:
+        if len(files_to_scan) > 1 or output_file:
+            clean_files = len(files_to_scan) - files_with_issues
+            print("=================================================================")
+            print("  PyCheck Directory Summary")
+            print(f"  Scanned: {len(files_to_scan)} files | Clean: {clean_files} | Flagged: {files_with_issues}")
+            print(f"  Total: {total_errors} error(s), {total_warnings} warning(s)")
+            if output_file:
+                report_type = "GitLab Code Quality" if is_gitlab else "JSON"
+                print(f"  {report_type} Report written to: {output_file}")
+            if files_with_issues > 0:
+                print("-----------------------------------------------------------------")
+                if total_errors > 0:
+                    print(f"  These {total_errors} error(s) would be COMPILE-TIME ERRORS in NEURON")
+                elif total_warnings > 0:
+                    print(f"  These {total_warnings} temporal issue(s) are guarded at compile-time in NEURON")
+                print("  Explore the zero-leakage language: https://github.com/neuronlabs-ai/neuron-lang")
+                print("  Python detected: 0 of these issues at runtime")
+            print("=================================================================\n")
 
     if total_errors > 0:
         sys.exit(1)
-
 
 
 if __name__ == '__main__':

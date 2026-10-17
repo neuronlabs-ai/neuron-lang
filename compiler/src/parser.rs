@@ -399,7 +399,9 @@ impl Parser {
     fn parse_causal_decl(&mut self) -> Result<CausalDecl, NeuronError> {
         let tok = self.advance().clone(); // causal
         let span = tok.span.clone();
-        self.expect("MODEL")?;
+        if matches!(self.peek_type(), TokenType::Model) {
+            self.advance();
+        }
         let name_tok = self.expect("IDENT")?;
         let name = Self::ident_str(&name_tok)?;
         let mut options = Vec::new();
@@ -449,7 +451,7 @@ impl Parser {
                 self.expect("ARROW")?;
                 let tgt_tok = self.expect("IDENT")?;
                 let tgt = Self::ident_str(&tgt_tok)?;
-                Ok(CausalEdge { kind: CausalEdgeKind::Fixed, sources: vec![src], target: Some(tgt), span })
+                Ok(CausalEdge { kind: CausalEdgeKind::Fixed, sources: vec![src], target: Some(tgt), weight: None, span })
             }
             TokenType::Discover => {
                 self.advance();
@@ -465,28 +467,62 @@ impl Parser {
                 self.expect("ARROW")?;
                 let tgt_tok = self.expect("IDENT")?;
                 let tgt = Self::ident_str(&tgt_tok)?;
-                Ok(CausalEdge { kind: CausalEdgeKind::Discover, sources: srcs, target: Some(tgt), span })
+                Ok(CausalEdge { kind: CausalEdgeKind::Discover, sources: srcs, target: Some(tgt), weight: None, span })
             }
             TokenType::Variables => {
                 self.advance();
                 self.expect("COLON")?;
-                self.expect("LBRACKET")?;
                 let mut names = Vec::new();
-                while !matches!(self.peek_type(), TokenType::RBracket | TokenType::Eof) {
-                    let t = self.expect("IDENT")?;
-                    names.push(Self::ident_str(&t)?);
-                    self.match_token(|t| matches!(t, TokenType::Comma));
+                if matches!(self.peek_type(), TokenType::LBracket) {
+                    self.advance();
+                    while !matches!(self.peek_type(), TokenType::RBracket | TokenType::Eof) {
+                        let t = self.expect("IDENT")?;
+                        names.push(Self::ident_str(&t)?);
+                        self.match_token(|t| matches!(t, TokenType::Comma));
+                    }
+                    self.expect("RBRACKET")?;
+                } else {
+                    // variables: a, b
+                    while !matches!(self.peek_type(), TokenType::Newline | TokenType::Dedent | TokenType::Eof) {
+                        let t = self.expect("IDENT")?;
+                        names.push(Self::ident_str(&t)?);
+                        if self.match_token(|t| matches!(t, TokenType::Comma)).is_none() {
+                            break;
+                        }
+                    }
                 }
-                self.expect("RBRACKET")?;
-                Ok(CausalEdge { kind: CausalEdgeKind::Variables, sources: names, target: None, span })
+                Ok(CausalEdge { kind: CausalEdgeKind::Variables, sources: names, target: None, weight: None, span })
             }
             _ => {
                 let src_tok = self.expect("IDENT")?;
                 let src = Self::ident_str(&src_tok)?;
-                self.expect("ARROW")?;
+                let is_bi = matches!(self.peek_type(), TokenType::BiArrow);
+                if is_bi {
+                    self.advance();
+                } else if matches!(self.peek_type(), TokenType::Arrow | TokenType::UnicodeArrow) {
+                    self.advance();
+                } else {
+                    return Err(self.error(format!("Expected '->' or '<->' after causal variable '{}'", src)));
+                }
                 let tgt_tok = self.expect("IDENT")?;
                 let tgt = Self::ident_str(&tgt_tok)?;
-                Ok(CausalEdge { kind: CausalEdgeKind::Simple, sources: vec![src], target: Some(tgt), span })
+                let mut weight = None;
+                if matches!(self.peek_type(), TokenType::Colon) {
+                    self.advance();
+                    let sign = if matches!(self.peek_type(), TokenType::Minus) {
+                        self.advance();
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    match self.peek_type() {
+                        TokenType::FloatLit(f) => { weight = Some(sign * *f); self.advance(); }
+                        TokenType::IntLit(i) => { weight = Some(sign * (*i as f64)); self.advance(); }
+                        _ => {}
+                    }
+                }
+                let kind = if is_bi { CausalEdgeKind::Confounded } else { CausalEdgeKind::Simple };
+                Ok(CausalEdge { kind, sources: vec![src], target: Some(tgt), weight, span })
             }
         }
     }
@@ -815,13 +851,18 @@ impl Parser {
                 TokenType::Slash => (BinOp::Div, 5),
                 TokenType::Percent => (BinOp::Mod, 5),
                 TokenType::At => (BinOp::MatMul, 5),
+                TokenType::Caret => (BinOp::Pow, 6),
                 _ => break,
             };
 
             if prec < min_prec { break; }
             self.advance();
             let span = left.span().clone();
-            let right = self.parse_expression(prec + 1)?;
+            let right = if op == BinOp::Pow {
+                self.parse_expression(prec)?
+            } else {
+                self.parse_expression(prec + 1)?
+            };
 
             // Check for merge expression: expr + expr strategy: ...
             if op == BinOp::Add && matches!(self.peek_type(), TokenType::Strategy) {
@@ -868,17 +909,16 @@ impl Parser {
                 TokenType::Dot => {
                     self.advance();
                     let span = expr.span().clone();
-                    // Check for .observe(), .forget(), .before(), .after(), .snapshot()
-                    let field = if matches!(self.peek_type(), TokenType::Forget | TokenType::Observe) {
-                        let tok = self.advance();
-                        if tok.ty == TokenType::Forget {
-                            "forget".to_string()
-                        } else {
-                            "observe".to_string()
+                    // Check for contextual keywords as method names: .observe(), .forget(), .store(), .recall()
+                    let field = match self.peek_type() {
+                        TokenType::Forget => { self.advance(); "forget".to_string() }
+                        TokenType::Observe => { self.advance(); "observe".to_string() }
+                        TokenType::Store => { self.advance(); "store".to_string() }
+                        TokenType::Recall => { self.advance(); "recall".to_string() }
+                        _ => {
+                            let field_tok = self.expect("IDENT")?;
+                            Self::ident_str(&field_tok)?
                         }
-                    } else {
-                        let field_tok = self.expect("IDENT")?;
-                        Self::ident_str(&field_tok)?
                     };
 
                     if &field == "observe" && matches!(self.peek_type(), TokenType::LParen) {
@@ -920,14 +960,27 @@ impl Parser {
             TokenType::Self_ => { self.advance(); Ok(Expr::Self_(span)) }
             TokenType::Grad => self.parse_grad_expr(),
             TokenType::StopGrad => self.parse_stop_grad_expr(),
+            TokenType::Hessian => self.parse_hessian_expr(),
+            TokenType::Hvp => self.parse_hvp_expr(),
             TokenType::Do => self.parse_do_expr(),
             TokenType::Explain => self.parse_explain_expr(),
             TokenType::Search => self.parse_search_expr(),
             TokenType::Recall => self.parse_recall_expr(),
             TokenType::Store => self.parse_store_expr(),
-            // Type constructors used as expressions (e.g., Uncertain(...))
-            TokenType::UncertainKw | TokenType::RandomKw | TokenType::RewardKw => {
-                let name = self.peek_type().name().to_string();
+            // Type constructors used as expressions (e.g., Uncertain(...), WorkingMemory(...), Stream(...))
+            TokenType::UncertainKw | TokenType::RandomKw | TokenType::RewardKw
+            | TokenType::WorkingMemoryKw | TokenType::EpisodicMemoryKw | TokenType::MemoryKw
+            | TokenType::StreamKw => {
+                let name = match self.peek_type() {
+                    TokenType::WorkingMemoryKw => "WorkingMemory",
+                    TokenType::EpisodicMemoryKw => "EpisodicMemory",
+                    TokenType::MemoryKw => "Memory",
+                    TokenType::StreamKw => "Stream",
+                    TokenType::UncertainKw => "Uncertain",
+                    TokenType::RandomKw => "Random",
+                    TokenType::RewardKw => "Reward",
+                    _ => self.peek_type().name(),
+                }.to_string();
                 self.advance();
                 Ok(Expr::Ident(name, span))
             }
@@ -1012,6 +1065,48 @@ impl Parser {
         let expr = self.parse_expression(0)?;
         self.expect("RPAREN")?;
         Ok(Expr::StopGrad(Box::new(expr), span))
+    }
+
+    fn parse_hessian_expr(&mut self) -> Result<Expr, NeuronError> {
+        let span = self.span();
+        self.advance(); // hessian
+        self.expect("LPAREN")?;
+        let expr = self.parse_expression(0)?;
+        let wrt = if self.match_token(|t| matches!(t, TokenType::Comma)).is_some() {
+            // wrt=param
+            if matches!(self.peek_type(), TokenType::Ident(_)) && matches!(self.peek_ahead(1).ty, TokenType::Eq) {
+                self.advance(); // wrt
+                self.advance(); // =
+            }
+            let p = self.expect("IDENT")?;
+            Some(Self::ident_str(&p)?)
+        } else { None };
+        self.expect("RPAREN")?;
+        Ok(Expr::Hessian(Box::new(HessianExpr { expr, wrt, span })))
+    }
+
+    fn parse_hvp_expr(&mut self) -> Result<Expr, NeuronError> {
+        let span = self.span();
+        self.advance(); // hvp
+        self.expect("LPAREN")?;
+        let expr = self.parse_expression(0)?;
+        self.expect("COMMA")?;
+        // wrt=param
+        if matches!(self.peek_type(), TokenType::Ident(_)) && matches!(self.peek_ahead(1).ty, TokenType::Eq) {
+            self.advance(); // wrt
+            self.advance(); // =
+        }
+        let p = self.expect("IDENT")?;
+        let wrt = Some(Self::ident_str(&p)?);
+        self.expect("COMMA")?;
+        // v=vec
+        if matches!(self.peek_type(), TokenType::Ident(_)) && matches!(self.peek_ahead(1).ty, TokenType::Eq) {
+            self.advance(); // v
+            self.advance(); // =
+        }
+        let v = self.parse_expression(0)?;
+        self.expect("RPAREN")?;
+        Ok(Expr::Hvp(Box::new(HvpExpr { expr, wrt, v, span })))
     }
 
     fn parse_do_expr(&mut self) -> Result<Expr, NeuronError> {
@@ -1129,9 +1224,16 @@ impl Parser {
         if !matches!(self.peek_type(), TokenType::RParen) {
             loop {
                 // Named arg: name=expr
-                if matches!(self.peek_type(), TokenType::Ident(_)) && matches!(self.peek_ahead(1).ty, TokenType::Eq) {
+                let is_named_arg = matches!(self.peek_ahead(1).ty, TokenType::Eq) && {
+                    let name = self.peek_type().name().to_string().to_lowercase();
+                    name.chars().all(|c| c.is_alphanumeric() || c == '_') && !name.is_empty()
+                };
+                if is_named_arg {
                     let name_tok = self.advance().clone();
-                    let name = Self::ident_str(&name_tok)?;
+                    let name = match &name_tok.ty {
+                        TokenType::Ident(s) => s.clone(),
+                        _ => name_tok.ty.name().to_string().to_lowercase(),
+                    };
                     self.advance(); // =
                     let value = self.parse_expression(0)?;
                     args.push(CallArg { name: Some(name), value });
@@ -1242,6 +1344,15 @@ impl Parser {
                 let spec = self.parse_temporal_spec()?;
                 self.expect("RBRACKET")?;
                 Ok(TypeExpr::Temporal(Box::new(inner), spec, span))
+            }
+            TokenType::StreamKw => {
+                self.advance();
+                self.expect("LBRACKET")?;
+                let inner = self.parse_type()?;
+                self.expect("COMMA")?;
+                let cap_expr = self.parse_expression(0)?;
+                self.expect("RBRACKET")?;
+                Ok(TypeExpr::StreamType(Box::new(inner), Box::new(cap_expr), span))
             }
             TokenType::CausalKw => {
                 self.advance();
@@ -1425,9 +1536,13 @@ impl Parser {
             }
         }
 
-        // Directional spec: past→future, future→past, past_to_future, etc.
+        // Directional spec: past→future, future→past, past_to_future, or global_sample
         let first_tok = self.expect("IDENT")?;
         let first = Self::ident_str(&first_tok)?;
+
+        if first == "global" || first == "global_sample" || first == "GlobalSample" {
+            return Ok(TemporalSpec::GlobalSample);
+        }
 
         // Try parsing string as integer (e.g. "0")
         if let Ok(parsed_int) = first.parse::<i64>() {

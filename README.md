@@ -237,7 +237,7 @@ fn prescribe_dosage(patient_weight: Uncertain[Float]) -> Uncertain[Float]:
 
 ## PyCheck — Python ML Safety Analyzer
 
-NEURON ships with **PyCheck** (`pycheck-neuron` on PyPI), an AST static analyzer and 2-pass taint engine that scans **existing Python ML & quant code** for temporal leaks, causal confusion, and uncertainty bugs:
+NEURON ships with **PyCheck** (`pycheck-neuron` on PyPI), an AST static analyzer and 2-pass data flow & provenance engine that scans **existing Python ML & quant code** for temporal leaks, causal confusion, and uncertainty bugs:
 
 ```bash
 pip install pycheck-neuron
@@ -248,7 +248,7 @@ pycheck examples/leaky_transformer_pipeline.py
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: leaky_transformer_pipeline.py
-  Rules: 30 active
+  Rules: 32 active + Data Flow & Provenance Engine
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
@@ -260,8 +260,8 @@ pycheck examples/leaky_transformer_pipeline.py
   These 4 error(s) would be COMPILE-TIME ERRORS in NEURON
 ```
 
-- **30 Specialized Rules**: 15 Temporal (`T001`–`T015`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
-- **Data Flow Taint Engine**: Traces how future data propagates through variable assignments into `.fit()` sinks.
+- **32 Specialized Rules**: 17 Temporal (`T001`–`T017`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
+- **AST Data Provenance & Flow Engine (`F001`, `F002`)**: Tracks partition lineage across splits, aliases, and concatenation (`X_train = pd.concat([X_train, X_test])`), detecting cross-fold leakage into training sinks.
 - **VS Code Extension**: Real-time inline red/yellow squiggles on temporal leaks as you write Python.
 
 ---
@@ -326,7 +326,7 @@ cd pycheck && pytest
 | Test Suite | Total Tests | Pass Rate |
 |---|---|---|
 | **Core Rust Test Suite** (Compiler, Runtime, WASM) | 126 tests | **100% PASS** |
-| **PyCheck Linter Test Suite** | 73 unit tests | **100% PASS** |
+| **PyCheck Linter Test Suite** | 95 unit tests | **100% PASS** |
 | **End-to-End Example Suite** (`test_all.ps1`) | 19 verifications | **100% PASS** |
 | **Endurance Suite** | 100,000 iterations | **0 memory leaks, 0 NaN** |
 | **Property Tests (VM == JIT parity)** | 100 random programs | **100% Parity** |

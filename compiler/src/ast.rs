@@ -113,15 +113,17 @@ pub struct CausalEdge {
     pub kind: CausalEdgeKind,
     pub sources: Vec<String>,
     pub target: Option<String>,
+    pub weight: Option<f64>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CausalEdgeKind {
-    Simple,     // source -> target
-    Fixed,      // fixed: source -> target
-    Discover,   // discover: [sources] -> target
-    Variables,  // variables: [names]
+    Simple,      // source -> target
+    Confounded,  // source <-> target
+    Fixed,       // fixed: source -> target
+    Discover,    // discover: [sources] -> target
+    Variables,   // variables: [names]
 }
 
 // ── Import statement ──
@@ -275,6 +277,8 @@ pub enum Expr {
 
     Grad(Box<GradExpr>),
     StopGrad(Box<Expr>, Span),
+    Hessian(Box<HessianExpr>),
+    Hvp(Box<HvpExpr>),
     Do(Box<DoExpr>),
     Observe(Box<ObserveExpr>),
     Explain(Box<ExplainExpr>),
@@ -304,6 +308,8 @@ impl Expr {
             Self::Dot(e) => &e.span,
             Self::Grad(e) => &e.span,
             Self::StopGrad(_, s) => s,
+            Self::Hessian(e) => &e.span,
+            Self::Hvp(e) => &e.span,
             Self::Do(e) => &e.span,
             Self::Observe(e) => &e.span,
             Self::Explain(e) => &e.span,
@@ -327,7 +333,7 @@ pub struct BinOpExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod, MatMul,
+    Add, Sub, Mul, Div, Mod, MatMul, Pow,
     Eq, Neq, Lt, Gt, Lte, Gte,
     And, Or,
 }
@@ -337,6 +343,7 @@ impl BinOp {
         match self {
             Self::Add => "+", Self::Sub => "-", Self::Mul => "*",
             Self::Div => "/", Self::Mod => "%", Self::MatMul => "@",
+            Self::Pow => "^",
             Self::Eq => "==", Self::Neq => "!=", Self::Lt => "<",
             Self::Gt => ">", Self::Lte => "<=", Self::Gte => ">=",
             Self::And => "&&", Self::Or => "||",
@@ -395,6 +402,21 @@ pub struct DotExpr {
 pub struct GradExpr {
     pub expr: Expr,
     pub wrt: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct HessianExpr {
+    pub expr: Expr,
+    pub wrt: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct HvpExpr {
+    pub expr: Expr,
+    pub wrt: Option<String>,
+    pub v: Expr,
     pub span: Span,
 }
 
@@ -471,6 +493,7 @@ pub struct StoreExpr {
 pub enum TemporalSpec {
     Direction(String), // "past_to_future", "future_to_past"
     Offset(i64),       // e.g. 0, -5, +3
+    GlobalSample,      // Contaminated by sample-wide/dataset-global aggregation across F_T
 }
 
 impl std::fmt::Display for TemporalSpec {
@@ -484,6 +507,7 @@ impl std::fmt::Display for TemporalSpec {
                     write!(f, "{}", n)
                 }
             }
+            Self::GlobalSample => write!(f, "global_sample"),
         }
     }
 }
@@ -500,6 +524,7 @@ pub enum TypeExpr {
     Random(Box<TypeExpr>, Span),                 // Random[T]
     Prob(Box<TypeExpr>, Span),                   // Prob[T]
     Temporal(Box<TypeExpr>, TemporalSpec, Span),  // Temporal[T, past_to_future] or Temporal[T, 0]
+    StreamType(Box<TypeExpr>, Box<Expr>, Span),  // Stream[T, k]
     Causal(Box<TypeExpr>, String, Span),          // Causal[T, "observed"]
     Learnable(String, Option<Box<Expr>>, Span),   // Learnable[FnType, base=expr]
     ListType(Box<TypeExpr>, Span),               // List[T]
@@ -519,6 +544,7 @@ impl TypeExpr {
         match self {
             Self::Base(_, s) | Self::Tensor(_, s) | Self::Uncertain(_, s)
             | Self::Random(_, s) | Self::Prob(_, s) | Self::Temporal(_, _, s)
+            | Self::StreamType(_, _, s)
             | Self::Causal(_, _, s) | Self::Learnable(_, _, s)
             | Self::ListType(_, s) | Self::OptionType(_, s) | Self::Fn(_, _, s)
             | Self::Memory(_, s) | Self::EpisodicMemory(_, s)

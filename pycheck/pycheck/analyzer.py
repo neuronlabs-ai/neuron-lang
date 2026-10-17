@@ -109,13 +109,17 @@ def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     source_lines = source.split('\n')
     tree = ast.parse(source, filename=filepath)
     
-    # Phase 1: Rule-based AST analysis
-    analyzer = PyCheckAnalyzer(source_lines, filepath)
-    analyzer.visit(tree)
-    
-    # Phase 2: Data flow taint analysis
+    # Phase 1: Data flow taint & provenance analysis
     tracker = TaintTracker()
     flow_diagnostics = tracker.analyze(tree, source_lines)
+    
+    # Phase 2: Rule-based AST analysis (with provenance populated in ctx)
+    analyzer = PyCheckAnalyzer(source_lines, filepath)
+    analyzer.ctx.tainted_vars = {k: v.reason for k, v in tracker.tainted_vars.items()}
+    analyzer.ctx.train_vars = tracker.train_vars
+    analyzer.ctx.test_vars = tracker.test_vars
+    analyzer.ctx.test_contaminated_vars = tracker.test_contaminated_vars
+    analyzer.visit(tree)
     
     # Combine and deduplicate
     all_diagnostics = analyzer.diagnostics + flow_diagnostics
@@ -191,5 +195,8 @@ def format_output(filepath: str, diagnostics: List[dict], source_lines: List[str
     safe_print(f"  Summary: {len(errors)} error(s), {len(warnings)} warning(s), {len(infos)} info(s)")
     if errors:
         safe_print(f"  These {len(errors)} error(s) would be COMPILE-TIME ERRORS in NEURON")
+    elif warnings:
+        safe_print(f"  These {len(warnings)} temporal issue(s) are guarded at compile-time in NEURON")
+    safe_print(f"  Explore the zero-leakage language: https://github.com/neuronlabs-ai/neuron-lang")
     safe_print(f"  Python detected: 0 of these issues at runtime")
     safe_print(f"{line_sep}\n")

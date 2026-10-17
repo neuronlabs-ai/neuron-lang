@@ -67,6 +67,70 @@ fn validate_static_shape(shape: &[i64]) -> Result<Vec<usize>, String> {
     Ok(s)
 }
 
+/// Zero-Copy Circular Ring Buffer Stream (Zero-Lookahead temporal execution).
+#[derive(Clone, Debug)]
+pub struct StreamData {
+    pub capacity: usize,
+    pub buffer: Vec<Value>,
+    pub head: usize,
+    pub len: usize,
+}
+
+impl StreamData {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            buffer: Vec::with_capacity(capacity.max(1)),
+            head: 0,
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, val: Value) {
+        if self.buffer.len() < self.capacity {
+            self.buffer.push(val);
+            self.len = self.buffer.len();
+            self.head = self.buffer.len() - 1;
+        } else {
+            self.head = (self.head + 1) % self.capacity;
+            self.buffer[self.head] = val;
+        }
+    }
+
+    pub fn lag(&self, k: usize) -> Result<Value, String> {
+        if self.len == 0 {
+            return Err("Cannot access element from empty Stream".to_string());
+        }
+        if k >= self.len {
+            return Err(format!("Lag offset {} exceeds current stream length {}", k, self.len));
+        }
+        let idx = (self.head + self.capacity - (k % self.capacity)) % self.capacity;
+        Ok(self.buffer[idx].clone())
+    }
+
+    pub fn current(&self) -> Result<Value, String> {
+        self.lag(0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn to_tensor(&self) -> Result<Tensor, String> {
+        let mut floats = Vec::with_capacity(self.len);
+        for i in 0..self.len {
+            let v = self.lag(self.len - 1 - i).unwrap_or(Value::None);
+            floats.push(v.as_float());
+        }
+        let buf = crate::buffer::Buffer::from(floats);
+        Ok(Tensor::new(buf, vec![self.len]))
+    }
+}
+
 /// Runtime value — everything the VM can hold.
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -84,6 +148,9 @@ pub enum Value {
     Causal { data: Box<Value>, mode: String },
     Model { name: String, fields: std::rc::Rc<std::cell::RefCell<HashMap<String, Value>>> },
     CausalModel { name: String, variables: Vec<String> },
+    WorkingMemory(std::rc::Rc<std::cell::RefCell<crate::memory::WorkingMemoryData>>),
+    EpisodicMemory(std::rc::Rc<std::cell::RefCell<crate::memory::EpisodicMemoryData>>),
+    Stream(std::rc::Rc<std::cell::RefCell<StreamData>>),
     Void,
     None,
     Err(String),
@@ -189,6 +256,7 @@ impl Value {
             Value::Int(i) => *i != 0,
             Value::BigInt(b) => !b.is_zero(),
             Value::Float(f) => *f != 0.0,
+            Value::Tensor(t) if t.data.len() == 1 => t.data[0] != 0.0,
             _ => panic!("Runtime TypeError: Expected Bool, found {:?}", self),
         }
     }
@@ -212,8 +280,8 @@ impl Value {
                 format!("Uncertain(value={:.4}, std={:.4}, confidence={:.4})", value, std, confidence),
             Value::Random { mean, variance } =>
                 format!("Random(mean={:.4}, variance={:.4})", mean, variance),
-            Value::Temporal { direction, .. } =>
-                format!("Temporal(direction={})", direction),
+            Value::Temporal { data, direction } =>
+                format!("Temporal({}, direction={})", data.display(), direction),
             Value::Causal { mode, .. } =>
                 format!("Causal(mode={})", mode),
             Value::Model { name, fields } => {
@@ -229,6 +297,18 @@ impl Value {
                 }
             },
             Value::CausalModel { name, .. } => format!("<CausalModel {}>", name),
+            Value::WorkingMemory(wm) => {
+                let wm_ref = wm.borrow();
+                format!("<WorkingMemory dim={} slots={}>", wm_ref.dim, wm_ref.slots)
+            }
+            Value::EpisodicMemory(em) => {
+                let em_ref = em.borrow();
+                format!("<EpisodicMemory dim={} entries={}/{}>", em_ref.dim, em_ref.len(), em_ref.capacity)
+            }
+            Value::Stream(s) => {
+                let s_ref = s.borrow();
+                format!("<Stream len={}/{} head={}>", s_ref.len(), s_ref.capacity, s_ref.head)
+            }
             Value::Void => "void".into(),
             Value::None => "None".into(),
             Value::Err(msg) => format!("Runtime Error: {}", msg),
@@ -1079,50 +1159,257 @@ impl VM {
         if resolved_name.starts_with("obj_") {
             if let Some(first_arg) = args.first() {
                 if let Value::CausalModel { name: model_name, variables } = first_arg {
-                    if resolved_name == "obj_observe" || resolved_name == "obj_intervene" {
-                        let mut weights = vec![vec![0.0; variables.len()]; variables.len()];
-                        let noise_vars = vec![1.0; variables.len()];
-                        let noise_means = vec![0.0; variables.len()];
+                    let method = &resolved_name[4..];
+                    let model = instantiate_causal_model(&self.globals, model_name, variables);
 
-                        if let Some(Value::Str(ref global_val)) = self.globals.get(model_name) {
-                            if global_val.starts_with("causal_model:") {
-                                let parts: Vec<&str> = global_val.split(':').collect();
-                                for part in parts {
-                                    if part.starts_with("edges=") {
-                                        let edges_str = &part["edges=".len()..];
-                                        for edge in edges_str.split(',') {
-                                            let nodes: Vec<&str> = edge.split("->").collect();
-                                            if nodes.len() == 2 {
-                                                if let (Some(&u), Some(&v)) = (
-                                                    variables.iter().position(|x| x == nodes[0]).as_ref(),
-                                                    variables.iter().position(|x| x == nodes[1]).as_ref(),
-                                                ) {
-                                                    weights[u][v] = 1.0;
-                                                }
-                                            }
-                                        }
-                                    }
+                    match method {
+                        "observe" => {
+                            let mut map = HashMap::new();
+                            for (i, kw) in keyword_args.iter().enumerate() {
+                                if let Some(val) = args.get(i + 1) {
+                                    map.insert(kw.clone(), val.as_float());
                                 }
                             }
-                        }
-
-                        let mut map = HashMap::new();
-                        for (i, kw) in keyword_args.iter().enumerate() {
-                            if let Some(val) = args.get(i + 1) {
-                                map.insert(kw.clone(), val.as_float());
+                            if map.is_empty() && args.len() >= 2 {
+                                map = parse_evidence_map(&args[1])?;
                             }
-                        }
-
-                        let model = crate::causal::CausalModel::new(variables.clone(), weights, noise_vars, noise_means);
-                        if resolved_name == "obj_observe" {
                             let obs_res = model.observe(&map)
                                 .ok_or_else(|| "Failed to compute observational inference".to_string())?;
                             return Ok(convert_causal_results(obs_res));
-                        } else {
+                        }
+                        "intervene" => {
+                            let mut map = HashMap::new();
+                            for (i, kw) in keyword_args.iter().enumerate() {
+                                if let Some(val) = args.get(i + 1) {
+                                    map.insert(kw.clone(), val.as_float());
+                                }
+                            }
+                            if map.is_empty() && args.len() >= 2 {
+                                map = parse_evidence_map(&args[1])?;
+                            }
                             let int_res = model.intervene(&map)
                                 .ok_or_else(|| "Failed to compute interventional inference".to_string())?;
                             return Ok(convert_causal_results(int_res));
                         }
+                        "identify" => {
+                            let query = if args.len() >= 2 {
+                                match &args[1] {
+                                    Value::Str(s) => s.clone(),
+                                    _ => args[1].display(),
+                                }
+                            } else { "".to_string() };
+                            let do_var = if args.len() >= 3 {
+                                match &args[2] {
+                                    Value::Str(s) => s.clone(),
+                                    _ => args[2].display(),
+                                }
+                            } else if let Some(pos) = keyword_args.iter().position(|k| k == "do") {
+                                args.get(pos + 1).map(|v| match v {
+                                    Value::Str(s) => s.clone(),
+                                    _ => v.display(),
+                                }).unwrap_or_default()
+                            } else { "".to_string() };
+
+                            let res = model.identify(&[query], &[do_var]);
+                            let fields = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+                            fields.borrow_mut().insert("identifiable".into(), Value::Bool(res.identifiable));
+                            fields.borrow_mut().insert("method".into(), Value::Str(res.method));
+                            fields.borrow_mut().insert("formula".into(), Value::Str(res.formula));
+                            fields.borrow_mut().insert("adjustment_set".into(), Value::List(res.adjustment_set.into_iter().map(Value::Str).collect()));
+                            fields.borrow_mut().insert("hedge".into(), Value::List(res.hedge.unwrap_or_default().into_iter().map(Value::Str).collect()));
+                            return Ok(Value::Model {
+                                name: "IdentificationResult".into(),
+                                fields,
+                            });
+                        }
+                        "backdoor" => {
+                            let treatment = if args.len() >= 2 { args[1].display() } else { "".to_string() };
+                            let outcome = if args.len() >= 3 { args[2].display() } else { "".to_string() };
+                            let adj = model.find_backdoor_admissible(&treatment, &outcome);
+                            let list = adj.unwrap_or_default().into_iter().map(Value::Str).collect();
+                            return Ok(Value::List(list));
+                        }
+                        "frontdoor" => {
+                            let treatment = if args.len() >= 2 { args[1].display() } else { "".to_string() };
+                            let outcome = if args.len() >= 3 { args[2].display() } else { "".to_string() };
+                            let adj = model.find_frontdoor_admissible(&treatment, &outcome);
+                            let list = adj.unwrap_or_default().into_iter().map(Value::Str).collect();
+                            return Ok(Value::List(list));
+                        }
+                        "causal_effect" => {
+                            let treatment = if args.len() >= 2 { args[1].display() } else { "".to_string() };
+                            let outcome = if args.len() >= 3 { args[2].display() } else { "".to_string() };
+                            let val = if args.len() >= 4 { args[3].as_float() } else { 1.0 };
+                            let eff = model.causal_effect(&treatment, &outcome, val)?;
+                            return Ok(Value::Float(eff));
+                        }
+                        "confounding_bias" => {
+                            let treatment = if args.len() >= 2 { args[1].display() } else { "".to_string() };
+                            let outcome = if args.len() >= 3 { args[2].display() } else { "".to_string() };
+                            let val = if args.len() >= 4 { args[3].as_float() } else { 1.0 };
+                            let bias = model.confounding_bias(&treatment, &outcome, val)?;
+                            return Ok(Value::Float(bias));
+                        }
+                        "counterfactual" => {
+                            let evidence = if args.len() >= 2 { parse_evidence_map(&args[1])? } else { HashMap::new() };
+                            let interventions = if args.len() >= 3 { parse_evidence_map(&args[2])? } else { HashMap::new() };
+                            let queries = if args.len() >= 4 { parse_string_list(&args[3])? } else { variables.clone() };
+                            let cf_res = model.counterfactual(&evidence, &interventions, &queries)
+                                .ok_or_else(|| "Failed to compute counterfactual inference".to_string())?;
+                            let fields = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+                            for (name, val) in cf_res {
+                                fields.borrow_mut().insert(name, Value::Float(val));
+                            }
+                            return Ok(Value::Model {
+                                name: "CounterfactualResult".into(),
+                                fields,
+                            });
+                        }
+                        _ => return Err(format!("Unknown CausalModel method: {}", method)),
+                    }
+                } else if let Value::WorkingMemory(wm) = first_arg {
+                    let method = &resolved_name[4..];
+                    match method {
+                        "read" => {
+                            if args.len() < 2 { return Err("WorkingMemory.read requires query tensor".into()); }
+                            let q = match &args[1] {
+                                Value::Tensor(t) => t,
+                                _ => return Err("WorkingMemory.read query must be a Tensor".into()),
+                            };
+                            return Ok(Value::Tensor(wm.borrow().read(q)));
+                        }
+                        "write" => {
+                            if args.len() < 2 { return Err("WorkingMemory.write requires content tensor".into()); }
+                            let c = match &args[1] {
+                                Value::Tensor(t) => t,
+                                _ => return Err("WorkingMemory.write content must be a Tensor".into()),
+                            };
+                            wm.borrow_mut().write(c);
+                            return Ok(Value::Void);
+                        }
+                        "write_gated" => {
+                            if args.len() < 4 { return Err("WorkingMemory.write_gated requires (content, write_attn, erase_gate)".into()); }
+                            let c = match &args[1] { Value::Tensor(t) => t, _ => return Err("content must be Tensor".into()) };
+                            let w = match &args[2] { Value::Tensor(t) => t, _ => return Err("write_attn must be Tensor".into()) };
+                            let e = match &args[3] { Value::Tensor(t) => t, _ => return Err("erase_gate must be Tensor".into()) };
+                            wm.borrow_mut().write_gated(c, w, e);
+                            return Ok(Value::Void);
+                        }
+                        "clear" => {
+                            wm.borrow_mut().clear();
+                            return Ok(Value::Void);
+                        }
+                        "slots" => {
+                            return Ok(Value::Tensor(wm.borrow().get_slots()));
+                        }
+                        _ => return Err(format!("Unknown WorkingMemory method: {}", method)),
+                    }
+                } else if let Value::EpisodicMemory(em) = first_arg {
+                    let method = &resolved_name[4..];
+                    match method {
+                        "store" | "push" => {
+                            if args.len() < 2 { return Err("EpisodicMemory.store requires at least 1 item".into()); }
+                            let (key, value) = if args.len() >= 3 {
+                                let k = match &args[1] { Value::Tensor(t) => t.clone(), _ => return Err("key must be Tensor".into()) };
+                                (k, args[2].clone())
+                            } else {
+                                let k = match &args[1] { Value::Tensor(t) => t.clone(), _ => return Err("item must be Tensor".into()) };
+                                (k.clone(), args[1].clone())
+                            };
+                            em.borrow_mut().store(&key, value);
+                            return Ok(Value::Void);
+                        }
+                        "store_batch" => {
+                            if args.len() < 2 { return Err("EpisodicMemory.store_batch requires tensor argument".into()); }
+                            match &args[1] {
+                                Value::Tensor(t) => {
+                                    if t.shape.len() >= 2 {
+                                        let rows = t.shape[0];
+                                        let cols = t.shape[1];
+                                        for r in 0..rows {
+                                            let row_data = t.data[r * cols..(r + 1) * cols].to_vec();
+                                            let row_t = Tensor::new(row_data, vec![1, cols]);
+                                            em.borrow_mut().store(&row_t, Value::Tensor(row_t.clone()));
+                                        }
+                                    } else {
+                                        em.borrow_mut().store(t, Value::Tensor(t.clone()));
+                                    }
+                                }
+                                Value::List(list) => {
+                                    for item in list {
+                                        if let Value::Tensor(t) = item {
+                                            em.borrow_mut().store(t, Value::Tensor(t.clone()));
+                                        }
+                                    }
+                                }
+                                _ => return Err("store_batch requires Tensor or List of Tensors".into()),
+                            }
+                            return Ok(Value::Void);
+                        }
+                        "recall" => {
+                            if args.len() < 2 { return Err("EpisodicMemory.recall requires query tensor".into()); }
+                            let q = match &args[1] { Value::Tensor(t) => t, _ => return Err("query must be Tensor".into()) };
+                            let k = if args.len() >= 3 { args[2].as_int() as usize } else { 5 };
+                            let results = em.borrow_mut().recall(q, k);
+                            return Ok(Value::List(results));
+                        }
+                        "recall_weighted" => {
+                            if args.len() < 2 { return Err("EpisodicMemory.recall_weighted requires query tensor".into()); }
+                            let q = match &args[1] { Value::Tensor(t) => t, _ => return Err("query must be Tensor".into()) };
+                            let k = if args.len() >= 3 { args[2].as_int() as usize } else { 5 };
+                            let res_t = em.borrow_mut().recall_weighted(q, k)?;
+                            return Ok(Value::Tensor(res_t));
+                        }
+                        "consolidate" => {
+                            em.borrow_mut().consolidate();
+                            return Ok(Value::Void);
+                        }
+                        "forget" => {
+                            let max_age = if args.len() >= 2 { args[1].as_int() as usize } else { 100 };
+                            em.borrow_mut().forget(max_age);
+                            return Ok(Value::Void);
+                        }
+                        "len" | "size" => {
+                            return Ok(Value::Int(em.borrow().len() as i64));
+                        }
+                        _ => return Err(format!("Unknown EpisodicMemory method: {}", method)),
+                    }
+                } else if let Value::Stream(s) = first_arg {
+                    let method = &resolved_name[4..];
+                    match method {
+                        "push" => {
+                            if args.len() < 2 { return Err("Stream.push requires item argument".into()); }
+                            s.borrow_mut().push(args[1].clone());
+                            return Ok(Value::Void);
+                        }
+                        "current" => {
+                            let val = s.borrow().current()?;
+                            return Ok(Value::Temporal {
+                                data: Box::new(val),
+                                direction: "past_to_future".into(),
+                            });
+                        }
+                        "lag" => {
+                            let k = if args.len() >= 2 { args[1].as_int() as usize } else { 1 };
+                            let val = s.borrow().lag(k)?;
+                            return Ok(Value::Temporal {
+                                data: Box::new(val),
+                                direction: "past_to_future".into(),
+                            });
+                        }
+                        "lead" => {
+                            return Err("Temporal Violation: Cannot lead on live Stream — future data does not exist".into());
+                        }
+                        "to_tensor" => {
+                            return Ok(Value::Tensor(s.borrow().to_tensor()?));
+                        }
+                        "len" | "size" => {
+                            return Ok(Value::Int(s.borrow().len() as i64));
+                        }
+                        "capacity" => {
+                            return Ok(Value::Int(s.borrow().capacity() as i64));
+                        }
+                        _ => return Err(format!("Unknown Stream method: {}", method)),
                     }
                 } else if let Value::Model { name, .. } = first_arg {
                     let method = &resolved_name[4..];
@@ -1247,6 +1534,46 @@ impl VM {
                 name: "CounterfactualResult".into(),
                 fields,
             });
+        }
+
+        if resolved_name == "identify" {
+            if args.len() < 3 {
+                return Err("identify requires 3 arguments: (model, outcome, treatment)".into());
+            }
+            if let Value::CausalModel { name: model_name, variables } = &args[0] {
+                let model = instantiate_causal_model(&self.globals, model_name, variables);
+                let query = args[1].display();
+                let do_var = args[2].display();
+                let res = model.identify(&[query], &[do_var]);
+                let fields = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+                fields.borrow_mut().insert("identifiable".into(), Value::Bool(res.identifiable));
+                fields.borrow_mut().insert("method".into(), Value::Str(res.method));
+                fields.borrow_mut().insert("formula".into(), Value::Str(res.formula));
+                fields.borrow_mut().insert("adjustment_set".into(), Value::List(res.adjustment_set.into_iter().map(Value::Str).collect()));
+                fields.borrow_mut().insert("hedge".into(), Value::List(res.hedge.unwrap_or_default().into_iter().map(Value::Str).collect()));
+                return Ok(Value::Model {
+                    name: "IdentificationResult".into(),
+                    fields,
+                });
+            } else {
+                return Err("identify argument 1 must be a CausalModel".into());
+            }
+        }
+
+        if resolved_name == "causal_effect" {
+            if args.len() < 4 {
+                return Err("causal_effect requires 4 arguments: (model, treatment, outcome, val)".into());
+            }
+            if let Value::CausalModel { name: model_name, variables } = &args[0] {
+                let model = instantiate_causal_model(&self.globals, model_name, variables);
+                let treatment = args[1].display();
+                let outcome = args[2].display();
+                let val = args[3].as_float();
+                let eff = model.causal_effect(&treatment, &outcome, val)?;
+                return Ok(Value::Float(eff));
+            } else {
+                return Err("causal_effect argument 1 must be a CausalModel".into());
+            }
         }
 
         if resolved_name == "range" {
@@ -1680,6 +2007,1372 @@ impl VM {
             };
         }
 
+        if resolved_name == "tanh" {
+            if args.is_empty() {
+                return Err("tanh requires 1 argument: (x)".into());
+            }
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.tanh();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => Ok(Value::Float(v.as_float().tanh())),
+            };
+        }
+
+        if resolved_name == "exp" {
+            if args.is_empty() {
+                return Err("exp requires 1 argument: (x)".into());
+            }
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.exp();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => Ok(Value::Float(v.as_float().exp())),
+            };
+        }
+
+        if resolved_name == "log" {
+            if args.is_empty() {
+                return Err("log requires 1 argument: (x)".into());
+            }
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.ln();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => Ok(Value::Float(v.as_float().ln())),
+            };
+        }
+
+        if resolved_name == "pow" {
+            if args.len() < 2 {
+                return Err("pow requires 2 arguments: (base, exponent)".into());
+            }
+            let exp_val = args[1].as_float();
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.powf(exp_val);
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                v => {
+                    let base_val = v.as_float();
+                    if let Value::Int(_) = &args[0] {
+                        if let Value::Int(e) = &args[1] {
+                            if *e >= 0 && *e <= 64 {
+                                return Ok(Value::Int((base_val as i64).pow(*e as u32)));
+                            }
+                        }
+                    }
+                    Ok(Value::Float(base_val.powf(exp_val)))
+                }
+            };
+        }
+
+        if resolved_name == "abs" {
+            if args.is_empty() {
+                return Err("abs requires 1 argument: (x)".into());
+            }
+            return match &args[0] {
+                Value::Tensor(t) => {
+                    let mut res = t.clone();
+                    for x in res.data.iter_mut() {
+                        *x = x.abs();
+                    }
+                    Ok(Value::Tensor(res))
+                }
+                Value::Int(i) => Ok(Value::Int(i.abs())),
+                v => Ok(Value::Float(v.as_float().abs())),
+            };
+        }
+
+        // ── Physics / Grid Tensor Primitives ──
+        if resolved_name == "make_tensor" {
+            // make_tensor(n, val) → flat 1-D Tensor of length n filled with val
+            if args.len() < 2 { return Err("make_tensor requires (n, val)".into()); }
+            let n   = args[0].as_int() as usize;
+            let val = args[1].as_float();
+            let mut t = Tensor::new(vec![val; n], vec![n]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "tensor_add" {
+            // tensor_add(a, b) → elementwise a + b (flat)
+            if args.len() < 2 { return Err("tensor_add requires (a, b)".into()); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.clone(), b.clone()),
+                _ => return Err("tensor_add requires two Tensors".into()),
+            };
+            let n = a.data.len().min(b.data.len());
+            let data: Vec<f64> = (0..n).map(|i| a.data[i] + b.data[i]).collect();
+            let shape = a.shape.clone();
+            let mut t = Tensor::new(data, shape);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "tensor_sub" {
+            if args.len() < 2 { return Err("tensor_sub requires (a, b)".into()); }
+            let (a, b) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a.clone(), b.clone()),
+                _ => return Err("tensor_sub requires two Tensors".into()),
+            };
+            let n = a.data.len().min(b.data.len());
+            let data: Vec<f64> = (0..n).map(|i| a.data[i] - b.data[i]).collect();
+            let shape = a.shape.clone();
+            let mut t = Tensor::new(data, shape);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "tensor_scale" {
+            // tensor_scale(a, scalar) → a * scalar elementwise
+            if args.len() < 2 { return Err("tensor_scale requires (tensor, scalar)".into()); }
+            let a = match &args[0] {
+                Value::Tensor(t) => t.clone(),
+                _ => return Err("tensor_scale first arg must be Tensor".into()),
+            };
+            let s = args[1].as_float();
+            let data: Vec<f64> = a.data.iter().map(|x| x * s).collect();
+            let shape = a.shape.clone();
+            let mut t = Tensor::new(data, shape);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "tensor_get" {
+            // tensor_get(a, i) → Float — flat index access
+            if args.len() < 2 { return Err("tensor_get requires (tensor, i)".into()); }
+            let a = match &args[0] { Value::Tensor(t) => t, _ => return Err("tensor_get expects Tensor".into()) };
+            let i = args[1].as_int() as usize;
+            let val = a.data.get(i).cloned().unwrap_or(0.0);
+            return Ok(Value::Float(val));
+        }
+
+        if resolved_name == "tensor_set" {
+            // tensor_set(a, i, val) → new Tensor with a[i] = val (immutable style)
+            if args.len() < 3 { return Err("tensor_set requires (tensor, i, val)".into()); }
+            let a = match &args[0] { Value::Tensor(t) => t.clone(), _ => return Err("tensor_set expects Tensor".into()) };
+            let i   = args[1].as_int() as usize;
+            let val = args[2].as_float();
+            let mut data = a.data.clone();
+            if i < data.len() { data[i] = val; }
+            let shape = a.shape.clone();
+            let mut t = Tensor::new(data, shape);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "abs_max" {
+            // abs_max(a) → Float — L∞ norm (max |element|)
+            if args.is_empty() { return Err("abs_max requires a tensor".into()); }
+            let a = match &args[0] { Value::Tensor(t) => t, _ => return Err("abs_max expects Tensor".into()) };
+            let val = a.data.iter().cloned().fold(0.0_f64, |acc, x| acc.max(x.abs()));
+            return Ok(Value::Float(val));
+        }
+
+        if resolved_name == "tensor_sum" {
+            // tensor_sum(a) → Float — sum of all elements
+            if args.is_empty() { return Err("tensor_sum requires a tensor".into()); }
+            let a = match &args[0] { Value::Tensor(t) => t, _ => return Err("tensor_sum expects Tensor".into()) };
+            let s: f64 = a.data.iter().sum();
+            return Ok(Value::Float(s));
+        }
+
+        if resolved_name == "tensor_clone" {
+            // tensor_clone(a) → deep copy — useful to snapshot field state
+            if args.is_empty() { return Err("tensor_clone requires a tensor".into()); }
+            let a = match &args[0] { Value::Tensor(t) => t.clone(), _ => return Err("tensor_clone expects Tensor".into()) };
+            let mut t = Tensor::new(a.data.clone(), a.shape.clone());
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        // ── High-Performance Grid Kernels (Navier-Stokes) ────────────────────
+        // All kernels operate on flat 1-D tensors of length N*N, periodic BCs.
+        // No per-cell NEURON allocations — single native Rust call per timestep.
+
+        if resolved_name == "grid_laplacian" {
+            // grid_laplacian(f, N, h) → lap(f) via 5-point stencil, periodic
+            if args.len() < 3 { return Err("grid_laplacian(f, N, h)".into()); }
+            let f = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_laplacian: f must be Tensor".into()) };
+            let n = args[1].as_int() as usize;
+            let h = args[2].as_float();
+            let h2 = h * h;
+            let mut out = vec![0.0f64; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    let in_ = i * n + j;
+                    let north = ((i + n - 1) % n) * n + j;
+                    let south = ((i + 1) % n) * n + j;
+                    let west  = i * n + (j + n - 1) % n;
+                    let east  = i * n + (j + 1) % n;
+                    out[in_] = (f[north] + f[south] + f[west] + f[east] - 4.0 * f[in_]) / h2;
+                }
+            }
+            let mut t = Tensor::new(out, vec![n * n]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid_jacobi_step" {
+            // grid_jacobi_step(omega, psi, N, h) → one Jacobi iteration of lap(psi) = -omega
+            // psi_ij = (psi_N + psi_S + psi_W + psi_E + h^2 * omega_ij) / 4
+            if args.len() < 4 { return Err("grid_jacobi_step(omega, psi, N, h)".into()); }
+            let omega = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_jacobi_step: omega must be Tensor".into()) };
+            let psi   = match &args[1] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_jacobi_step: psi must be Tensor".into()) };
+            let n  = args[2].as_int() as usize;
+            let h  = args[3].as_float();
+            let h2 = h * h;
+            let mut out = vec![0.0f64; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    let idx   = i * n + j;
+                    let north = ((i + n - 1) % n) * n + j;
+                    let south = ((i + 1) % n) * n + j;
+                    let west  = i * n + (j + n - 1) % n;
+                    let east  = i * n + (j + 1) % n;
+                    out[idx] = (psi[north] + psi[south] + psi[west] + psi[east] + h2 * omega[idx]) / 4.0;
+                }
+            }
+            let mut t = Tensor::new(out, vec![n * n]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid_advect" {
+            // grid_advect(omega, psi, N, h) → -(u . grad(omega))
+            // u = dpsi/dy, v = -dpsi/dx  (central diff, periodic)
+            if args.len() < 4 { return Err("grid_advect(omega, psi, N, h)".into()); }
+            let omega = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_advect: omega must be Tensor".into()) };
+            let psi   = match &args[1] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_advect: psi must be Tensor".into()) };
+            let n   = args[2].as_int() as usize;
+            let h   = args[3].as_float();
+            let h2i = 1.0 / (2.0 * h);
+            let mut out = vec![0.0f64; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    let idx  = i * n + j;
+                    let ip   = ((i + 1) % n) * n + j;
+                    let im   = ((i + n - 1) % n) * n + j;
+                    let jp   = i * n + (j + 1) % n;
+                    let jm   = i * n + (j + n - 1) % n;
+                    let u    = (psi[jp]  - psi[jm])  * h2i;  // dpsi/dy
+                    let v    = -(psi[ip] - psi[im]) * h2i;   // -dpsi/dx
+                    let dwdx = (omega[jp] - omega[jm]) * h2i;
+                    let dwdy = (omega[ip] - omega[im]) * h2i;
+                    out[idx] = -(u * dwdx + v * dwdy);
+                }
+            }
+            let mut t = Tensor::new(out, vec![n * n]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid_stats" {
+            // grid_stats(omega, h) → [abs_max, sum_sq * 0.5 * h^2]  (peak vorticity + enstrophy)
+            if args.len() < 2 { return Err("grid_stats(omega, h)".into()); }
+            let omega = match &args[0] { Value::Tensor(t) => &t.data, _ => return Err("grid_stats: omega must be Tensor".into()) };
+            let h  = args[1].as_float();
+            let h2 = h * h;
+            let mut peak = 0.0f64;
+            let mut ss   = 0.0f64;
+            for &v in omega.iter() {
+                let av = v.abs();
+                if av > peak { peak = av; }
+                ss += v * v;
+            }
+            let enst = 0.5 * h2 * ss;
+            let mut t = Tensor::new(vec![peak, enst], vec![2]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid_rk2_step" {
+            // grid_rk2_step(omega, N, h, dt, nu, poisson_iters) → omega_next
+            // Full RK2 step entirely in Rust: no NEURON allocation per cell.
+            if args.len() < 6 { return Err("grid_rk2_step(omega, N, h, dt, nu, poisson_iters)".into()); }
+            let omega_in = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid_rk2_step: omega must be Tensor".into()) };
+            let n   = args[1].as_int() as usize;
+            let h   = args[2].as_float();
+            let dt  = args[3].as_float();
+            let nu  = args[4].as_float();
+            let iters = args[5].as_int() as usize;
+            let nn  = n * n;
+            let h2  = h * h;
+            let h2i = 1.0 / (2.0 * h);
+
+            // Helper closures
+            let laplacian = |f: &[f64]| -> Vec<f64> {
+                let mut out = vec![0.0f64; nn];
+                for i in 0..n {
+                    for j in 0..n {
+                        let idx   = i * n + j;
+                        let north = ((i + n - 1) % n) * n + j;
+                        let south = ((i + 1) % n) * n + j;
+                        let west  = i * n + (j + n - 1) % n;
+                        let east  = i * n + (j + 1) % n;
+                        out[idx] = (f[north] + f[south] + f[west] + f[east] - 4.0 * f[idx]) / h2;
+                    }
+                }
+                out
+            };
+
+            let poisson = |omega: &[f64], psi0: &[f64]| -> Vec<f64> {
+                let mut psi = psi0.to_vec();
+                for _ in 0..iters {
+                    let mut nxt = vec![0.0f64; nn];
+                    for i in 0..n {
+                        for j in 0..n {
+                            let idx   = i * n + j;
+                            let north = ((i + n - 1) % n) * n + j;
+                            let south = ((i + 1) % n) * n + j;
+                            let west  = i * n + (j + n - 1) % n;
+                            let east  = i * n + (j + 1) % n;
+                            nxt[idx] = (psi[north] + psi[south] + psi[west] + psi[east] + h2 * omega[idx]) / 4.0;
+                        }
+                    }
+                    psi = nxt;
+                }
+                psi
+            };
+
+            let advect = |omega: &[f64], psi: &[f64]| -> Vec<f64> {
+                let mut out = vec![0.0f64; nn];
+                for i in 0..n {
+                    for j in 0..n {
+                        let idx  = i * n + j;
+                        let ip   = ((i + 1) % n) * n + j;
+                        let im   = ((i + n - 1) % n) * n + j;
+                        let jp   = i * n + (j + 1) % n;
+                        let jm   = i * n + (j + n - 1) % n;
+                        let u    = (psi[jp]  - psi[jm])  * h2i;
+                        let v    = -(psi[ip] - psi[im]) * h2i;
+                        let dwdx = (omega[jp] - omega[jm]) * h2i;
+                        let dwdy = (omega[ip] - omega[im]) * h2i;
+                        out[idx] = -(u * dwdx + v * dwdy);
+                    }
+                }
+                out
+            };
+
+            let rhs = |omega: &[f64], psi: &[f64]| -> Vec<f64> {
+                let adv  = advect(omega, psi);
+                let lap  = laplacian(omega);
+                adv.iter().zip(lap.iter()).map(|(a, l)| a + nu * l).collect()
+            };
+
+            // Stage 1
+            let zero_psi = vec![0.0f64; nn];
+            let psi1     = poisson(&omega_in, &zero_psi);
+            let k1       = rhs(&omega_in, &psi1);
+
+            // omega* = omega + dt * k1
+            let omega_star: Vec<f64> = omega_in.iter().zip(k1.iter()).map(|(o, k)| o + dt * k).collect();
+
+            // Stage 2
+            let psi2 = poisson(&omega_star, &psi1);
+            let k2   = rhs(&omega_star, &psi2);
+
+            // omega_next = omega + dt/2 * (k1 + k2)
+            let omega_next: Vec<f64> = omega_in.iter()
+                .zip(k1.iter())
+                .zip(k2.iter())
+                .map(|((o, k1v), k2v)| o + (dt / 2.0) * (k1v + k2v))
+                .collect();
+
+            let mut t = Tensor::new(omega_next, vec![nn]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "power_law_fit" {
+            // power_law_fit(times, peaks, n) -> [gamma, C, T_star, r_squared]
+            // Fits ||w(t)|| ~ C / (T* - t)^gamma via log-log linear regression.
+            // Method: guess T* = t_last + alpha*(t_last - t_first) then iterate.
+            // Returns gamma: if >= 1.0 => finite-time blow-up candidate (BKM).
+            if args.len() < 3 { return Err("power_law_fit(times, peaks, n)".into()); }
+            let times = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("power_law_fit: times must be Tensor".into()) };
+            let peaks = match &args[1] { Value::Tensor(t) => t.data.clone(), _ => return Err("power_law_fit: peaks must be Tensor".into()) };
+            let n = (args[2].as_int() as usize).min(times.len()).min(peaks.len());
+            if n < 3 {
+                let mut t = Tensor::new(vec![0.0, 0.0, 0.0, 0.0], vec![4]);
+                t.id = self.tape.alloc_id();
+                return Ok(Value::Tensor(t));
+            }
+            let t_first = times[0];
+            let t_last  = times[n - 1];
+            let t_span  = (t_last - t_first).max(1e-12);
+
+            // Try multiple T* candidates and pick best R²
+            let candidates = [1.1, 1.3, 1.5, 2.0, 3.0];
+            let mut best_gamma  = 0.0f64;
+            let mut best_c      = 0.0f64;
+            let mut best_tstar  = t_last + t_span;
+            let mut best_r2     = -1.0f64;
+
+            for &alpha in candidates.iter() {
+                let t_star = t_last + alpha * t_span;
+                // log-log regression: log(peak) = log(C) - gamma * log(T* - t)
+                let mut sx  = 0.0f64;
+                let mut sy  = 0.0f64;
+                let mut sxx = 0.0f64;
+                let mut sxy = 0.0f64;
+                let mut ok_count = 0usize;
+                for i in 0..n {
+                    let dt_star = t_star - times[i];
+                    let p = peaks[i];
+                    if dt_star > 1e-12 && p > 1e-15 {
+                        let lx = dt_star.ln();
+                        let ly = p.ln();
+                        sx  += lx;
+                        sy  += ly;
+                        sxx += lx * lx;
+                        sxy += lx * ly;
+                        ok_count += 1;
+                    }
+                }
+                let nf = ok_count as f64;
+                let denom = nf * sxx - sx * sx;
+                if denom.abs() < 1e-20 || ok_count < 3 { continue; }
+                let slope     = (nf * sxy - sx * sy) / denom;
+                let intercept = (sy - slope * sx) / nf;
+                let gamma     = -slope;   // w ~ C/(T*-t)^gamma => slope = -gamma
+                let c_val     = intercept.exp();
+                // Compute R²
+                let y_mean = sy / nf;
+                let mut ss_res = 0.0f64;
+                let mut ss_tot = 0.0f64;
+                for i in 0..n {
+                    let dt_star = t_star - times[i];
+                    let p = peaks[i];
+                    if dt_star > 1e-12 && p > 1e-15 {
+                        let lx = dt_star.ln();
+                        let ly = p.ln();
+                        let pred = slope * lx + intercept;
+                        ss_res += (ly - pred).powi(2);
+                        ss_tot += (ly - y_mean).powi(2);
+                    }
+                }
+                let r2 = if ss_tot > 1e-20 { 1.0 - ss_res / ss_tot } else { 0.0 };
+                if r2 > best_r2 {
+                    best_r2    = r2;
+                    best_gamma = gamma;
+                    best_c     = c_val;
+                    best_tstar = t_star;
+                }
+            }
+            let mut t = Tensor::new(vec![best_gamma, best_c, best_tstar, best_r2], vec![4]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        // ── 3D Incompressible Navier-Stokes & Vortex Tube Kernels ─────────────
+        if resolved_name == "grid3d_init_tubes" {
+            // grid3d_init_tubes(N, h, radius, sep, pert) -> Tensor [3 * N*N*N]
+            if args.len() < 5 { return Err("grid3d_init_tubes(N, h, radius, sep, pert)".into()); }
+            let n = args[0].as_int() as usize;
+            let h = args[1].as_float();
+            let radius = args[2].as_float();
+            let sep = args[3].as_float();
+            let pert = args[4].as_float();
+            let nn = n * n * n;
+            let mut u = vec![0.0f64; nn];
+            let mut v = vec![0.0f64; nn];
+            let mut w = vec![0.0f64; nn];
+
+            let pi = std::f64::consts::PI;
+            let l_box = n as f64 * h;
+            let cx = l_box * 0.5;
+            let cy = l_box * 0.5;
+            let r0_sq = (radius * radius).max(1e-8);
+            let gamma0 = 4.0; // circulation
+
+            for i in 0..n {
+                let z = i as f64 * h;
+                // Perturbation along tube axis (z): tubes curve toward each other near z = pi
+                let offset = pert * (z * 2.0 * pi / l_box).cos();
+                let y1 = cy - sep * 0.5 + offset;
+                let y2 = cy + sep * 0.5 - offset;
+                let x1 = cx;
+                let x2 = cx;
+
+                for j in 0..n {
+                    let y = j as f64 * h;
+                    for k in 0..n {
+                        let x = k as f64 * h;
+                        let idx = i * n * n + j * n + k;
+
+                        let dx1 = x - x1;
+                        let dy1 = y - y1;
+                        let r1_sq = dx1 * dx1 + dy1 * dy1;
+                        let factor1 = (1.0 - (-r1_sq / r0_sq).exp()) / (r1_sq + 1e-6);
+                        let u1 = -gamma0 / (2.0 * pi) * dy1 * factor1;
+                        let v1 =  gamma0 / (2.0 * pi) * dx1 * factor1;
+
+                        let dx2 = x - x2;
+                        let dy2 = y - y2;
+                        let r2_sq = dx2 * dx2 + dy2 * dy2;
+                        let factor2 = (1.0 - (-r2_sq / r0_sq).exp()) / (r2_sq + 1e-6);
+                        let u2 =  gamma0 / (2.0 * pi) * dy2 * factor2;
+                        let v2 = -gamma0 / (2.0 * pi) * dx2 * factor2;
+
+                        u[idx] = u1 + u2;
+                        v[idx] = v1 + v2;
+                        w[idx] = 0.0;
+                    }
+                }
+            }
+
+            let mut out = Vec::with_capacity(3 * nn);
+            out.extend_from_slice(&u);
+            out.extend_from_slice(&v);
+            out.extend_from_slice(&w);
+            let mut t = Tensor::new(out, vec![3 * nn]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid3d_stats" {
+            // grid3d_stats(u_field, N, h) -> [peak_vorticity, enstrophy, peak_velocity, peak_stretching]
+            if args.len() < 3 { return Err("grid3d_stats(u_field, N, h)".into()); }
+            let data = match &args[0] { Value::Tensor(t) => &t.data, _ => return Err("grid3d_stats: expected Tensor".into()) };
+            let n = args[1].as_int() as usize;
+            let h = args[2].as_float();
+            let nn = n * n * n;
+            let n2 = n * n;
+            if data.len() < 3 * nn { return Err("grid3d_stats: tensor size mismatch".into()); }
+
+            let u = &data[0..nn];
+            let v = &data[nn..2 * nn];
+            let w = &data[2 * nn..3 * nn];
+
+            let h2i = 1.0 / (2.0 * h);
+            let mut max_vort = 0.0f64;
+            let mut max_vel = 0.0f64;
+            let mut max_stretch = 0.0f64;
+            let mut sum_vort_sq = 0.0f64;
+
+            for i in 0..n {
+                let ip_off = if i + 1 == n { 0 } else { (i + 1) * n2 };
+                let im_off = if i == 0 { (n - 1) * n2 } else { (i - 1) * n2 };
+                let cur_i_off = i * n2;
+
+                for j in 0..n {
+                    let jp_off = if j + 1 == n { 0 } else { (j + 1) * n };
+                    let jm_off = if j == 0 { (n - 1) * n } else { (j - 1) * n };
+                    let cur_j_off = j * n;
+
+                    for k in 0..n {
+                        let kp = if k + 1 == n { 0 } else { k + 1 };
+                        let km = if k == 0 { n - 1 } else { k - 1 };
+
+                        let idx = cur_i_off + cur_j_off + k;
+                        let idx_ip = ip_off + cur_j_off + k;
+                        let idx_im = im_off + cur_j_off + k;
+                        let idx_jp = cur_i_off + jp_off + k;
+                        let idx_jm = cur_i_off + jm_off + k;
+                        let idx_kp = cur_i_off + cur_j_off + kp;
+                        let idx_km = cur_i_off + cur_j_off + km;
+
+                        let du_dx = (u[idx_kp] - u[idx_km]) * h2i;
+                        let du_dy = (u[idx_jp] - u[idx_jm]) * h2i;
+                        let du_dz = (u[idx_ip] - u[idx_im]) * h2i;
+
+                        let dv_dx = (v[idx_kp] - v[idx_km]) * h2i;
+                        let dv_dy = (v[idx_jp] - v[idx_jm]) * h2i;
+                        let dv_dz = (v[idx_ip] - v[idx_im]) * h2i;
+
+                        let dw_dx = (w[idx_kp] - w[idx_km]) * h2i;
+                        let dw_dy = (w[idx_jp] - w[idx_jm]) * h2i;
+                        let dw_dz = (w[idx_ip] - w[idx_im]) * h2i;
+
+                        let wx = dw_dy - dv_dz;
+                        let wy = du_dz - dw_dx;
+                        let wz = dv_dx - du_dy;
+
+                        let vort_mag_sq = wx * wx + wy * wy + wz * wz;
+                        let vort_mag = vort_mag_sq.sqrt();
+                        if vort_mag > max_vort { max_vort = vort_mag; }
+                        sum_vort_sq += vort_mag_sq;
+
+                        let vel_mag = (u[idx] * u[idx] + v[idx] * v[idx] + w[idx] * w[idx]).sqrt();
+                        if vel_mag > max_vel { max_vel = vel_mag; }
+
+                        let sx = wx * du_dx + wy * du_dy + wz * du_dz;
+                        let sy = wx * dv_dx + wy * dv_dy + wz * dv_dz;
+                        let sz = wx * dw_dx + wy * dw_dy + wz * dw_dz;
+                        let stretch_mag = (sx * sx + sy * sy + sz * sz).sqrt();
+                        if stretch_mag > max_stretch { max_stretch = stretch_mag; }
+                    }
+                }
+            }
+
+            let enstrophy = 0.5 * (h * h * h) * sum_vort_sq;
+            let mut t = Tensor::new(vec![max_vort, enstrophy, max_vel, max_stretch], vec![4]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid3d_step" {
+            // grid3d_step(u_field, N, h, dt, nu, poisson_iters) -> u_next_field
+            if args.len() < 6 { return Err("grid3d_step(u_field, N, h, dt, nu, iters)".into()); }
+            let data = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("grid3d_step: expected Tensor".into()) };
+            let n = args[1].as_int() as usize;
+            let h = args[2].as_float();
+            let dt = args[3].as_float();
+            let nu = args[4].as_float();
+            let iters = args[5].as_int() as usize;
+
+            let nn = n * n * n;
+            let n2 = n * n;
+            if data.len() < 3 * nn { return Err("grid3d_step: tensor size mismatch".into()); }
+
+            let u = &data[0..nn];
+            let v = &data[nn..2 * nn];
+            let w = &data[2 * nn..3 * nn];
+
+            let h2i = 1.0 / (2.0 * h);
+            let h_sq_inv = 1.0 / (h * h);
+
+            let mut u_star = vec![0.0f64; nn];
+            let mut v_star = vec![0.0f64; nn];
+            let mut w_star = vec![0.0f64; nn];
+
+            for i in 0..n {
+                let ip_off = if i + 1 == n { 0 } else { (i + 1) * n2 };
+                let im_off = if i == 0 { (n - 1) * n2 } else { (i - 1) * n2 };
+                let cur_i_off = i * n2;
+
+                for j in 0..n {
+                    let jp_off = if j + 1 == n { 0 } else { (j + 1) * n };
+                    let jm_off = if j == 0 { (n - 1) * n } else { (j - 1) * n };
+                    let cur_j_off = j * n;
+
+                    for k in 0..n {
+                        let kp = if k + 1 == n { 0 } else { k + 1 };
+                        let km = if k == 0 { n - 1 } else { k - 1 };
+
+                        let idx = cur_i_off + cur_j_off + k;
+                        let idx_ip = ip_off + cur_j_off + k;
+                        let idx_im = im_off + cur_j_off + k;
+                        let idx_jp = cur_i_off + jp_off + k;
+                        let idx_jm = cur_i_off + jm_off + k;
+                        let idx_kp = cur_i_off + cur_j_off + kp;
+                        let idx_km = cur_i_off + cur_j_off + km;
+
+                        let uc = u[idx];
+                        let vc = v[idx];
+                        let wc = w[idx];
+
+                        let adv_u = -(uc * (u[idx_kp] - u[idx_km]) * h2i
+                                    + vc * (u[idx_jp] - u[idx_jm]) * h2i
+                                    + wc * (u[idx_ip] - u[idx_im]) * h2i);
+                        let adv_v = -(uc * (v[idx_kp] - v[idx_km]) * h2i
+                                    + vc * (v[idx_jp] - v[idx_jm]) * h2i
+                                    + wc * (v[idx_ip] - v[idx_im]) * h2i);
+                        let adv_w = -(uc * (w[idx_kp] - w[idx_km]) * h2i
+                                    + vc * (w[idx_jp] - w[idx_jm]) * h2i
+                                    + wc * (w[idx_ip] - w[idx_im]) * h2i);
+
+                        let diff_u = nu * (u[idx_kp] + u[idx_km] + u[idx_jp] + u[idx_jm] + u[idx_ip] + u[idx_im] - 6.0 * uc) * h_sq_inv;
+                        let diff_v = nu * (v[idx_kp] + v[idx_km] + v[idx_jp] + v[idx_jm] + v[idx_ip] + v[idx_im] - 6.0 * vc) * h_sq_inv;
+                        let diff_w = nu * (w[idx_kp] + w[idx_km] + w[idx_jp] + w[idx_jm] + w[idx_ip] + w[idx_im] - 6.0 * wc) * h_sq_inv;
+
+                        u_star[idx] = uc + dt * (adv_u + diff_u);
+                        v_star[idx] = vc + dt * (adv_v + diff_v);
+                        w_star[idx] = wc + dt * (adv_w + diff_w);
+                    }
+                }
+            }
+
+            let mut div = vec![0.0f64; nn];
+            for i in 0..n {
+                let ip_off = if i + 1 == n { 0 } else { (i + 1) * n2 };
+                let im_off = if i == 0 { (n - 1) * n2 } else { (i - 1) * n2 };
+                let cur_i_off = i * n2;
+
+                for j in 0..n {
+                    let jp_off = if j + 1 == n { 0 } else { (j + 1) * n };
+                    let jm_off = if j == 0 { (n - 1) * n } else { (j - 1) * n };
+                    let cur_j_off = j * n;
+
+                    for k in 0..n {
+                        let kp = if k + 1 == n { 0 } else { k + 1 };
+                        let km = if k == 0 { n - 1 } else { k - 1 };
+
+                        let idx = cur_i_off + cur_j_off + k;
+                        let idx_ip = ip_off + cur_j_off + k;
+                        let idx_im = im_off + cur_j_off + k;
+                        let idx_jp = cur_i_off + jp_off + k;
+                        let idx_jm = cur_i_off + jm_off + k;
+                        let idx_kp = cur_i_off + cur_j_off + kp;
+                        let idx_km = cur_i_off + cur_j_off + km;
+
+                        div[idx] = (u_star[idx_kp] - u_star[idx_km]) * h2i
+                                 + (v_star[idx_jp] - v_star[idx_jm]) * h2i
+                                 + (w_star[idx_ip] - w_star[idx_im]) * h2i;
+                    }
+                }
+            }
+
+            let mut p = vec![0.0f64; nn];
+            let mut p_next = vec![0.0f64; nn];
+            let h_sq = h * h;
+            let one_over_six = 1.0 / 6.0;
+            let src_factor = h_sq / dt;
+
+            for _ in 0..iters {
+                for i in 0..n {
+                    let ip_off = if i + 1 == n { 0 } else { (i + 1) * n2 };
+                    let im_off = if i == 0 { (n - 1) * n2 } else { (i - 1) * n2 };
+                    let cur_i_off = i * n2;
+
+                    for j in 0..n {
+                        let jp_off = if j + 1 == n { 0 } else { (j + 1) * n };
+                        let jm_off = if j == 0 { (n - 1) * n } else { (j - 1) * n };
+                        let cur_j_off = j * n;
+
+                        for k in 0..n {
+                            let kp = if k + 1 == n { 0 } else { k + 1 };
+                            let km = if k == 0 { n - 1 } else { k - 1 };
+
+                            let idx = cur_i_off + cur_j_off + k;
+                            let sum_neighbors = p[ip_off + cur_j_off + k]
+                                              + p[im_off + cur_j_off + k]
+                                              + p[cur_i_off + jp_off + k]
+                                              + p[cur_i_off + jm_off + k]
+                                              + p[cur_i_off + cur_j_off + kp]
+                                              + p[cur_i_off + cur_j_off + km];
+
+                            p_next[idx] = (sum_neighbors - src_factor * div[idx]) * one_over_six;
+                        }
+                    }
+                }
+                std::mem::swap(&mut p, &mut p_next);
+            }
+
+            let mut u_next = vec![0.0f64; nn];
+            let mut v_next = vec![0.0f64; nn];
+            let mut w_next = vec![0.0f64; nn];
+
+            for i in 0..n {
+                let ip_off = if i + 1 == n { 0 } else { (i + 1) * n2 };
+                let im_off = if i == 0 { (n - 1) * n2 } else { (i - 1) * n2 };
+                let cur_i_off = i * n2;
+
+                for j in 0..n {
+                    let jp_off = if j + 1 == n { 0 } else { (j + 1) * n };
+                    let jm_off = if j == 0 { (n - 1) * n } else { (j - 1) * n };
+                    let cur_j_off = j * n;
+
+                    for k in 0..n {
+                        let kp = if k + 1 == n { 0 } else { k + 1 };
+                        let km = if k == 0 { n - 1 } else { k - 1 };
+
+                        let idx = cur_i_off + cur_j_off + k;
+                        let dp_dx = (p[cur_i_off + cur_j_off + kp] - p[cur_i_off + cur_j_off + km]) * h2i;
+                        let dp_dy = (p[cur_i_off + jp_off + k] - p[cur_i_off + jm_off + k]) * h2i;
+                        let dp_dz = (p[ip_off + cur_j_off + k] - p[im_off + cur_j_off + k]) * h2i;
+
+                        u_next[idx] = u_star[idx] - dt * dp_dx;
+                        v_next[idx] = v_star[idx] - dt * dp_dy;
+                        w_next[idx] = w_star[idx] - dt * dp_dz;
+                    }
+                }
+            }
+
+            let mut out = Vec::with_capacity(3 * nn);
+            out.extend_from_slice(&u_next);
+            out.extend_from_slice(&v_next);
+            out.extend_from_slice(&w_next);
+            let mut t = Tensor::new(out, vec![3 * nn]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        // ── Autonomous PDE Discovery Engine (SINDy / PDE-FIND) ───────────────
+        if resolved_name == "pde_build_library" {
+            // pde_build_library(omega, psi, N, h) -> Tensor [N*N, 7]
+            if args.len() < 4 { return Err("pde_build_library(omega, psi, N, h)".into()); }
+            let omega = match &args[0] { Value::Tensor(t) => t.data.clone(), _ => return Err("pde_build_library: omega must be Tensor".into()) };
+            let psi   = match &args[1] { Value::Tensor(t) => t.data.clone(), _ => return Err("pde_build_library: psi must be Tensor".into()) };
+            let n = args[2].as_int() as usize;
+            let h = args[3].as_float();
+            let nn = n * n;
+            let h2i = 1.0 / (2.0 * h);
+            let h_sq_inv = 1.0 / (h * h);
+
+            let k_terms = 7usize;
+            let mut theta = vec![0.0f64; nn * k_terms];
+
+            let mut lap1 = vec![0.0f64; nn];
+            for i in 0..n {
+                for j in 0..n {
+                    let idx = i * n + j;
+                    let ip = ((i + 1) % n) * n + j;
+                    let im = ((i + n - 1) % n) * n + j;
+                    let jp = i * n + (j + 1) % n;
+                    let jm = i * n + (j + n - 1) % n;
+                    lap1[idx] = (omega[ip] + omega[im] + omega[jp] + omega[jm] - 4.0 * omega[idx]) * h_sq_inv;
+                }
+            }
+
+            for i in 0..n {
+                for j in 0..n {
+                    let idx = i * n + j;
+                    let ip = ((i + 1) % n) * n + j;
+                    let im = ((i + n - 1) % n) * n + j;
+                    let jp = i * n + (j + 1) % n;
+                    let jm = i * n + (j + n - 1) % n;
+
+                    let w_val = omega[idx];
+                    let u = (psi[jp] - psi[jm]) * h2i;
+                    let v = -(psi[ip] - psi[im]) * h2i;
+                    let dw_dx = (omega[jp] - omega[jm]) * h2i;
+                    let dw_dy = (omega[ip] - omega[im]) * h2i;
+
+                    let adv = -(u * dw_dx + v * dw_dy);
+                    let diff = lap1[idx];
+                    let reac = w_val;
+                    let quad = w_val * w_val;
+                    let lap2 = (lap1[ip] + lap1[im] + lap1[jp] + lap1[jm] - 4.0 * lap1[idx]) * h_sq_inv;
+                    let grad_norm_sq = dw_dx * dw_dx + dw_dy * dw_dy;
+                    let cubic = w_val * w_val * w_val;
+
+                    let row_off = idx * k_terms;
+                    theta[row_off + 0] = adv;
+                    theta[row_off + 1] = diff;
+                    theta[row_off + 2] = reac;
+                    theta[row_off + 3] = quad;
+                    theta[row_off + 4] = lap2;
+                    theta[row_off + 5] = grad_norm_sq;
+                    theta[row_off + 6] = cubic;
+                }
+            }
+
+            let mut t = Tensor::new(theta, vec![nn, k_terms]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "pde_sindy_fit" {
+            // pde_sindy_fit(theta, y, threshold, lambda) -> xi [K, 1]
+            if args.len() < 4 { return Err("pde_sindy_fit(theta, y, threshold, lambda)".into()); }
+            let theta = match &args[0] { Value::Tensor(t) => t.clone(), _ => return Err("pde_sindy_fit: theta must be Tensor".into()) };
+            let y = match &args[1] { Value::Tensor(t) => t.data.clone(), _ => return Err("pde_sindy_fit: y must be Tensor".into()) };
+            let threshold = args[2].as_float();
+            let lambda_reg = args[3].as_float();
+
+            if theta.shape.len() < 2 { return Err("pde_sindy_fit: theta must be 2D matrix [M, K]".into()); }
+            let m = theta.shape[0];
+            let k = theta.shape[1];
+            if y.len() < m { return Err(format!("pde_sindy_fit: target y length {} < M {}", y.len(), m)); }
+
+            let solve_sys = |a_mat: Vec<Vec<f64>>, b_vec: Vec<f64>| -> Option<Vec<f64>> {
+                let n = b_vec.len();
+                let mut a = a_mat;
+                let mut b = b_vec;
+                for i in 0..n {
+                    let mut max_row = i;
+                    let mut max_val = a[i][i].abs();
+                    for r in (i + 1)..n {
+                        if a[r][i].abs() > max_val {
+                            max_val = a[r][i].abs();
+                            max_row = r;
+                        }
+                    }
+                    if max_val < 1e-15 { return None; }
+                    if max_row != i {
+                        a.swap(i, max_row);
+                        b.swap(i, max_row);
+                    }
+                    let pivot = a[i][i];
+                    for c in i..n { a[i][c] /= pivot; }
+                    b[i] /= pivot;
+                    for r in 0..n {
+                        if r != i {
+                            let f = a[r][i];
+                            for c in i..n { a[r][c] -= f * a[i][c]; }
+                            b[r] -= f * b[i];
+                        }
+                    }
+                }
+                Some(b)
+            };
+
+            let mut ata = vec![vec![0.0f64; k]; k];
+            let mut aty = vec![0.0f64; k];
+            for r in 0..m {
+                let row_off = r * k;
+                let yr = y[r];
+                for c1 in 0..k {
+                    let v1 = theta.data[row_off + c1];
+                    aty[c1] += v1 * yr;
+                    for c2 in 0..k {
+                        ata[c1][c2] += v1 * theta.data[row_off + c2];
+                    }
+                }
+            }
+            for c in 0..k { ata[c][c] += lambda_reg; }
+
+            let mut xi = match solve_sys(ata.clone(), aty.clone()) {
+                Some(res) => res,
+                None => vec![0.0f64; k],
+            };
+
+            for _ in 0..10 {
+                let active: Vec<usize> = (0..k).filter(|&idx| xi[idx].abs() >= threshold).collect();
+                if active.is_empty() {
+                    for val in xi.iter_mut() { *val = 0.0; }
+                    break;
+                }
+                let k_act = active.len();
+                let mut a_sub = vec![vec![0.0f64; k_act]; k_act];
+                let mut b_sub = vec![0.0f64; k_act];
+
+                for (i_sub, &act_i) in active.iter().enumerate() {
+                    b_sub[i_sub] = aty[act_i];
+                    for (j_sub, &act_j) in active.iter().enumerate() {
+                        a_sub[i_sub][j_sub] = ata[act_i][act_j];
+                    }
+                }
+
+                if let Some(sub_sol) = solve_sys(a_sub, b_sub) {
+                    let mut new_xi = vec![0.0f64; k];
+                    for (i_sub, &act_i) in active.iter().enumerate() {
+                        new_xi[act_i] = sub_sol[i_sub];
+                    }
+                    xi = new_xi;
+                } else {
+                    break;
+                }
+            }
+
+            let mut t = Tensor::new(xi, vec![k, 1]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "pde_score" {
+            // pde_score(theta, y, xi) -> [r_squared, mse]
+            if args.len() < 3 { return Err("pde_score(theta, y, xi)".into()); }
+            let theta = match &args[0] { Value::Tensor(t) => t.clone(), _ => return Err("pde_score: theta must be Tensor".into()) };
+            let y = match &args[1] { Value::Tensor(t) => &t.data, _ => return Err("pde_score: y must be Tensor".into()) };
+            let xi = match &args[2] { Value::Tensor(t) => &t.data, _ => return Err("pde_score: xi must be Tensor".into()) };
+
+            let m = if theta.shape.len() >= 2 { theta.shape[0] } else { y.len() };
+            let k = if theta.shape.len() >= 2 { theta.shape[1] } else { xi.len() };
+
+            let mut ss_res = 0.0f64;
+            let mut sum_y = 0.0f64;
+
+            for r in 0..m {
+                let row_off = r * k;
+                let mut pred = 0.0f64;
+                for c in 0..k {
+                    pred += theta.data[row_off + c] * xi[c];
+                }
+                let diff = y[r] - pred;
+                ss_res += diff * diff;
+                sum_y += y[r];
+            }
+
+            let y_mean = sum_y / (m as f64).max(1.0);
+            let mut ss_tot = 0.0f64;
+            for r in 0..m {
+                let diff = y[r] - y_mean;
+                ss_tot += diff * diff;
+            }
+
+            let r2 = if ss_tot > 1e-15 { 1.0 - ss_res / ss_tot } else { 0.0 };
+            let mse = ss_res / (m as f64).max(1.0);
+
+            let mut t = Tensor::new(vec![r2, mse], vec![2]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "grid_solve_psi" {
+            // grid_solve_psi(omega, N, h, iters) -> psi [N*N]
+            if args.len() < 4 { return Err("grid_solve_psi(omega, N, h, iters)".into()); }
+            let omega = match &args[0] { Value::Tensor(t) => &t.data, _ => return Err("grid_solve_psi: expected Tensor".into()) };
+            let n = args[1].as_int() as usize;
+            let h = args[2].as_float();
+            let iters = args[3].as_int() as usize;
+            let nn = n * n;
+            let h2 = h * h;
+
+            let mut psi = vec![0.0f64; nn];
+            let mut next = vec![0.0f64; nn];
+            for _ in 0..iters {
+                for i in 0..n {
+                    for j in 0..n {
+                        let idx = i * n + j;
+                        let north = ((i + n - 1) % n) * n + j;
+                        let south = ((i + 1) % n) * n + j;
+                        let west  = i * n + (j + n - 1) % n;
+                        let east  = i * n + (j + 1) % n;
+                        next[idx] = (psi[north] + psi[south] + psi[west] + psi[east] + h2 * omega[idx]) / 4.0;
+                    }
+                }
+                std::mem::swap(&mut psi, &mut next);
+            }
+            let mut t = Tensor::new(psi, vec![nn]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        // ── Native Data & File I/O Built-ins ──
+        if resolved_name == "read_csv" || resolved_name == "load_csv" {
+            if args.is_empty() {
+                return Err("read_csv requires a file path argument".into());
+            }
+            let path = match &args[0] {
+                Value::Str(s) => s.clone(),
+                _ => args[0].display(),
+            };
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read CSV at '{}': {}", path, e))?;
+            
+            let mut rows_data = Vec::new();
+            let mut num_cols = 0;
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') { continue; }
+                let parts: Vec<&str> = line.split(',').collect();
+                let row_floats: Result<Vec<f64>, _> = parts.iter().map(|p| p.trim().parse::<f64>()).collect();
+                if let Ok(floats) = row_floats {
+                    if num_cols == 0 {
+                        num_cols = floats.len();
+                    }
+                    if floats.len() == num_cols {
+                        rows_data.extend(floats);
+                    }
+                }
+            }
+            let num_rows = if num_cols > 0 { rows_data.len() / num_cols } else { 0 };
+            if num_rows == 0 || num_cols == 0 {
+                return Err(format!("No numeric data found in CSV '{}'", path));
+            }
+            let mut t = Tensor::new(rows_data, vec![num_rows, num_cols]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "read_file" {
+            if args.is_empty() { return Err("read_file requires a path argument".into()); }
+            let path = match &args[0] { Value::Str(s) => s.clone(), _ => args[0].display() };
+            let content = std::fs::read_to_string(&path).map_err(|e| format!("read_file error: {}", e))?;
+            return Ok(Value::Str(content));
+        }
+
+        if resolved_name == "write_file" {
+            if args.len() < 2 { return Err("write_file requires (path, content)".into()); }
+            let path = match &args[0] { Value::Str(s) => s.clone(), _ => args[0].display() };
+            let content = match &args[1] { Value::Str(s) => s.clone(), _ => args[1].display() };
+            std::fs::write(&path, content).map_err(|e| format!("write_file error: {}", e))?;
+            return Ok(Value::Void);
+        }
+
+        if resolved_name == "slice_rows" {
+            if args.len() < 3 { return Err("slice_rows requires (tensor, start, end)".into()); }
+            let t = match &args[0] { Value::Tensor(t) => t, _ => return Err("slice_rows expects Tensor".into()) };
+            let start = args[1].as_int() as usize;
+            let end = args[2].as_int() as usize;
+            if t.shape.len() < 2 {
+                let end = end.min(t.data.len());
+                let slice = t.data[start..end].to_vec();
+                let mut res = Tensor::new(slice.clone(), vec![slice.len()]);
+                res.id = self.tape.alloc_id();
+                return Ok(Value::Tensor(res));
+            }
+            let rows = t.shape[0];
+            let cols = t.shape[1];
+            let end = end.min(rows);
+            let start = start.min(end);
+            let num_rows = end - start;
+            let mut data = Vec::with_capacity(num_rows * cols);
+            for r in start..end {
+                data.extend_from_slice(&t.data[r * cols..(r + 1) * cols]);
+            }
+            let mut res = Tensor::new(data, vec![num_rows, cols]);
+            res.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(res));
+        }
+
+        if resolved_name == "slice_cols" {
+            if args.len() < 3 { return Err("slice_cols requires (tensor, start, end)".into()); }
+            let t = match &args[0] { Value::Tensor(t) => t, _ => return Err("slice_cols expects Tensor".into()) };
+            if t.shape.len() < 2 { return Err("slice_cols requires at least 2D tensor".into()); }
+            let rows = t.shape[0];
+            let cols = t.shape[1];
+            let start = (args[1].as_int() as usize).min(cols);
+            let end = (args[2].as_int() as usize).min(cols);
+            let out_cols = end.saturating_sub(start);
+            let mut data = Vec::with_capacity(rows * out_cols);
+            for r in 0..rows {
+                data.extend_from_slice(&t.data[r * cols + start..r * cols + end]);
+            }
+            let mut res = Tensor::new(data, vec![rows, out_cols]);
+            res.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(res));
+        }
+
+        if resolved_name == "get_row" {
+            if args.len() < 2 { return Err("get_row requires (tensor, row_idx)".into()); }
+            let t = match &args[0] { Value::Tensor(t) => t, _ => return Err("get_row expects Tensor".into()) };
+            let idx = args[1].as_int() as usize;
+            if t.shape.len() < 2 {
+                let val = t.data.get(idx).cloned().unwrap_or(0.0);
+                let mut res = Tensor::new(vec![val], vec![1, 1]);
+                res.id = self.tape.alloc_id();
+                return Ok(Value::Tensor(res));
+            }
+            let rows = t.shape[0];
+            let cols = t.shape[1];
+            if idx >= rows { return Err(format!("Row index {} out of bounds for {} rows", idx, rows)); }
+            let row_data = t.data[idx * cols..(idx + 1) * cols].to_vec();
+            let mut res = Tensor::new(row_data, vec![1, cols]);
+            res.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(res));
+        }
+
+        if resolved_name == "shape" {
+            if args.is_empty() { return Err("shape requires tensor".into()); }
+            if let Value::Tensor(t) = &args[0] {
+                let list = t.shape.iter().map(|&s| Value::Int(s as i64)).collect();
+                return Ok(Value::List(list));
+            }
+            return Ok(Value::List(vec![]));
+        }
+
+        if resolved_name == "rows" {
+            if args.is_empty() { return Err("rows requires tensor".into()); }
+            if let Value::Tensor(t) = &args[0] {
+                return Ok(Value::Int(t.shape.first().copied().unwrap_or(0) as i64));
+            }
+            return Ok(Value::Int(0));
+        }
+
+        if resolved_name == "cols" {
+            if args.is_empty() { return Err("cols requires tensor".into()); }
+            if let Value::Tensor(t) = &args[0] {
+                return Ok(Value::Int(t.shape.get(1).copied().unwrap_or(t.data.len()) as i64));
+            }
+            return Ok(Value::Int(0));
+        }
+
+        if resolved_name == "item" {
+            if args.is_empty() { return Err("item requires tensor".into()); }
+            match &args[0] {
+                Value::Tensor(t) => {
+                    let val = t.data.first().copied().unwrap_or(0.0);
+                    return Ok(Value::Float(val));
+                }
+                Value::Float(f) => return Ok(Value::Float(*f)),
+                Value::Int(i) => return Ok(Value::Float(*i as f64)),
+                _ => return Err("item expects Tensor, Float, or Int".into()),
+            }
+        }
+
+        if resolved_name == "min_max_scale" {
+            if args.is_empty() { return Err("min_max_scale requires tensor".into()); }
+            let t = match &args[0] { Value::Tensor(t) => t, _ => return Err("min_max_scale expects Tensor".into()) };
+            if t.shape.len() < 2 {
+                let min_val = t.data.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_val = t.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let range = if (max_val - min_val).abs() > 1e-12 { max_val - min_val } else { 1.0 };
+                let scaled: Vec<f64> = t.data.iter().map(|x| (x - min_val) / range).collect();
+                let mut res = Tensor::new(scaled, t.shape.clone());
+                res.id = self.tape.alloc_id();
+                return Ok(Value::Tensor(res));
+            }
+            let rows = t.shape[0];
+            let cols = t.shape[1];
+            let mut mins = vec![f64::INFINITY; cols];
+            let mut maxs = vec![f64::NEG_INFINITY; cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    let val = t.data[r * cols + c];
+                    if val < mins[c] { mins[c] = val; }
+                    if val > maxs[c] { maxs[c] = val; }
+                }
+            }
+            let mut scaled = vec![0.0; rows * cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    let range = if (maxs[c] - mins[c]).abs() > 1e-12 { maxs[c] - mins[c] } else { 1.0 };
+                    scaled[r * cols + c] = (t.data[r * cols + c] - mins[c]) / range;
+                }
+            }
+            let mut res = Tensor::new(scaled, vec![rows, cols]);
+            res.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(res));
+        }
+
+        if resolved_name == "standardize" {
+            if args.is_empty() { return Err("standardize requires tensor".into()); }
+            let t = match &args[0] { Value::Tensor(t) => t, _ => return Err("standardize expects Tensor".into()) };
+            let rows = if t.shape.len() >= 2 { t.shape[0] } else { 1 };
+            let cols = if t.shape.len() >= 2 { t.shape[1] } else { t.data.len() };
+            let mut means = vec![0.0; cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    means[c] += t.data[r * cols + c];
+                }
+            }
+            for c in 0..cols { means[c] /= rows as f64; }
+            let mut stds = vec![0.0; cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    let diff = t.data[r * cols + c] - means[c];
+                    stds[c] += diff * diff;
+                }
+            }
+            for c in 0..cols {
+                stds[c] = (stds[c] / rows as f64).sqrt();
+                if stds[c] < 1e-12 { stds[c] = 1.0; }
+            }
+            let mut out = vec![0.0; rows * cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    out[r * cols + c] = (t.data[r * cols + c] - means[c]) / stds[c];
+                }
+            }
+            let mut res = Tensor::new(out, t.shape.clone());
+            res.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(res));
+        }
+
+        if resolved_name == "cosine_sim" {
+            if args.len() < 2 { return Err("cosine_sim requires (a, b)".into()); }
+            let (t1, t2) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a, b),
+                _ => return Err("cosine_sim requires two tensors".into()),
+            };
+            let n = t1.data.len().min(t2.data.len());
+            let mut dot = 0.0;
+            let mut norm1 = 0.0;
+            let mut norm2 = 0.0;
+            for i in 0..n {
+                let x = t1.data[i];
+                let y = t2.data[i];
+                dot += x * y;
+                norm1 += x * x;
+                norm2 += y * y;
+            }
+            let denom = norm1.sqrt() * norm2.sqrt();
+            let sim = if denom > 1e-12 { dot / denom } else { 0.0 };
+            return Ok(Value::Float(sim));
+        }
+
+        if resolved_name == "euclidean_dist" {
+            if args.len() < 2 { return Err("euclidean_dist requires (a, b)".into()); }
+            let (t1, t2) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a, b),
+                _ => return Err("euclidean_dist requires two tensors".into()),
+            };
+            let n = t1.data.len().min(t2.data.len());
+            let mut sum_sq = 0.0;
+            for i in 0..n {
+                let diff = t1.data[i] - t2.data[i];
+                sum_sq += diff * diff;
+            }
+            return Ok(Value::Float(sum_sq.sqrt()));
+        }
+
+        if resolved_name == "dot" {
+            if args.len() < 2 { return Err("dot requires (a, b)".into()); }
+            let (t1, t2) = match (&args[0], &args[1]) {
+                (Value::Tensor(a), Value::Tensor(b)) => (a, b),
+                _ => return Err("dot requires two tensors".into()),
+            };
+            let n = t1.data.len().min(t2.data.len());
+            let mut sum = 0.0;
+            for i in 0..n {
+                sum += t1.data[i] * t2.data[i];
+            }
+            return Ok(Value::Float(sum));
+        }
+
+        if resolved_name == "norm" {
+            if args.is_empty() { return Err("norm requires a tensor".into()); }
+            let t = match &args[0] {
+                Value::Tensor(a) => a,
+                _ => return Err("norm requires a tensor".into()),
+            };
+            let sum_sq: f64 = t.data.iter().map(|x| x * x).sum();
+            return Ok(Value::Float(sum_sq.sqrt()));
+        }
+
+        if resolved_name == "argmax" {
+            if args.is_empty() { return Err("argmax requires a tensor".into()); }
+            let t = match &args[0] { Value::Tensor(a) => a, _ => return Err("argmax requires a tensor".into()) };
+            let mut max_idx = 0;
+            let mut max_val = f64::NEG_INFINITY;
+            for (i, &val) in t.data.iter().enumerate() {
+                if val > max_val { max_val = val; max_idx = i; }
+            }
+            return Ok(Value::Int(max_idx as i64));
+        }
+
+        if resolved_name == "argmin" {
+            if args.is_empty() { return Err("argmin requires a tensor".into()); }
+            let t = match &args[0] { Value::Tensor(a) => a, _ => return Err("argmin requires a tensor".into()) };
+            let mut min_idx = 0;
+            let mut min_val = f64::INFINITY;
+            for (i, &val) in t.data.iter().enumerate() {
+                if val < min_val { min_val = val; min_idx = i; }
+            }
+            return Ok(Value::Int(min_idx as i64));
+        }
+
+        if resolved_name == "WorkingMemory" {
+            let dim = if !args.is_empty() { args[0].as_int() as usize } else { 64 };
+            let slots = if args.len() >= 2 { args[1].as_int() as usize } else { 8 };
+            return Ok(Value::WorkingMemory(std::rc::Rc::new(std::cell::RefCell::new(
+                crate::memory::WorkingMemoryData::new(dim, slots)
+            ))));
+        }
+
+        if resolved_name == "EpisodicMemory" {
+            let dim = if !args.is_empty() { args[0].as_int() as usize } else { 64 };
+            let capacity = if args.len() >= 2 { args[1].as_int() as usize } else { 100 };
+            let decay = if args.len() >= 3 { args[2].as_float() } else { 0.01 };
+            return Ok(Value::EpisodicMemory(std::rc::Rc::new(std::cell::RefCell::new(
+                crate::memory::EpisodicMemoryData::new(dim, capacity, Some(decay))
+            ))));
+        }
+
+        if resolved_name == "Stream" {
+            let cap = if !args.is_empty() { args[0].as_int() as usize } else { 100 };
+            return Ok(Value::Stream(std::rc::Rc::new(std::cell::RefCell::new(
+                StreamData::new(cap)
+            ))));
+        }
+
+        if resolved_name == "Uncertain" || resolved_name == "UNCERTAIN" {
+            let val = if !args.is_empty() { args[0].as_float() } else { 0.0 };
+            let std = if args.len() >= 2 { args[1].as_float() } else { 1.0 };
+            let conf = if args.len() >= 3 { args[2].as_float() } else { 0.95 };
+            return Ok(Value::Uncertain { value: val, std, confidence: conf });
+        }
+
         if resolved_name == "load_ohlcv" {
             if args.is_empty() {
                 return Err("load_ohlcv requires a file path argument".into());
@@ -1934,6 +3627,51 @@ impl VM {
             let mut t = Tensor::new(data, vec![1, size]);
             t.id = self.tape.alloc_id();
             return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "byte_encode" {
+            if args.is_empty() {
+                return Err("byte_encode requires at least 1 argument: (string, [max_bytes])".into());
+            }
+            let s = match &args[0] {
+                Value::Str(st) => st.clone(),
+                other => other.display(),
+            };
+            let bytes = s.as_bytes();
+            let len = if args.len() >= 2 {
+                args[1].as_int() as usize
+            } else {
+                bytes.len()
+            };
+            let mut data = vec![0.0f64; len];
+            for (i, &b) in bytes.iter().take(len).enumerate() {
+                data[i] = b as f64;
+            }
+            let mut t = Tensor::new(data, vec![1, len]);
+            t.id = self.tape.alloc_id();
+            return Ok(Value::Tensor(t));
+        }
+
+        if resolved_name == "byte_decode" {
+            if args.is_empty() {
+                return Err("byte_decode requires 1 argument: (tensor)".into());
+            }
+            let t = match &args[0] {
+                Value::Tensor(t) => t,
+                other => return Err(format!("byte_decode expects Tensor, got {:?}", other)),
+            };
+            let mut bytes = Vec::new();
+            for &val in &t.data[..] {
+                let b = val.round() as i64;
+                if b >= 0 && b <= 255 {
+                    bytes.push(b as u8);
+                }
+            }
+            while bytes.last() == Some(&0) {
+                bytes.pop();
+            }
+            let decoded = String::from_utf8_lossy(&bytes).to_string();
+            return Ok(Value::Str(decoded));
         }
 
         if resolved_name == "forget" {
@@ -2593,6 +4331,81 @@ impl VM {
                 };
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
+            IROp::Pow => {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let res = match (&a, &b) {
+                    (Value::Tensor(ta), Value::Tensor(tb)) => {
+                        let r = self.tape.pow(ta, tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Tensor(ta), Value::Float(y)) => {
+                        let mut tb = Tensor::full(&ta.shape, *y);
+                        tb.id = self.tape.alloc_id();
+                        let r = self.tape.pow(ta, &tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Tensor(ta), Value::Int(y)) => {
+                        let mut tb = Tensor::full(&ta.shape, *y as f64);
+                        tb.id = self.tape.alloc_id();
+                        let r = self.tape.pow(ta, &tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Int(x), Value::Tensor(tb)) => {
+                        let mut ta = Tensor::full(&tb.shape, *x as f64);
+                        ta.id = self.tape.alloc_id();
+                        let r = self.tape.pow(&ta, tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Float(x), Value::Tensor(tb)) => {
+                        let mut ta = Tensor::full(&tb.shape, *x);
+                        ta.id = self.tape.alloc_id();
+                        let r = self.tape.pow(&ta, tb);
+                        Ok(Value::Tensor(r))
+                    }
+                    (Value::Int(x), Value::Int(y)) => {
+                        if *y >= 0 && *y <= 64 {
+                            match x.checked_pow(*y as u32) {
+                                Some(p) => Ok(Value::Int(p)),
+                                None => {
+                                    let big_x = BigInt::from(*x);
+                                    Ok(Value::BigInt(big_x.pow(*y as u32)))
+                                }
+                            }
+                        } else if *y < 0 {
+                            Ok(Value::Float((*x as f64).powi(*y as i32)))
+                        } else {
+                            let big_x = BigInt::from(*x);
+                            Ok(Value::BigInt(big_x.pow(*y as u32)))
+                        }
+                    }
+                    (Value::BigInt(x), Value::Int(y)) => {
+                        if *y >= 0 && *y <= 100_000 {
+                            Ok(Value::BigInt(x.pow(*y as u32)))
+                        } else if *y < 0 {
+                            Ok(Value::Float(x.to_f64().unwrap_or(0.0).powi(*y as i32)))
+                        } else {
+                            Err("Exponent too large for BigInt pow".to_string())
+                        }
+                    }
+                    (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x.powf(*y))),
+                    (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x.powi(*y as i32))),
+                    (Value::Int(x), Value::Float(y)) => Ok(Value::Float((*x as f64).powf(*y))),
+                    (Value::Uncertain { value: v, std, confidence }, Value::Float(y)) => {
+                        let new_v = v.powf(*y);
+                        let new_std = (y * v.powf(*y - 1.0) * std).abs();
+                        Ok(Value::Uncertain { value: new_v, std: new_std, confidence: *confidence })
+                    }
+                    (Value::Uncertain { value: v, std, confidence }, Value::Int(y)) => {
+                        let yf = *y as f64;
+                        let new_v = v.powf(yf);
+                        let new_std = (yf * v.powf(yf - 1.0) * std).abs();
+                        Ok(Value::Uncertain { value: new_v, std: new_std, confidence: *confidence })
+                    }
+                    _ => Ok(Value::Float(a.as_float().powf(b.as_float()))),
+                };
+                res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
+            }
             IROp::Neg => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = match &a {
@@ -2658,6 +4471,59 @@ impl VM {
                 res.map(|v| v.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps)))
             }
 
+            IROp::MatMulAdd => {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let (bias, bias_wraps) = get_stripped(&node.inputs[2]);
+                let wraps = Value::combine_wrappers(Value::combine_wrappers(a_wraps, b_wraps), bias_wraps);
+                match (&a, &b) {
+                    (Value::Tensor(ta), Value::Tensor(tb)) => {
+                        let mut r = self.tape.matmul(ta, tb);
+                        if let Value::Tensor(tbias) = &bias {
+                            r = crate::tensor::tensor_add(&r, tbias);
+                        } else if let Value::Float(fbias) = bias {
+                            r = r.map(|x| x + fbias);
+                        }
+                        Ok(Value::Tensor(r).apply_wrappers(wraps))
+                    }
+                    _ => Err("MatMulAdd requires tensor operands".into()),
+                }
+            }
+
+            IROp::MatMulReLU => {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let wraps = Value::combine_wrappers(a_wraps, b_wraps);
+                match (&a, &b) {
+                    (Value::Tensor(ta), Value::Tensor(tb)) => {
+                        let r = self.tape.matmul(ta, tb);
+                        let r_relu = self.tape.relu(&r);
+                        Ok(Value::Tensor(r_relu).apply_wrappers(wraps))
+                    }
+                    _ => Err("MatMulReLU requires tensor operands".into()),
+                }
+            }
+
+            IROp::MatMulAddReLU => {
+                let (a, a_wraps) = get_stripped(&node.inputs[0]);
+                let (b, b_wraps) = get_stripped(&node.inputs[1]);
+                let (bias, bias_wraps) = get_stripped(&node.inputs[2]);
+                let wraps = Value::combine_wrappers(Value::combine_wrappers(a_wraps, b_wraps), bias_wraps);
+                match (&a, &b) {
+                    (Value::Tensor(ta), Value::Tensor(tb)) => {
+                        let mut r = self.tape.matmul(ta, tb);
+                        if let Value::Tensor(tbias) = &bias {
+                            r = crate::tensor::tensor_add(&r, tbias);
+                        } else if let Value::Float(fbias) = bias {
+                            r = r.map(|x| x + fbias);
+                        }
+                        let r_relu = self.tape.relu(&r);
+                        Ok(Value::Tensor(r_relu).apply_wrappers(wraps))
+                    }
+                    _ => Err("MatMulAddReLU requires tensor operands".into()),
+                }
+            }
+
             IROp::ReLU => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = if let Value::Tensor(t) = &a {
@@ -2684,6 +4550,39 @@ impl VM {
                 let res = if let Value::Tensor(t) = &a {
                     Ok(Value::Tensor(self.tape.tanh(t)))
                 } else { Ok(Value::Float(a.as_float().tanh())) };
+                res.map(|v| v.apply_wrappers(wraps))
+            }
+            IROp::Exp => {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
+                    Ok(Value::Tensor(self.tape.exp(t)))
+                } else {
+                    Ok(Value::Float(a.as_float().exp()))
+                };
+                res.map(|v| v.apply_wrappers(wraps))
+            }
+            IROp::Log => {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
+                    Ok(Value::Tensor(self.tape.log(t)))
+                } else {
+                    let f = a.as_float();
+                    if f <= 0.0 {
+                        return Err("log argument must be strictly positive".into());
+                    }
+                    Ok(Value::Float(f.ln()))
+                };
+                res.map(|v| v.apply_wrappers(wraps))
+            }
+            IROp::Abs => {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = if let Value::Tensor(t) = &a {
+                    Ok(Value::Tensor(t.map(|x| x.abs())))
+                } else if let Value::Int(i) = &a {
+                    Ok(Value::Int(i.abs()))
+                } else {
+                    Ok(Value::Float(a.as_float().abs()))
+                };
                 res.map(|v| v.apply_wrappers(wraps))
             }
             IROp::Softmax { dim: _ } => {
@@ -2726,20 +4625,59 @@ impl VM {
                     if let Value::Tensor(t) = &val {
                         let parameter_ids = self.collect_parameter_ids();
                         self.tape.parameter_ids = parameter_ids;
-                        self.tape.backward(t.id);
+                        let grads = self.tape.backward_differentiable(t.id);
                         // Find the gradient for the requested parameter
                         if let Some(ref param_name) = wrt {
-                            if let Some(frame) = self.call_stack.last() {
-                                if let Some(Value::Tensor(param)) = frame.locals.get(param_name) {
-                                    if let Some(grad_data) = self.tape.get_grad(param.id) {
-                                        return Ok(Value::Tensor(Tensor::new(grad_data.clone(), param.shape.clone())));
-                                    }
+                            if let Some(param) = self.find_param_tensor(param_name) {
+                                if let Some(grad_t) = grads.get(&param.id) {
+                                    return Ok(Value::Tensor(grad_t.clone()));
+                                }
+                                if let Some(grad_data) = self.tape.get_grad(param.id) {
+                                    return Ok(Value::Tensor(Tensor::new(grad_data.clone(), param.shape.clone())));
                                 }
                             }
                         }
                         // Return gradient of loss itself
+                        if let Some(grad_t) = grads.get(&t.id) {
+                            return Ok(Value::Tensor(grad_t.clone()));
+                        }
                         if let Some(grad_data) = self.tape.get_grad(t.id) {
                             return Ok(Value::Tensor(Tensor::new(grad_data.clone(), t.shape.clone())));
+                        }
+                    }
+                }
+                Ok(Value::Tensor(Tensor::zeros(&[1])))
+            }
+            IROp::Hessian { wrt } => {
+                if let Some(input_id) = node.inputs.first() {
+                    let (val, _wraps) = get_stripped(input_id);
+                    if let Value::Tensor(loss_t) = &val {
+                        let target_param = if let Some(ref param_name) = wrt {
+                            self.find_param_tensor(param_name)
+                        } else {
+                            None
+                        };
+                        if let Some(param) = target_param {
+                            let h = self.tape.hessian(loss_t.id, param.id);
+                            return Ok(Value::Tensor(h));
+                        }
+                    }
+                }
+                Ok(Value::Tensor(Tensor::zeros(&[1, 1])))
+            }
+            IROp::HVP { wrt } => {
+                if let Some(loss_input_id) = node.inputs.first() {
+                    let (val, _wraps) = get_stripped(loss_input_id);
+                    if let Value::Tensor(loss_t) = &val {
+                        let target_param = if let Some(ref param_name) = wrt {
+                            self.find_param_tensor(param_name)
+                        } else {
+                            None
+                        };
+                        let v_val = node.inputs.get(1).map(|id| get_stripped(id).0);
+                        if let (Some(param), Some(Value::Tensor(v_tensor))) = (target_param, v_val) {
+                            let hv = self.tape.hessian_vector_product(loss_t.id, param.id, &v_tensor);
+                            return Ok(Value::Tensor(hv));
                         }
                     }
                 }
@@ -2840,20 +4778,48 @@ impl VM {
                 } else { Ok(Value::Float(1.0)) }
             }
 
-            IROp::TemporalBefore { .. } => {
+            IROp::TemporalBefore { t } => {
                 let val = get(&node.inputs[0]);
+                if let Value::Stream(s) = &val {
+                    let k = if node.inputs.len() > 1 {
+                        get(&node.inputs[1]).as_int() as usize
+                    } else if *t != 0 {
+                        get(t).as_int() as usize
+                    } else {
+                        1
+                    };
+                    let elem = s.borrow().lag(k)?;
+                    return Ok(Value::Temporal {
+                        data: Box::new(elem),
+                        direction: "past_to_future".into(),
+                    });
+                }
                 if let Value::Temporal { data, direction } = &val {
                     Ok(Value::Temporal { data: data.clone(), direction: direction.clone() })
                 } else { Ok(val) }
             }
-            IROp::TemporalSnapshot { .. } => {
+            IROp::TemporalSnapshot { at } => {
                 let val = get(&node.inputs[0]);
+                if let Value::Stream(s) = &val {
+                    let k = if node.inputs.len() > 1 {
+                        get(&node.inputs[1]).as_int() as usize
+                    } else if *at != 0 {
+                        get(at).as_int() as usize
+                    } else {
+                        0
+                    };
+                    let elem = s.borrow().lag(k)?;
+                    return Ok(elem);
+                }
                 if let Value::Temporal { data, .. } = &val {
                     Ok(*data.clone())
                 } else { Ok(val) }
             }
             IROp::TemporalAfter { .. } => {
                 let val = get(&node.inputs[0]);
+                if let Value::Stream(_) = &val {
+                    return Err("Temporal Violation: Cannot lead on live Stream — future data does not exist".into());
+                }
                 if let Value::Temporal { data, direction } = &val {
                     let new_dir = if direction == "past_to_future" { "future_to_past" } else { "past_to_future" };
                     Ok(Value::Temporal { data: data.clone(), direction: new_dir.into() })
@@ -2917,18 +4883,61 @@ impl VM {
 
             IROp::MemoryStore => {
                 self.effect_log.push("memory_store".into());
+                let mem_val = get(&node.inputs[0]);
+                let item_val = get(&node.inputs[1]);
+                match mem_val {
+                    Value::EpisodicMemory(em) => {
+                        let (key, val) = if let Value::Tensor(ref t) = item_val {
+                            (t.clone(), item_val.clone())
+                        } else {
+                            (Tensor::zeros(&[em.borrow().dim]), item_val.clone())
+                        };
+                        em.borrow_mut().store(&key, val);
+                    }
+                    Value::WorkingMemory(wm) => {
+                        if let Value::Tensor(ref t) = item_val {
+                            wm.borrow_mut().write(t);
+                        }
+                    }
+                    _ => {}
+                }
                 Ok(Value::Void)
             }
-            IROp::MemoryRecall { k: _ } => {
-                Ok(Value::List(vec![]))
+            IROp::MemoryRecall { k } => {
+                self.effect_log.push("memory_recall".into());
+                let mem_val = get(&node.inputs[0]);
+                let query_val = get(&node.inputs[1]);
+                match mem_val {
+                    Value::EpisodicMemory(em) => {
+                        if let Value::Tensor(ref q) = query_val {
+                            let res = em.borrow_mut().recall(q, *k as usize);
+                            Ok(Value::List(res))
+                        } else {
+                            Ok(Value::List(vec![]))
+                        }
+                    }
+                    Value::WorkingMemory(wm) => {
+                        if let Value::Tensor(ref q) = query_val {
+                            let res = wm.borrow().read(q);
+                            Ok(Value::Tensor(res))
+                        } else {
+                            Ok(Value::Void)
+                        }
+                    }
+                    _ => Ok(Value::List(vec![])),
+                }
             }
             IROp::Search { strategy, max_iter } => {
                 Ok(Value::Str(format!("search: strategy={}, max_iter={}", strategy, max_iter)))
             }
 
             IROp::Print => {
-                let val = get(&node.inputs[0]);
-                let disp = val.display();
+                let disp = if node.inputs.is_empty() {
+                    String::new()
+                } else {
+                    let parts: Vec<String> = node.inputs.iter().map(|id| get(id).display()).collect();
+                    parts.join(" ")
+                };
                 println!("{}", disp);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 self.stdout_log.push(disp);
@@ -2937,8 +4946,12 @@ impl VM {
             }
 
             IROp::PrintInline => {
-                let val = get(&node.inputs[0]);
-                let disp = val.display();
+                let disp = if node.inputs.is_empty() {
+                    String::new()
+                } else {
+                    let parts: Vec<String> = node.inputs.iter().map(|id| get(id).display()).collect();
+                    parts.join(" ")
+                };
                 print!("{}", disp);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 self.stdout_log.push(disp);
@@ -2954,6 +4967,28 @@ impl VM {
                 io::stdin().read_line(&mut input_str).unwrap();
                 self.effect_log.push("io".into());
                 Ok(Value::Str(input_str.trim().to_string()))
+            }
+
+            IROp::ParseFloat => {
+                let s = get(&node.inputs[0]);
+                let val: f64 = match s {
+                    Value::Str(text) => text.trim().parse::<f64>().unwrap_or(0.0),
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f,
+                    _ => 0.0,
+                };
+                Ok(Value::Float(val))
+            }
+
+            IROp::ParseInt => {
+                let s = get(&node.inputs[0]);
+                let val: i64 = match s {
+                    Value::Str(text) => text.trim().parse::<i64>().unwrap_or(0),
+                    Value::Int(i) => i,
+                    Value::Float(f) => f as i64,
+                    _ => 0,
+                };
+                Ok(Value::Int(val))
             }
 
             IROp::EmbedString => {
@@ -2982,47 +5017,17 @@ impl VM {
                         use std::sync::OnceLock;
                         static LM_MODEL: OnceLock<crate::neuron_lm::NeuronLM> = OnceLock::new();
                         let model = LM_MODEL.get_or_init(|| {
-                            // Try GGUF files first (Ollama blobs)
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                // Check for GGUF model file specified by env var or known paths
-                                let gguf_paths = vec![
-                                    std::env::var("NEURON_GGUF_MODEL").unwrap_or_default(),
-                                    "data/model.gguf".to_string(),
-                                ];
-                                // Also scan Ollama blobs for GGUF files
-                                let home = std::env::var("USERPROFILE")
-                                    .or_else(|_| std::env::var("HOME"))
-                                    .unwrap_or_default();
-                                let blobs_dir = format!("{}/.ollama/models/blobs", home);
-                                if let Ok(entries) = std::fs::read_dir(&blobs_dir) {
-                                    let mut blob_files: Vec<_> = entries
-                                        .filter_map(|e| e.ok())
-                                        .filter(|e| e.metadata().map(|m| m.len() > 100_000_000).unwrap_or(false))
-                                        .collect();
-                                    // Sort by size ascending — prefer smaller models
-                                    blob_files.sort_by_key(|e| e.metadata().map(|m| m.len()).unwrap_or(u64::MAX));
-                                    for entry in &blob_files {
-                                        let path = entry.path();
-                                        let path_str = path.to_string_lossy().to_string();
-                                        eprintln!("[NeuronLM] Trying GGUF blob: {} ({} MB)",
-                                            path_str, entry.metadata().map(|m| m.len() / 1024 / 1024).unwrap_or(0));
-                                        match crate::neuron_lm::NeuronLM::new_from_gguf_file(&path_str) {
-                                            Ok(m) => return m,
-                                            Err(e) => eprintln!("[NeuronLM] Skipping: {}", e),
-                                        }
-                                    }
-                                }
-                                for p in &gguf_paths {
-                                    if !p.is_empty() && std::path::Path::new(p).exists() {
-                                        match crate::neuron_lm::NeuronLM::new_from_gguf_file(p) {
-                                            Ok(m) => return m,
-                                            Err(e) => eprintln!("[NeuronLM] GGUF load failed: {}", e),
-                                        }
+                                let gguf_env = std::env::var("NEURON_GGUF_MODEL").unwrap_or_default();
+                                if !gguf_env.is_empty() && std::path::Path::new(&gguf_env).exists() {
+                                    match crate::neuron_lm::NeuronLM::new_from_gguf_file(&gguf_env) {
+                                        Ok(m) => return m,
+                                        Err(e) => eprintln!("[NeuronLM] External GGUF adapter load failed: {}", e),
                                     }
                                 }
                             }
-                            // Fallback to f32 disk weights or demo model
+                            // Default to NEURON's native token-free byte substrate
                             crate::neuron_lm::NeuronLM::new()
                         });
                         let reply = model.generate_reply(&s);
@@ -3577,6 +5582,37 @@ else:
         self.execute(entry, vec![])
     }
 
+    pub fn find_param_tensor(&self, name: &str) -> Option<Tensor> {
+        let parts: Vec<&str> = name.split('.').collect();
+        let root = parts[0];
+        let root_val = self.call_stack.last().and_then(|f| f.locals.get(root).cloned())
+            .or_else(|| self.globals.get(root).cloned());
+
+        if let Some(mut current) = root_val {
+            for part in &parts[1..] {
+                match current {
+                    Value::Model { ref fields, .. } => {
+                        let next = if let Ok(map) = fields.try_borrow() {
+                            map.get(*part).cloned()
+                        } else {
+                            None
+                        };
+                        if let Some(n) = next {
+                            current = n;
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            if let Value::Tensor(t) = current {
+                return Some(t);
+            }
+        }
+        None
+    }
+
     pub fn collect_parameter_ids(&self) -> std::collections::HashSet<usize> {
         let mut ids = std::collections::HashSet::new();
         // Traverse globals
@@ -3607,6 +5643,26 @@ else:
             Value::List(items) | Value::Tuple(items) => {
                 for item in items {
                     self.collect_tensor_ids_from_value(item, ids);
+                }
+            }
+            Value::WorkingMemory(wm) => {
+                if let Ok(wm_ref) = wm.try_borrow() {
+                    ids.insert(wm_ref.matrix.id);
+                }
+            }
+            Value::EpisodicMemory(em) => {
+                if let Ok(em_ref) = em.try_borrow() {
+                    for entry in &em_ref.entries {
+                        ids.insert(entry.key.id);
+                        self.collect_tensor_ids_from_value(&entry.value, ids);
+                    }
+                }
+            }
+            Value::Stream(s) => {
+                if let Ok(s_ref) = s.try_borrow() {
+                    for v in &s_ref.buffer {
+                        self.collect_tensor_ids_from_value(v, ids);
+                    }
                 }
             }
             _ => {}
@@ -3704,7 +5760,10 @@ else:
 
     fn update_tensor_in_place(&mut self, t: &mut Tensor, lr: f64, method: &str) {
         if let Some(grad) = self.tape.get_grad(t.id) {
-            let n = t.numel();
+            let n = t.numel().min(grad.len());
+            if n == 0 {
+                return;
+            }
             match method {
                 "adam" | "adamw" => {
                     let step = self.optimizer_step;
@@ -4213,6 +6272,48 @@ fn convert_causal_results(results: HashMap<String, (f64, f64)>) -> Value {
         name: "CausalInferenceResult".into(),
         fields,
     }
+}
+
+fn instantiate_causal_model(globals: &HashMap<String, Value>, model_name: &str, variables: &[String]) -> crate::causal::CausalModel {
+    let weights = vec![vec![0.0; variables.len()]; variables.len()];
+    let noise_vars = vec![1.0; variables.len()];
+    let noise_means = vec![0.0; variables.len()];
+    let mut model = crate::causal::CausalModel::new(variables.to_vec(), weights, noise_vars, noise_means);
+
+    if let Some(Value::Str(ref global_val)) = globals.get(model_name) {
+        if global_val.starts_with("causal_model:") {
+            let parts: Vec<&str> = global_val.split(':').collect();
+            for part in parts {
+                if part.starts_with("edges=") {
+                    let edges_str = &part["edges=".len()..];
+                    for edge in edges_str.split(',') {
+                        if edge.contains("<->") {
+                            let nodes: Vec<&str> = edge.split("<->").collect();
+                            if nodes.len() == 2 {
+                                model.add_bidirected(nodes[0].trim(), nodes[1].trim());
+                            }
+                        } else if edge.contains("->") {
+                            let (edge_part, weight_val) = if let Some(eq_pos) = edge.find('=') {
+                                (&edge[..eq_pos], edge[eq_pos+1..].parse::<f64>().unwrap_or(1.0))
+                            } else {
+                                (edge, 1.0)
+                            };
+                            let nodes: Vec<&str> = edge_part.split("->").collect();
+                            if nodes.len() == 2 {
+                                if let (Some(&u), Some(&v)) = (
+                                    model.name_to_idx.get(nodes[0].trim()),
+                                    model.name_to_idx.get(nodes[1].trim()),
+                                ) {
+                                    model.weights[u][v] = weight_val;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    model
 }
 
 #[cfg(test)]

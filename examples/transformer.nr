@@ -36,6 +36,8 @@ model Transformer(d_model: Int, n_heads: Int, n_layers: Int):
 
 fn main():
   let tf_model = Transformer(512, 8, 6)
-  let tokens = ones(1, 512)
-  let logits = tf_model.forward(tokens)
+  // Token-free byte stream ingestion: raw UTF-8 bytes mapped directly into input representation
+  let byte_input = byte_encode("NEURON Token-Free Cognitive Architecture", 512)
+  let logits = tf_model.forward(byte_input)
   print(logits)
+

@@ -166,3 +166,129 @@ fn main() -> Tensor[2, 2]:
     set_simulate_cuda(false);
 }
 
+#[test]
+fn test_cuda_transcendental_fusion_codegen() {
+    let src = r#"
+fn test_transcendental(x: Tensor[4, 4]) -> Tensor[4, 4]:
+  let a = exp(x)
+  let b = log(a + 1.0)
+  let c = abs(b - 2.0)
+  let d = sqrt(c)
+  return d
+"#;
+
+    let compile_res = compile(src, "test_gpu_trans.nr").unwrap();
+    let func = compile_res.ir.functions.iter().find(|f| f.name == "test_transcendental").unwrap();
+
+    let groups = find_fused_groups(func, &[]);
+    assert!(!groups.is_empty(), "Expected fused groups for transcendental operations");
+
+    let kernels = generate_cuda_kernels(func, &[]);
+    assert_eq!(kernels.len(), 1, "Expected 1 fused transcendental CUDA kernel");
+
+    let k = &kernels[0];
+    assert!(k.code.contains("exp("), "Expected exp() in CUDA kernel");
+    assert!(k.code.contains("log("), "Expected log() in CUDA kernel");
+    assert!(k.code.contains("fabs("), "Expected fabs() in CUDA kernel");
+    assert!(k.code.contains("sqrt("), "Expected sqrt() in CUDA kernel");
+}
+
+#[test]
+fn test_matmul_epilogue_fusion_optimization() {
+    use neuron_compiler::optimize::optimize_program;
+
+    let src = r#"
+fn linear_relu(x: Tensor[2, 3], w: Tensor[3, 2], b: Tensor[2, 2]) -> Tensor[2, 2]:
+  let mm = x @ w
+  let bias_added = mm + b
+  let activated = relu(bias_added)
+  return activated
+
+fn main() -> Tensor[2, 2]:
+  let x = ones(2, 3)
+  let w = ones(3, 2)
+  let b = zeros(2, 2) - 1.0
+  let out = linear_relu(x, w, b)
+  return out
+"#;
+
+    let mut compile_res = compile(src, "test_matmul_fused.nr").unwrap();
+    optimize_program(&mut compile_res.ir);
+
+    // Verify that linear_relu has MatMulAddReLU fused op
+    let lr_func = compile_res.ir.functions.iter().find(|f| f.name == "linear_relu").unwrap();
+    let has_fused_matmul = lr_func.blocks.iter().any(|b| {
+        b.instructions.iter().any(|n| matches!(n.op, IROp::MatMulAddReLU))
+    });
+    assert!(has_fused_matmul, "Expected MatMulAddReLU fused operation in optimized IR");
+
+    // Execute in VM to verify mathematical precision
+    // x = [1, 1, 1], w = [1, 1; 1, 1; 1, 1] => mm = [3, 3; 3, 3]
+    // b = [-1, -1; -1, -1] => bias_added = [2, 2; 2, 2]
+    // relu([2, 2; 2, 2]) = [2, 2; 2, 2]
+    let mut vm = VM::new();
+    vm.load(&compile_res.ir);
+    let res = vm.run_main().unwrap();
+    let t = res.as_tensor().unwrap();
+    assert_eq!(t.shape, vec![2, 2]);
+    for i in 0..t.numel() {
+        let val = t.data[i];
+        assert!((val - 2.0).abs() < 1e-6, "Expected 2.0, got {}", val);
+    }
+}
+
+#[test]
+fn test_triton_kernel_fusion_codegen() {
+    use neuron_compiler::triton_codegen::{
+        generate_triton_kernels,
+        generate_triton_fused_softmax,
+        generate_triton_fused_layernorm,
+        generate_triton_fused_attention,
+    };
+
+    let src = r#"
+fn triton_target(x: Tensor[8, 8]) -> Tensor[8, 8]:
+  let y = -x
+  let z = relu(y)
+  let w = exp(z) + 1.0
+  return w
+"#;
+
+    let compile_res = compile(src, "test_triton.nr").unwrap();
+    let func = compile_res.ir.functions.iter().find(|f| f.name == "triton_target").unwrap();
+
+    let triton_kernels = generate_triton_kernels(func, &[]);
+    assert_eq!(triton_kernels.len(), 1, "Expected 1 fused Triton kernel");
+
+    let tk = &triton_kernels[0];
+    println!("Generated Triton Kernel Code:\n{}", tk.code);
+
+    // Verify structural Triton elements
+    assert!(tk.code.contains("@triton.jit"), "Expected @triton.jit decorator");
+    assert!(tk.code.contains("import triton.language as tl"), "Expected tl import");
+    assert!(tk.code.contains("tl.program_id(axis=0)"), "Expected program_id");
+    assert!(tk.code.contains("tl.arange(0, BLOCK_SIZE)"), "Expected block arange");
+    assert!(tk.code.contains("tl.load"), "Expected tl.load");
+    assert!(tk.code.contains("tl.store"), "Expected tl.store");
+    assert!(tk.code.contains("tl.maximum"), "Expected tl.maximum for ReLU");
+    assert!(tk.code.contains("tl.exp"), "Expected tl.exp for Exp");
+    assert!(tk.code.contains("def launch_"), "Expected Python launcher function");
+
+    // Test specialized templates
+    let softmax_code = generate_triton_fused_softmax("fused_softmax_v1");
+    assert!(softmax_code.contains("@triton.jit"));
+    assert!(softmax_code.contains("tl.max(row, axis=0)"));
+    assert!(softmax_code.contains("tl.sum(numerator, axis=0)"));
+
+    let layernorm_code = generate_triton_fused_layernorm("fused_layernorm_v1");
+    assert!(layernorm_code.contains("@triton.jit"));
+    assert!(layernorm_code.contains("rstd = 1.0 / tl.sqrt(var + eps)"));
+
+    let flash_attn_code = generate_triton_fused_attention("flash_attention_v2");
+    assert!(flash_attn_code.contains("@triton.jit"));
+    assert!(flash_attn_code.contains("tl.dot(q, k) * sm_scale"));
+    assert!(flash_attn_code.contains("tl.maximum(m_i, tl.max(qk, 1))"));
+    assert!(flash_attn_code.contains("acc += tl.dot(p.to(tl.float16), v)"));
+}
+
+

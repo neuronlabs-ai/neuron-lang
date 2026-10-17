@@ -15,6 +15,12 @@ libloading = { version = "0.8", optional = true }
 serde_json = "1.0"
 num-bigint = "0.5.1"
 num-traits = "0.2.19"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cranelift-codegen = "0.135.5"
+cranelift-jit = "0.135.5"
+cranelift-module = "0.135.5"
+cranelift-native = "0.135.5"
+cranelift-frontend = "0.135.5"
 
 [dev-dependencies]
 

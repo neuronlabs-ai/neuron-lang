@@ -442,8 +442,212 @@ f = getattr(df, 'shift')(-1)
 """
         tree = ast.parse(code)
         rule = T001_ShiftNegative()
+    def test_t016_merge_asof_nearest(self):
+        code = """
+import pandas as pd
+merged = pd.merge_asof(left, right, on='ts', direction='nearest')
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T016_MergeAsofDirection
+        rule = T016_MergeAsofDirection()
         diags = []
         for node in ast.walk(tree):
             diags.extend(rule.check_node(node, None))
-        assert any(d.code == "T001" for d in diags), "getattr(df, 'shift')(-1) must trigger T001"
+        assert any(d.code == "T016" for d in diags), "merge_asof with direction='nearest' must trigger T016"
+
+    def test_t016_merge_asof_backward_clean(self):
+        code = """
+import pandas as pd
+merged = pd.merge_asof(left, right, on='ts', direction='backward')
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T016_MergeAsofDirection
+        rule = T016_MergeAsofDirection()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(rule.check_node(node, None))
+        assert not diags, "merge_asof with direction='backward' must not trigger any diagnostic"
+
+    def test_t010_scaler_on_train_data_clean(self):
+        code = """
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+scaler.fit(X_train[features])
+model.fit(X_train, y_train)
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T010_FitBeforeSplit
+        rule = T010_FitBeforeSplit()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(rule.check_node(node, None))
+        assert not diags, f"Fitting or fit_transforming on training data must not trigger T010, got: {diags}"
+
+    def test_t010_scaler_on_full_dataset_flagged(self):
+        code = """
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df)
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T010_FitBeforeSplit
+        rule = T010_FitBeforeSplit()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(rule.check_node(node, None))
+        assert any(d.code == "T010" for d in diags), "fit_transform on full dataset must trigger T010"
+
+    def test_t017_regime_success_rate_target_laundering(self):
+        code = """
+df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+df['regime_success_rate'] = df.groupby('regime')['target'].transform('mean')
+X = df[['volatility', 'regime_success_rate']]
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T017_TargetLaundering, C002_TargetInFeatures
+        t017 = T017_TargetLaundering()
+        c002 = C002_TargetInFeatures()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(t017.check_node(node, None))
+            diags.extend(c002.check_node(node, None))
+        assert any(d.code == "T017" for d in diags), "Target groupby aggregation must trigger T017"
+        assert any(d.code == "C002" for d in diags), "regime_success_rate feature selection must trigger C002"
+
+    def test_provenance_concat_contamination(self):
+        code = """
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+X_train = pd.DataFrame({'a': [1, 2]})
+X_test = pd.DataFrame({'a': [3, 4]})
+
+X_train = pd.concat([X_train, X_test])
+scaler = StandardScaler()
+scaler.fit_transform(X_train)
+"""
+        tree = ast.parse(code)
+        tracker = TaintTracker()
+        results = tracker.analyze(tree, code.split('\n'))
+        assert any(d.code == "F002" for d in results), "Reassigned X_train with concatenated test data must trigger F002"
+        f002 = [d for d in results if d.code == "F002"][0]
+        assert "X_train" in f002.message
+        assert "test partition" in f002.message
+
+    def test_provenance_alias_and_reassignment(self):
+        code = """
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+X_eval = X_test
+X_train = pd.concat([X_train, X_eval])
+scaler = StandardScaler()
+scaler.fit(X_train)
+"""
+        tree = ast.parse(code)
+        tracker = TaintTracker()
+        results = tracker.analyze(tree, code.split('\n'))
+        assert any(d.code == "F002" for d in results), "Alias of test data in concat must trigger F002"
+
+    def test_provenance_helper_function(self):
+        code_leaky = """
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+def combine_folds(tr, te):
+    return pd.concat([tr, te])
+
+X_train = combine_folds(X_train, X_test)
+scaler = StandardScaler()
+scaler.fit_transform(X_train)
+"""
+        tree_leaky = ast.parse(code_leaky)
+        tracker = TaintTracker()
+        results_leaky = tracker.analyze(tree_leaky, code_leaky.split('\n'))
+        assert any(d.code == "F002" for d in results_leaky), "Helper function combining test data must trigger F002"
+
+        code_clean = """
+from sklearn.preprocessing import StandardScaler
+
+def clean_data(data):
+    return data.dropna()
+
+clean_train = clean_data(X_train)
+scaler = StandardScaler()
+scaler.fit_transform(clean_train)
+"""
+        tree_clean = ast.parse(code_clean)
+        tracker_clean = TaintTracker()
+        results_clean = tracker_clean.analyze(tree_clean, code_clean.split('\n'))
+        assert not any(d.code == "F002" for d in results_clean), "Clean helper function on training data must not trigger F002"
+
+    def test_t017_fold_local_target_encoding_clean(self):
+        code = """
+# Legitimate fold-local target encoding
+regime_stats = train_df.groupby('regime')['target'].mean()
+global_prior = train_df['target'].mean()
+
+train_df['regime_success_rate'] = train_df['regime'].map(regime_stats)
+test_df['regime_success_rate'] = test_df['regime'].map(regime_stats).fillna(global_prior)
+X_train = train_df[['volatility', 'regime_success_rate']]
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T017_TargetLaundering, C002_TargetInFeatures
+        t017 = T017_TargetLaundering()
+        c002 = C002_TargetInFeatures()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(t017.check_node(node, None))
+            diags.extend(c002.check_node(node, None))
+        assert not any(d.code == "T017" for d in diags), f"Fold-local target encoding must not trigger T017: {diags}"
+        assert not any(d.code == "C002" for d in diags), f"Fold-local target feature on train_df must not trigger C002: {diags}"
+
+    def test_t017_global_target_encoding_flagged(self):
+        code = """
+# Global target laundering across un-split dataset
+df['regime_success_rate'] = df.groupby('regime')['target'].transform('mean')
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T017_TargetLaundering
+        t017 = T017_TargetLaundering()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(t017.check_node(node, None))
+        assert any(d.code == "T017" for d in diags), "Global groupby transform on target must trigger T017"
+
+    def test_t017_unseen_regimes_inference_warning(self):
+        code = """
+regime_stats = train_df.groupby('regime')['target'].mean()
+# Missing .fillna() for unseen regimes at test inference time
+test_df['regime_success_rate'] = test_df['regime'].map(regime_stats)
+"""
+        tree = ast.parse(code)
+        from pycheck.rules import T017_TargetLaundering
+        t017 = T017_TargetLaundering()
+        diags = []
+        for node in ast.walk(tree):
+            diags.extend(t017.check_node(node, None))
+        assert any(d.code == "T017" and d.severity == "warning" for d in diags), "Mapping to test_df without fillna must trigger unseen regimes warning"
+
+    def test_provenance_full_pipeline_analyze_file(self, tmp_path):
+        test_file = tmp_path / "leaky_provenance.py"
+        test_file.write_text("""
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+X_train = pd.DataFrame({'a': [1, 2]})
+X_test = pd.DataFrame({'a': [3, 4]})
+
+X_train = pd.concat([X_train, X_test])
+scaler = StandardScaler()
+scaler.fit_transform(X_train)
+""", encoding='utf-8')
+        diagnostics, _ = analyze_file(str(test_file))
+        assert any(d['code'] == "F002" for d in diagnostics), f"Full analyze_file must detect F002, got: {diagnostics}"
+        f002 = [d for d in diagnostics if d['code'] == "F002"][0]
+        assert "X_train" in f002['message']
+        assert "test partition" in f002['message']
+
+
 

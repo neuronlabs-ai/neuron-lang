@@ -15,3 +15,5 @@ pub mod neuron_lm;
 pub mod gguf;
 pub mod jit_helpers;
 pub mod distributed;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod jit_cranelift;

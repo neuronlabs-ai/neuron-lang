@@ -15,21 +15,31 @@ fn run_jit(src: &str) -> Result<Value, String> {
     let mut rust_code = Transpiler::transpile(&compile_res.ir);
     rust_code = format!("#![allow(warnings)]\n{}", rust_code);
     
-    let temp_dir = std::env::temp_dir().join(format!(
-        "neuron_stress_jit_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let src_dir = temp_dir.join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    
-    let runtime_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .to_string_lossy()
-        .replace('\\', "/");
-    let cargo_toml_content = format!(r#"[package]
-name = "neuron_stress_jit"
+    // Setup persistent shared Cargo workspace and artifact cache
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    rust_code.hash(&mut hasher);
+    let code_hash = format!("{:016x}", hasher.finish());
+
+    let cache_base = std::env::temp_dir().join("neuron_jit_test_shared");
+    let artifacts_dir = cache_base.join("artifacts");
+    let shared_target = cache_base.join("target");
+    let workspace_dir = cache_base.join(format!("ws_{}", code_hash));
+    let src_dir = workspace_dir.join("src");
+    let _ = std::fs::create_dir_all(&artifacts_dir);
+    let _ = std::fs::create_dir_all(&src_dir);
+
+    let dll_ext = if cfg!(target_os = "windows") { "dll" } else if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    let cached_dll = artifacts_dir.join(format!("jit_{}.{}", code_hash, dll_ext));
+
+    let load_lib_path = if cached_dll.exists() {
+        cached_dll
+    } else {
+        let runtime_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .to_string_lossy()
+            .replace('\\', "/");
+        let cargo_toml_content = format!(r#"[package]
+name = "neuron_jit_test_{}"
 version = "0.1.0"
 edition = "2021"
 
@@ -38,37 +48,25 @@ crate-type = ["cdylib"]
 
 [dependencies]
 neuron-runtime = {{ path = "{}" }}
-"#, runtime_path);
-    std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
-    std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
-    
-    let compile_status = std::process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&temp_dir)
-        .status()
-        .map_err(|e| format!("Failed to run cargo: {:?}", e))?;
+"#, code_hash, runtime_path);
+        std::fs::write(workspace_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), &rust_code).unwrap();
         
-    if !compile_status.success() {
-        return Err("JIT compilation failed".to_string());
-    }
-    
-    let lib_path = if cfg!(target_os = "windows") {
-        temp_dir.join("target").join("debug").join("neuron_stress_jit.dll")
-    } else if cfg!(target_os = "macos") {
-        temp_dir.join("target").join("debug").join("libneuron_stress_jit.dylib")
-    } else {
-        temp_dir.join("target").join("debug").join("libneuron_stress_jit.so")
+        let compile_status = std::process::Command::new("cargo")
+            .arg("build")
+            .env("CARGO_TARGET_DIR", &shared_target)
+            .current_dir(&workspace_dir)
+            .status()
+            .map_err(|e| format!("Failed to run cargo: {:?}", e))?;
+            
+        if !compile_status.success() {
+            return Err("JIT compilation failed".to_string());
+        }
+
+        let built_dll = shared_target.join("debug").join(format!("neuron_jit_test_{}.{}", code_hash, dll_ext));
+        let _ = std::fs::copy(&built_dll, &cached_dll);
+        cached_dll
     };
-    
-    let unique_dll_name = format!(
-        "neuron_stress_jit_{}.dll",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    );
-    let load_lib_path = temp_dir.join("target").join("debug").join(&unique_dll_name);
-    std::fs::copy(&lib_path, &load_lib_path).unwrap();
 
     let lib = unsafe { libloading::Library::new(&load_lib_path) }
         .map_err(|e| format!("Failed to load JIT library: {:?}", e))?;
@@ -81,8 +79,6 @@ neuron-runtime = {{ path = "{}" }}
         run_main(&mut vm)
     };
     
-    drop(lib);
-    let _ = std::fs::remove_dir_all(&temp_dir);
     Ok(result)
 }
 

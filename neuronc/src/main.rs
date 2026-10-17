@@ -361,14 +361,51 @@ fn cmd_jit(path: &str) {
                 eprintln!("  {}", warn);
             }
 
+            // 0. Fast-path: Try native In-Memory Cranelift JIT compilation (sub-millisecond, zero disk I/O)
+            if let Some(main_fn) = output.ir.functions.iter().find(|f| f.name == "main") {
+                if let Ok(mut engine) = neuron_runtime::jit_cranelift::CraneliftEngine::new() {
+                    let start = std::time::Instant::now();
+                    if let Ok(native_fn) = engine.compile_scalar_function(main_fn) {
+                        let res = native_fn();
+                        let dur = start.elapsed().as_secs_f64() * 1000.0;
+                        eprintln!("✓ In-Memory Cranelift JIT compilation & execution completed in {:.2} ms (zero cargo subprocesses)", dur);
+                        println!("{}", res);
+                        return;
+                    }
+                }
+            }
+
             let rust_code = neuron_compiler::transpiler::Transpiler::transpile(&output.ir);
 
-            let temp_dir = std::env::temp_dir().join(format!("neuron_jit_{}", std::process::id()));
-            let src_dir = temp_dir.join("src");
-            std::fs::create_dir_all(&src_dir).unwrap();
+            // 1. Compute content hash of transpiled Rust code
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            rust_code.hash(&mut hasher);
+            let code_hash = format!("{:016x}", hasher.finish());
 
-            let runtime_path = find_runtime_path();
-            let cargo_toml_content = format!(r#"[package]
+            // 2. Setup persistent shared JIT cache and workspace
+            let cache_base = std::env::temp_dir().join("neuron_jit_cache");
+            let artifacts_dir = cache_base.join("artifacts");
+            let workspace_dir = cache_base.join("workspace");
+            let src_dir = workspace_dir.join("src");
+            let _ = std::fs::create_dir_all(&artifacts_dir);
+            let _ = std::fs::create_dir_all(&src_dir);
+
+            let dll_name = if cfg!(target_os = "windows") {
+                format!("{}.dll", code_hash)
+            } else if cfg!(target_os = "macos") {
+                format!("lib{}.dylib", code_hash)
+            } else {
+                format!("lib{}.so", code_hash)
+            };
+            let cached_lib_path = artifacts_dir.join(&dll_name);
+
+            let lib_to_load = if cached_lib_path.exists() {
+                eprintln!("✓ JIT cache hit [{}] (sub-millisecond load)", &code_hash[..8]);
+                cached_lib_path
+            } else {
+                let runtime_path = find_runtime_path();
+                let cargo_toml_content = format!(r#"[package]
 name = "neuron_jit"
 version = "0.1.0"
 edition = "2021"
@@ -379,35 +416,39 @@ crate-type = ["cdylib"]
 [dependencies]
 neuron-runtime = {{ path = "{}" }}
 "#, runtime_path);
-            std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
-            std::fs::write(src_dir.join("lib.rs"), rust_code).unwrap();
+                std::fs::write(workspace_dir.join("Cargo.toml"), cargo_toml_content).unwrap();
+                std::fs::write(src_dir.join("lib.rs"), &rust_code).unwrap();
 
-            eprintln!("Compiling JIT library with cargo build --release...");
-            let compile_start = std::time::Instant::now();
-            let compile_status = std::process::Command::new("cargo")
-                .arg("build")
-                .arg("--release")
-                .env("RUSTFLAGS", "-C target-cpu=native")
-                .current_dir(&temp_dir)
-                .status()
-                .expect("Failed to run cargo build");
+                eprintln!("Compiling JIT library with cargo build --release...");
+                let compile_start = std::time::Instant::now();
+                let compile_status = std::process::Command::new("cargo")
+                    .arg("build")
+                    .arg("--release")
+                    .env("RUSTFLAGS", "-C target-cpu=native")
+                    .current_dir(&workspace_dir)
+                    .status()
+                    .expect("Failed to run cargo build");
 
-            if !compile_status.success() {
-                eprintln!("error: JIT compilation failed");
-                std::process::exit(1);
-            }
-            let compile_dur = compile_start.elapsed().as_secs_f64() * 1000.0;
-            eprintln!("✓ JIT compilation completed in {:.2} ms", compile_dur);
+                if !compile_status.success() {
+                    eprintln!("error: JIT compilation failed");
+                    std::process::exit(1);
+                }
+                let compile_dur = compile_start.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("✓ JIT compilation completed in {:.2} ms", compile_dur);
 
-            let lib_path = if cfg!(target_os = "windows") {
-                temp_dir.join("target").join("release").join("neuron_jit.dll")
-            } else if cfg!(target_os = "macos") {
-                temp_dir.join("target").join("release").join("libneuron_jit.dylib")
-            } else {
-                temp_dir.join("target").join("release").join("libneuron_jit.so")
+                let built_lib = if cfg!(target_os = "windows") {
+                    workspace_dir.join("target").join("release").join("neuron_jit.dll")
+                } else if cfg!(target_os = "macos") {
+                    workspace_dir.join("target").join("release").join("libneuron_jit.dylib")
+                } else {
+                    workspace_dir.join("target").join("release").join("libneuron_jit.so")
+                };
+
+                let _ = std::fs::copy(&built_lib, &cached_lib_path);
+                cached_lib_path
             };
 
-            let lib = unsafe { libloading::Library::new(lib_path) }
+            let lib = unsafe { libloading::Library::new(lib_to_load) }
                 .expect("Failed to load compiled JIT library");
 
             let run_main: libloading::Symbol<fn(&mut neuron_runtime::vm::VM) -> neuron_runtime::vm::Value> = unsafe {
@@ -988,4 +1029,5 @@ fn lsp_send_notification(stdout: &std::io::Stdout, notification: serde_json::Val
     let _ = out.write_all(msg.as_bytes());
     let _ = out.flush();
 }
+
 

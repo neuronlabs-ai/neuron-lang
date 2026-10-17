@@ -26,8 +26,8 @@
       <nav>
         <ul class="nav-links" id="nav-links">
           <li><a href="#features">Features</a></li>
+          <li><a href="#pycheck" style="color: #38bdf8; font-weight: bold;">PyCheck</a></li>
           <li><a href="#playground">Playground</a></li>
-          <li><a href="pycheck.html">PyCheck</a></li>
           <li><a href="#architecture">Architecture</a></li>
           <li><a href="#benchmarks">Benchmarks</a></li>
           <li><a href="#pricing">Get Started</a></li>
@@ -64,19 +64,23 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
           Try the Playground
         </a>
+        <a href="#pycheck" class="btn btn-ghost" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          Explore PyCheck
+        </a>
         <a href="https://github.com/neuronlabs-ai/neuron-lang" target="_blank" class="btn btn-ghost">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
-          Clone &amp; Build
+          GitHub
         </a>
       </div>
       <div class="hero-stats">
         <div class="hero-stat">
-          <div class="hero-stat-value" data-target="126">0</div>
+          <div class="hero-stat-value" data-target="260">0</div>
           <div class="hero-stat-label">Tests Passing</div>
         </div>
         <div class="hero-stat">
-          <div class="hero-stat-value" data-target="100000">0</div>
-          <div class="hero-stat-label">Endurance Iterations</div>
+          <div class="hero-stat-value" data-target="32">0</div>
+          <div class="hero-stat-label">Safety Rules</div>
         </div>
         <div class="hero-stat">
           <div class="hero-stat-value" data-target="8">0</div>
@@ -84,7 +88,7 @@
         </div>
         <div class="hero-stat">
           <div class="hero-stat-value" data-target="0">0</div>
-          <div class="hero-stat-label">Compiler Panics</div>
+          <div class="hero-stat-label">Compile Leaks</div>
         </div>
       </div>
     </div>
@@ -177,19 +181,123 @@
           <p>Compiles math kernels directly into native assembly or CUDA code at runtime. Sub-millisecond compilation scaling for deep networks, bypassing the interpreter.</p>
         </div>
         <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-card reveal reveal-delay-1">
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
           </div>
           <h3>AOT Native Binary &amp; Multi-GPU</h3>
           <p>Compiles NEURON code to SIMD-vectorized native executables running <strong>2.08x faster</strong> than VM, paired with Ring-AllReduce multi-GPU cluster gradient synchronization.</p>
         </div>
-        <div class="feature-card reveal reveal-delay-2" style="border: 1px solid rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.05);">
-          <div class="feature-icon" style="color: #38bdf8;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
-          </div>
-          <h3>PyCheck Linter <span style="font-size: 0.75rem; vertical-align: middle; background: #38bdf8; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-left: 6px;">v1.0.1</span></h3>
-          <p>Protect existing Python &amp; Jupyter ML pipelines before migrating to NEURON. AST data provenance engine detecting 32 classes of lookahead bias &amp; data leakage. <a href="pycheck.html" style="color: #38bdf8; font-weight: 600; text-decoration: underline;">Explore PyCheck &rarr;</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ PyCheck Showcase: The Dual-Defense Architecture ═══ -->
+  <section class="pycheck-section" id="pycheck">
+    <div class="container">
+      <div class="text-center reveal">
+        <div class="pycheck-badge">
+          <span class="pycheck-badge-dot"></span>
+          <span>v1.0.1 Live on PyPI — Zero Dependencies</span>
         </div>
+        <h2 class="section-title">The <span class="gradient-text">Dual-Defense</span> Safety Stack</h2>
+        <p class="section-subtitle">Catch subtle leaks in your existing Python backtests today. Guarantee mathematical compile-time safety in NEURON tomorrow.</p>
+        
+        <div class="cli-copy-box">
+          <code><span style="color:#64748b">$</span> <span class="cmd">pip install pycheck-neuron</span></code>
+          <button class="cli-copy-btn" onclick="navigator.clipboard.writeText('pip install pycheck-neuron'); this.innerText='Copied!'; setTimeout(()=>this.innerText='Copy', 2000)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Copy
+          </button>
+        </div>
+      </div>
+
+      <div class="pycheck-split reveal">
+        <!-- Python Vulnerability Side -->
+        <div class="pycheck-box">
+          <div class="pycheck-box-header">
+            <div class="pycheck-box-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+              Python / Jupyter / PyTorch
+            </div>
+            <span class="pycheck-tag pycheck-tag-python">Silent Data Leakage</span>
+          </div>
+          <div class="terminal-code">
+<span style="color:#64748b;"># strategy.py — Valid syntax, passes PyTest, ruins live trading</span>
+<span style="color:#f87171;">df['target'] = df['close'].shift(-1)</span>  <span style="color:#64748b;"># Looks 1 step into the future!</span>
+
+<span style="color:#64748b;"># Partition contamination via concatenation</span>
+X_train = pd.concat([X_train, X_test])
+scaler.fit_transform(X_train)          <span style="color:#64748b;"># Contaminates training fold</span>
+
+<span style="color:#64748b;"># Scanned by PyCheck:</span>
+<span style="color:#38bdf8;">$ pycheck strategy.py</span>
+<span style="color:#f87171;font-weight:bold;">ERROR[T001]:</span> .shift(-1) accesses data 1 row into future
+<span style="color:#f87171;font-weight:bold;">ERROR[F002]:</span> 'X_train' contaminated with test partition
+          </div>
+          <p style="margin-top:1rem;font-size:0.85rem;color:var(--text-secondary)">Standard Python linters (Ruff, Flake8, Mypy) report <strong>0 errors</strong>. PyCheck's 2-pass AST data provenance engine catches both instantly.</p>
+        </div>
+
+        <!-- NEURON Compile-Time Guarantee Side -->
+        <div class="pycheck-box">
+          <div class="pycheck-box-header">
+            <div class="pycheck-box-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
+              NEURON Language
+            </div>
+            <span class="pycheck-tag pycheck-tag-neuron">100% Compile-Time Proof</span>
+          </div>
+          <div class="terminal-code">
+<span style="color:#64748b;">// strategy.nr — Type system forbids future lookahead</span>
+<span style="color:#34d399;">fn evaluate(prices: Temporal[Tensor, past_to_future]) -> Tensor:</span>
+    <span style="color:#64748b;">// Only past-restricted slices allowed</span>
+    let hist = prices.before(20)
+    let signal = hist @ weights
+    return signal.snapshot()
+
+<span style="color:#64748b;">// Attempting prices.after(1) is rejected at COMPILE TIME:</span>
+<span style="color:#fbbf24;">error[TemporalOffsetViolation]:</span> future data (+1) cannot satisfy
+subtyping constraint (offset &le; 0). Compilation halted.
+          </div>
+          <p style="margin-top:1rem;font-size:0.85rem;color:var(--text-secondary)">No runtime assertions or testing overhead. Lookahead bias is mathematically impossible under NEURON's type checker.</p>
+        </div>
+      </div>
+
+      <!-- PyCheck Capabilities Grid -->
+      <div class="pycheck-features-grid reveal">
+        <div class="pycheck-fcard">
+          <div class="pycheck-fcard-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+          </div>
+          <h4>AST Data Provenance</h4>
+          <p>Does not rely on naming heuristics. Tracks partition lineage across <code>pd.concat</code>, reassignments, aliases, and helper functions.</p>
+        </div>
+        <div class="pycheck-fcard">
+          <div class="pycheck-fcard-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          </div>
+          <h4>32 Temporal &amp; Leakage Rules</h4>
+          <p>Catches negative leads (<code>shift(-1)</code>, <code>diff(-5)</code>), centered rolling windows, un-split target laundering, and lookahead joins.</p>
+        </div>
+        <div class="pycheck-fcard">
+          <div class="pycheck-fcard-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+          </div>
+          <h4>Turnkey CI/CD Gatekeeper</h4>
+          <p>Natively outputs GitLab Code Quality and GitHub Actions annotations to block leaky pull requests before reaching production.</p>
+        </div>
+        <div class="pycheck-fcard">
+          <div class="pycheck-fcard-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          </div>
+          <h4>Zero Dependencies</h4>
+          <p>Written in pure Python 3.8+ using only standard library AST parsing. Installs in under 1 second without bloating CI containers.</p>
+        </div>
+      </div>
+
+      <div style="text-align: center; margin-top: 1.5rem;" class="reveal">
+        <a href="pycheck.html" class="btn btn-primary" style="margin-right: 1rem;">Explore PyCheck Documentation &rarr;</a>
+        <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-ghost">View on GitHub</a>
       </div>
     </div>
   </section>
@@ -650,7 +758,7 @@ fn main():
       <button class="modal-close" id="close-waitlist-btn" aria-label="Close">&times;</button>
       <div id="waitlist-form-container">
         <h3>Join the NEURON Waitlist</h3>
-        <p>Deploy cognitive agents on our serverless cloud platform. Sign up for <strong>$100 in free compute credits</strong> at launch.</p>
+        <p>Deploy compile-time verified algorithms on our cloud platform. Sign up for early access to the PyCheck &amp; NEURON safety engine.</p>
         <form class="waitlist-form" id="waitlist-form">
           <input type="email" class="waitlist-input" id="waitlist-email" placeholder="your@email.com" required>
           <button type="submit" class="waitlist-submit-btn" id="waitlist-submit-btn">Join</button>

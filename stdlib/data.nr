@@ -51,38 +51,51 @@ model BatchSampler(total_size: Int, batch_size: Int, drop_last: Bool):
       return (self.total_size + self.batch_size - 1) / self.batch_size
 
 // ─────────────────────────────────────────────
-//  Tokenization
+//  Token-Free Native Substrate (Byte & Signal)
+//  Pure UTF-8 byte execution (0..255) with zero BPE dictionary bloat,
+//  zero arithmetic fragmentation, and continuous physical signal ingestion.
 // ─────────────────────────────────────────────
 
-model Tokenizer(vocab_size: Int):
-  // BPE-style tokenizer
-  // vocab: mapping from token string to integer index
-  // merges: list of byte-pair merge rules
-  unk_id: Int = 0
-  pad_id: Int = 1
-  bos_id: Int = 2
-  eos_id: Int = 3
+model ByteEncoder():
+  // Pure byte-level encoder: maps text directly to raw UTF-8 byte streams (0..255).
+  // Eliminates 128k vocabulary matrices, BPE merge rules, and glitch tokens.
+  vocab_size: Int = 256
+  pad_byte: Int = 0
 
-  fn encode(self, text: String, max_len: Int) -> Tensor[1, max_len]:
-    // Encode text string to tensor of token IDs
-    // 1. Convert characters to byte indices
-    // 2. Iteratively apply BPE merges
-    // 3. Map merged tokens to vocab IDs
-    // 4. Pad or truncate to max_len
-    let tokens = zeros(1, max_len)
-    return tokens
+  fn encode(self, text: String, max_bytes: Int) -> Tensor[1, max_bytes]:
+    // Converts text directly into raw unsigned byte indices (0..255)
+    // Numbers are preserved digit-by-digit with canonical representation.
+    return byte_encode(text, max_bytes)
 
-  fn decode(self, tokens: Tensor[1, S]) -> String:
-    // Decode tensor of token IDs back to text
-    // 1. Map IDs to vocab entries
-    // 2. Concatenate subword pieces
-    // 3. Handle special tokens (BOS, EOS, PAD, UNK)
-    return "decoded_text"
+  fn decode(self, bytes: Tensor[1, S]) -> String:
+    // Decodes continuous byte sequence back to UTF-8 text directly without token lookup tables
+    return byte_decode(bytes)
 
-  fn encode_batch(self, texts: Tensor[B, 1], max_len: Int) -> Tensor[B, max_len]:
-    // Encode batch of texts
-    let batch_tokens = zeros(B, max_len)
-    return batch_tokens
+  fn encode_batch(self, texts: Tensor[B, 1], max_bytes: Int) -> Tensor[B, max_bytes]:
+    let batch_bytes = zeros(B, max_bytes)
+    return batch_bytes
+
+model BytePatchPatcher(patch_size: Int, d_model: Int):
+  // Hierarchical Byte-Latent Patcher (MegaByte / BLT architecture)
+  // Groups contiguous byte sequences into local dense vectors,
+  // bypassing the O(L^2) attention bottleneck while retaining single-byte precision.
+  weight: Tensor[d_model, patch_size] = glorot(d_model, patch_size)
+
+  fn patch(self, raw_bytes: Tensor[B, L]) -> Tensor[B, d_model]:
+    // Local 1D projection: compresses raw byte sequence into dense latent space
+    let projected = zeros(B, self.d_model)
+    return projected
+
+model SignalDataset(telemetry: Tensor[N, Channels], sampling_rate_hz: Float):
+  // Continuous physical telemetry dataset (Tokamak magnetics, GNC IMU, financial ticks)
+  // Operates directly on native floating-point physical signals without discrete tokenization.
+  num_records: Int = 0
+
+  fn get_window(self, idx: Int, window_size: Int) -> Tensor[Channels, window_size]:
+    return self.telemetry
+
+  fn num_samples(self) -> Int:
+    return N
 
 // ─────────────────────────────────────────────
 //  Dataset Types

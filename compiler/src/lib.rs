@@ -14,6 +14,7 @@ pub mod lower;
 pub mod transpiler;
 pub mod py_transpiler;
 pub mod cuda_codegen;
+pub mod triton_codegen;
 pub mod optimize;
 
 use errors::CompileResult;

@@ -373,6 +373,11 @@ impl Tensor {
         Tensor::new(data, self.shape.clone())
     }
 
+    /// Euclidean norm (L2 norm) of the tensor elements.
+    pub fn norm(&self) -> f64 {
+        self.data.iter().map(|x| x * x).sum::<f64>().sqrt()
+    }
+
     /// Accumulate gradient.
     pub fn accumulate_grad(&mut self, grad: &Tensor) {
         if let Some(ref mut existing) = self.grad {
@@ -543,6 +548,35 @@ pub fn tensor_div(a: &Tensor, b: &Tensor) -> Tensor {
         }
     }
     Tensor::new(data, common_shape)
+}
+
+/// Element-wise power: a ^ b
+pub fn tensor_pow(a: &Tensor, b: &Tensor) -> Tensor {
+    let common_shape = broadcast_shapes(&a.shape, &b.shape).expect("Broadcasting failed in pow");
+    let a_bc = a.broadcast_to(&common_shape);
+    let b_bc = b.broadcast_to(&common_shape);
+    let mut data = Buffer::new(a_bc.data.len());
+    if a_bc.data.len() > 65536 {
+        use rayon::prelude::*;
+        data.par_iter_mut().zip(a_bc.data.par_iter().zip(b_bc.data.par_iter())).for_each(|(d, (x, y))| {
+            *d = x.powf(*y);
+        });
+    } else {
+        for (d, (x, y)) in data.iter_mut().zip(a_bc.data.iter().zip(b_bc.data.iter())) {
+            *d = x.powf(*y);
+        }
+    }
+    Tensor::new(data, common_shape)
+}
+
+/// Element-wise exponential.
+pub fn tensor_exp(a: &Tensor) -> Tensor {
+    a.map(|x| x.exp())
+}
+
+/// Element-wise natural logarithm.
+pub fn tensor_log(a: &Tensor) -> Tensor {
+    a.map(|x| x.ln())
 }
 
 /// Negate.
@@ -794,10 +828,11 @@ pub fn tensor_cross_entropy(pred: &Tensor, target: &Tensor) -> Tensor {
     let mut loss = 0.0;
     for i in 0..n {
         let p = sm.data[i].max(1e-12);
-        loss -= target.data[i] * p.ln();
+        let t = target.data[i].max(0.0);
+        loss -= t * p.ln();
     }
     loss /= (pred.shape[0]) as f64;
-    Tensor::scalar(loss)
+    Tensor::scalar(loss.max(0.0))
 }
 
 /// MSE loss.

@@ -1,0 +1,27 @@
+# ==============================================================================
+# PyCheck GitLab CI/CD Pipeline Template
+# Native Code Quality Integration for Quantitative ML & Trading Repositories
+# ==============================================================================
+
+stages:
+  - test
+  - ml-safety
+
+pycheck:
+  stage: ml-safety
+  image: python:3.11-slim
+  before_script:
+    - pip install pycheck-neuron
+  script:
+    # Run PyCheck and generate both the GitLab Code Quality artifact and job trace summary
+    - pycheck . --gitlab --output gl-codequality.json
+  artifacts:
+    reports:
+      codequality: gl-codequality.json
+    paths:
+      - gl-codequality.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  allow_failure: false

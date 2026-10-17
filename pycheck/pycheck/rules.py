@@ -49,6 +49,9 @@ class AnalysisContext:
         self.loop_var: Optional[str] = None
         self.assignments: Dict[str, ast.AST] = {}  # var_name -> assigned node
         self.constants: Dict[str, any] = {}  # var_name -> literal constant value
+        self.train_vars: Set[str] = set()
+        self.test_vars: Set[str] = set()
+        self.test_contaminated_vars: Dict[str, str] = {}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -311,11 +314,32 @@ class T010_FitBeforeSplit(Rule):
     severity = "error"
     category = "TemporalLeak"
 
+    def _is_train_data(self, node, ctx=None):
+        """Recursively check if an AST node represents training data."""
+        var_name = self._get_obj_name(node)
+        if var_name and ctx is not None:
+            base_var = var_name.split('.')[0]
+            if hasattr(ctx, 'test_contaminated_vars') and base_var in ctx.test_contaminated_vars:
+                return False
+            if hasattr(ctx, 'test_vars') and base_var in ctx.test_vars:
+                return False
+            if hasattr(ctx, 'train_vars') and base_var in ctx.train_vars:
+                return True
+
+        train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train')
+        if isinstance(node, ast.Name):
+            return any(m in node.id.lower() for m in train_markers)
+        if isinstance(node, ast.Subscript):
+            return self._is_train_data(node.value, ctx)
+        if isinstance(node, ast.Attribute):
+            return self._is_train_data(node.value, ctx)
+        return False
+
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        if isinstance(node.func, ast.Attribute) and node.func.attr == 'fit':
-            # Only flag .fit() on objects that look like ML preprocessors/models
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('fit', 'fit_transform'):
+            # Only flag on objects that look like ML preprocessors/models
             # Skip: fig.fit(), layout.fit(), etc.
             obj_name = self._get_obj_name(node.func.value)
             safe_objects = {'fig', 'figure', 'ax', 'axes', 'plt', 'layout',
@@ -323,25 +347,29 @@ class T010_FitBeforeSplit(Rule):
                             'parser', 'formatter', 'logger', 'handler'}
             if obj_name and obj_name.lower() in safe_objects:
                 return []
+
+            # If arguments are contaminated, Flow engine F002 emits specific data contamination diagnostics
+            if ctx is not None and hasattr(ctx, 'test_contaminated_vars'):
+                for a in node.args:
+                    v_name = self._get_obj_name(a)
+                    if v_name and v_name.split('.')[0] in ctx.test_contaminated_vars:
+                        return []
+            
             # Suppress if all positional arguments are clearly train-only variables
-            # (names containing _train, train_, X_tr, y_tr, etc.)
-            train_markers = ('_train', 'train_', 'X_tr', 'y_tr', '_trn', 'trn_')
-            if node.args:
-                all_train = all(
-                    isinstance(a, ast.Name) and any(m in a.id for m in train_markers)
-                    for a in node.args
-                )
-                if all_train:
-                    return []
-            return [Diagnostic(
-                node.lineno, node.col_offset, "warning", self.code,
-                ".fit() may be called on the full dataset including test data",
-                "Call .fit() only on training data, use .transform() on test data")]
-        if isinstance(node.func, ast.Attribute) and node.func.attr == 'fit_transform':
-            return [Diagnostic(
-                node.lineno, node.col_offset, self.severity, self.code,
-                ".fit_transform() on full dataset leaks test statistics into training",
-                "Use .fit(X_train).transform(X_train), then .transform(X_test) separately")]
+            # (e.g. X_train, y_train, train_df[features], X_tr)
+            if node.args and all(self._is_train_data(a, ctx) for a in node.args):
+                return []
+
+            if node.func.attr == 'fit':
+                return [Diagnostic(
+                    node.lineno, node.col_offset, "warning", self.code,
+                    ".fit() may be called on the full dataset including test data",
+                    "Call .fit() only on training data, use .transform() on test data")]
+            else:
+                return [Diagnostic(
+                    node.lineno, node.col_offset, self.severity, self.code,
+                    ".fit_transform() on full dataset leaks test statistics into training",
+                    "Use .fit(X_train).transform(X_train), then .transform(X_test) separately")]
         return []
 
     def _get_obj_name(self, node):
@@ -477,6 +505,128 @@ class T015_GroupbyShiftLeak(Rule):
         return []
 
 
+class T016_MergeAsofDirection(Rule):
+    code = "T016"
+    name = "merge_asof_future_direction"
+    severity = "error"
+    category = "TemporalLeak"
+
+    def check_node(self, node, ctx):
+        if not isinstance(node, ast.Call):
+            return []
+        is_merge_asof = False
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'merge_asof':
+            is_merge_asof = True
+        elif isinstance(node.func, ast.Name) and node.func.id == 'merge_asof':
+            is_merge_asof = True
+        
+        if not is_merge_asof:
+            return []
+        
+        for kw in node.keywords:
+            if kw.arg == 'direction':
+                if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    val = kw.value.value.lower()
+                    if val in ('nearest', 'forward'):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"pd.merge_asof() with direction='{kw.value.value}' matches future timestamps (lookahead bias)",
+                            "Use direction='backward' for point-in-time causal event joins")]
+        return []
+
+
+class T017_TargetLaundering(Rule):
+    code = "T017"
+    name = "target_laundering_leak"
+    severity = "error"
+    category = "TemporalLeak"
+
+    def check_node(self, node, ctx):
+        target_col_names = {'target', 'success', 'outcome', 'label', 'labels', 'y',
+                            'profit', 'pnl', 'win', 'return', 'returns', 'future_price'}
+        train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train')
+        test_markers = ('_test', 'test_', 'x_test', 'y_test', 'x_val', 'y_val', '_val', 'val_', '_eval', 'eval_', 'holdout', 'validation')
+        
+        # 1. Detect target encoding / aggregation: df.groupby(...)['target'].transform('mean')
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in ('TargetEncoder', 'CatBoostEncoder'):
+                return [Diagnostic(
+                    node.lineno, node.col_offset, self.severity, self.code,
+                    f"{node.func.id}() calculates target statistics across groups; ensure it is fit ONLY on training data",
+                    "Fit target encoders strictly on X_train, y_train after temporal splitting")]
+            
+            if isinstance(node.func, ast.Attribute) and node.func.attr in ('transform', 'mean', 'median', 'std', 'sum', 'agg', 'apply'):
+                val = node.func.value
+                col_name = None
+                groupby_call = None
+                
+                if isinstance(val, ast.Subscript):
+                    if isinstance(val.slice, ast.Constant) and isinstance(val.slice.value, str):
+                        col_name = val.slice.value.lower()
+                    groupby_call = val.value
+                elif isinstance(val, ast.Call):
+                    groupby_call = val
+                
+                if col_name and any(t in col_name for t in target_col_names):
+                    if isinstance(groupby_call, ast.Call) and isinstance(groupby_call.func, ast.Attribute) and groupby_call.func.attr == 'groupby':
+                        # Check the caller of groupby:
+                        caller_obj = groupby_call.func.value
+                        caller_name = ""
+                        if isinstance(caller_obj, ast.Name):
+                            caller_name = caller_obj.id.lower()
+                        elif isinstance(caller_obj, ast.Attribute):
+                            caller_name = caller_obj.attr.lower()
+                        
+                        # If the groupby is computed strictly within a training fold,
+                        # this is a VALID fold-local transformation! Do NOT flag it.
+                        if any(m in caller_name for m in train_markers):
+                            return []
+
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"Target laundering: grouping by target/outcome column '{col_name}' across the un-split dataset leaks future test labels into features",
+                            "Compute regime/group target statistics strictly within the training fold (e.g. train_df.groupby()), and map to test fold with .fillna() for unseen regimes")]
+
+        # 2. Detect assignment creating laundered columns: df['regime_success_rate'] = ...
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str):
+                    col = target.slice.value.lower()
+                    if any(marker in col for marker in ('success_rate', 'target_enc', 'target_mean', 'regime_success')):
+                        target_df = target.value
+                        target_df_name = ""
+                        if isinstance(target_df, ast.Name):
+                            target_df_name = target_df.id.lower()
+                        elif isinstance(target_df, ast.Attribute):
+                            target_df_name = target_df.attr.lower()
+
+                        # Case A: Assigning to a training fold dataframe -> valid fold-local transformation!
+                        if any(m in target_df_name for m in train_markers):
+                            return []
+
+                        # Case B: Assigning to test/inference fold dataframe (e.g. test_df['regime_success_rate'] = ...)
+                        if any(m in target_df_name for m in test_markers):
+                            # Check if unseen regimes at inference time are handled via .fillna()
+                            has_fillna = False
+                            if isinstance(node.value, ast.Call):
+                                if isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'fillna':
+                                    has_fillna = True
+                            
+                            if not has_fillna:
+                                return [Diagnostic(
+                                    node.lineno, node.col_offset, "warning", self.code,
+                                    f"Mapping target statistics to test data '{target_df_name}' without .fillna(): unseen categories/regimes at inference time will produce NaNs",
+                                    "Add .fillna(train_prior_mean) to safely handle unseen categories or market regimes at inference time")]
+                            return []
+
+                        # Case C: Assigning to un-split / full dataset dataframe (df['regime_success_rate'] = ...)
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"Target laundering: column '{target.slice.value}' encodes target outcomes across full dataset",
+                            "Calculate success rates and target statistics only on the training set")]
+        return []
+
+
 # ═══════════════════════════════════════════════════════════════
 #  CAUSAL CONFUSION RULES (C001–C010)
 # ═══════════════════════════════════════════════════════════════
@@ -507,17 +657,35 @@ class C002_TargetInFeatures(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Subscript):
             return []
+        train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train')
+        caller_name = ""
+        if isinstance(node.value, ast.Name):
+            caller_name = node.value.id.lower()
+        elif isinstance(node.value, ast.Attribute):
+            caller_name = node.value.attr.lower()
+
         # Detect df[['feature1', 'target']] where target-like names are used as features
         if isinstance(node.slice, ast.List):
-            target_names = {'target', 'y', 'label', 'labels', 'outcome', 'y_true',
-                            'future_price', 'future_return', 'next_close', 'next_price'}
+            raw_target_names = {'target', 'y', 'label', 'labels', 'outcome', 'y_true',
+                                'future_price', 'future_return', 'next_close', 'next_price'}
+            laundered_target_names = {'regime_success_rate', 'success_rate'}
             for elt in node.slice.elts:
                 if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                    if elt.value.lower() in target_names:
+                    val = elt.value.lower()
+                    if val in raw_target_names:
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
                             f"Column '{elt.value}' appears to be a target variable used as a feature",
                             "Remove target/outcome columns from feature inputs to avoid data leakage")]
+                    if val in laundered_target_names or val.endswith('_success_rate') or val.endswith('_target_enc'):
+                        # If caller is training data (e.g. train_df[['volatility', 'regime_success_rate']]),
+                        # this is a valid fold-local target encoding feature! Do NOT flag it.
+                        if any(m in caller_name for m in train_markers):
+                            continue
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"Column '{elt.value}' appears to be a target or target-laundered variable used as a feature across full dataset",
+                            "Compute target-encoded features strictly fold-locally on training data")]
         return []
 
 
@@ -823,6 +991,8 @@ ALL_RULES: List[Rule] = [
     T013_ResampleBeforeSplit(),
     T014_DiffNegative(),
     T015_GroupbyShiftLeak(),
+    T016_MergeAsofDirection(),
+    T017_TargetLaundering(),
     # Causal Confusion
     C001_CorrelationCausation(),
     C002_TargetInFeatures(),

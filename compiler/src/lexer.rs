@@ -247,10 +247,24 @@ impl Lexer {
                 continue;
             }
 
-            // ── Unicode arrow → ──
+            // ── Unicode arrow → and ↔ ──
             if ch == '\u{2192}' {
                 self.advance();
                 self.emit(TokenType::UnicodeArrow, start_line, start_col, 1);
+                self.at_line_start = false;
+                continue;
+            }
+            if ch == '\u{2194}' {
+                self.advance();
+                self.emit(TokenType::BiArrow, start_line, start_col, 1);
+                self.at_line_start = false;
+                continue;
+            }
+
+            // ── Three-character operators: <-> ──
+            if ch == '<' && self.peek_ahead(1) == '-' && self.peek_ahead(2) == '>' {
+                self.advance(); self.advance(); self.advance();
+                self.emit(TokenType::BiArrow, start_line, start_col, 3);
                 self.at_line_start = false;
                 continue;
             }
@@ -306,6 +320,12 @@ impl Lexer {
                     self.at_line_start = false;
                     continue;
                 }
+                ('*', '*') => {
+                    self.advance(); self.advance();
+                    self.emit(TokenType::Caret, start_line, start_col, 2);
+                    self.at_line_start = false;
+                    continue;
+                }
                 _ => {}
             }
 
@@ -316,6 +336,7 @@ impl Lexer {
                 '*' => Some(TokenType::Star),
                 '/' => Some(TokenType::Slash),
                 '%' => Some(TokenType::Percent),
+                '^' => Some(TokenType::Caret),
                 '>' => Some(TokenType::Gt),
                 '<' => Some(TokenType::Lt),
                 '=' => Some(TokenType::Eq),

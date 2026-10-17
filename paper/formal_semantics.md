@@ -13,9 +13,9 @@ Modern machine learning systems routinely execute computations where domain-spec
 1. **Temporal Non-Interference (Lookahead Bias):** In time-series forecasting, backtesting, and online RL, computing decisions at epoch $t$ using data from timestamps $t' > t$ represents a **lookahead leak**. Such leaks produce overfitted evaluations and severe live deployment failures.
 2. **Causal Mode Safety (Confounding Bias):** In observational vs. experimental studies, computing treatment effects by subtracting associational conditionals $P(Y \mid X=1) - P(Y \mid X=0)$ rather than interventional distributions $P(Y \mid \text{do}(X=1)) - P(Y \mid \text{do}(X=0))$ introduces confounding bias when unobserved common causes exist ($X \leftarrow U \rightarrow Y$).
 
-NEURON enforces these safety properties at compile time. This document formalizes the core theoretical calculus $\lambda_{\text{neuron}}$, establishing small-step operational reduction rules, typing judgments, and complete paper-level proofs of Progress, Subject Reduction, and Temporal Non-Interference (machine-checked verification in a proof assistant like Lean 4 or Coq is ongoing future work).
+NEURON enforces these safety properties at compile time. This document formalizes the core theoretical calculus $\lambda_{\text{neuron}}$, establishing small-step operational reduction rules, typing judgments, and metatheoretical soundness proofs. The calculus has been mechanized and machine-checked in **Lean 4** ([`formal/lean/LambdaNeuron.lean`](file:///C:/Users/ADMIN/neuron-lang/formal/lean/LambdaNeuron.lean)), where the **Progress Theorem has been formally proved with zero `sorry`**, alongside 15 foundational supporting lemmas including Causal Mode Isolation, Store Invariance, Subtype Tag Preservation, and Canonical Forms.
 
-Crucially, this formalization resolves the relationship between a type's **static upper-bound dependency horizon** ($\Delta$) and its **dynamic evaluation read footprint** ($\mathcal{R}(\mathcal{T})$) via a labeled transition system, establishing an airtight proof of **Temporal Non-Interference**. On the causal side, we prove **Intervention Integrity / Causal Mode Isolation**, while explicitly formalizing automated causal identification completeness as an orthogonal open problem.
+Crucially, this formalization resolves the relationship between a type's **static upper-bound dependency horizon** ($\Delta$) and its **dynamic evaluation read footprint** ($\mathcal{R}(\mathcal{T})$) via a labeled transition system, establishing an airtight proof of **Temporal Non-Interference**. On the causal side, we prove **Intervention Integrity / Causal Mode Isolation**, while explicitly formalizing automated causal identification completeness as an orthogonal open problem. Mechanizing $\lambda_{\text{neuron}}$ in Lean 4 uncovered and resolved seven subtle semantic bugs present in earlier informal specifications.
 
 ### Core Design Principle: Access Footprint vs. Semantic Dependence
 A critical conceptual design choice in $\lambda_{\text{neuron}}$ is that the temporal type system tracks an **over-approximation of the temporal access footprint of computation**, rather than the extensional semantic dependence of the resulting value on historical observations. For example, in an expression such as:
@@ -67,6 +67,8 @@ e & ::= & x & \text{(Variable)} \\
   & \mid & \text{obs}(e) & \text{(Causal Observational Introduction)} \\
   & \mid & \text{do}(x \gets e_1) \text{ in } e_2 & \text{(Causal Interventional Introduction)} \\
   & \mid & e.\text{extract}() & \text{(Causal Mode Elimination)} \\
+  & \mid & \mathbf{temp}(e, k) & \text{(Runtime Temporal Wrapper Expression)} \\
+  & \mid & \mathbf{caus}(e, m) & \text{(Runtime Causal Wrapper Expression)} \\
   & \mid & \text{uncert}(e_1, e_2) & \text{(Uncertainty Constructor: value, confidence)} \\
   & \mid & e.\text{val} \mid e.\text{conf} & \text{(Uncertainty Projections)}
 \end{array}
@@ -105,14 +107,12 @@ $$
 \texttt{Causal}[\tau, \mathbf{obs}] \not\le \texttt{Causal}[\tau, \mathbf{int}] \qquad \text{and} \qquad \texttt{Causal}[\tau, \mathbf{int}] \not\le \texttt{Causal}[\tau, \mathbf{obs}]
 $$
 
-### 3.3 Safe Ingestion and Wrapper Non-Erasure
-Raw base data (e.g. constant scalars) may safely enter the temporal present or observational domain:
-$$
-\frac{\tau_1 \le \tau_2 \quad k \ge 0}{\tau_1 \le \texttt{Temporal}[\tau_2, k]} \quad (\textsc{Sub-Temp-Ingest}) \qquad
-\frac{\tau_1 \le \tau_2}{\tau_1 \le \texttt{Causal}[\tau_2, \mathbf{obs}]} \quad (\textsc{Sub-Caus-Ingest})
-$$
+### 3.3 Explicit Wrapping and Tag Preservation (Soundness Revision)
+Earlier informal drafts admitted implicit ingestion rules ($\tau \le \texttt{Temporal}[\tau, k]$). Machine-checked verification in Lean 4 proved that implicit ingestion violates canonical forms and makes closed well-typed terms get stuck (e.g., $5 : \texttt{Int}$ subtyped to $\texttt{Temporal}[\texttt{Int}, 0]$ cannot reduce under snapshot).
 
-Crucially, the inverse does **not** hold:
+In the sound calculus verified in Lean 4, temporal and causal wrapping is strictly **explicit** via expression constructors $\mathbf{temp}(e, k)$ and $\mathbf{caus}(e, m)$ with corresponding typing rules ($\textsc{T-TempVal}$, $\textsc{T-CausVal}$). Subtyping is purely structural and strictly preserves the type constructor family ($\text{tyTag}(A) = \text{tyTag}(B)$).
+
+Crucially, wrapper non-erasure is preserved:
 $$
 \texttt{Temporal}[\tau, \Delta] \not\le \tau \qquad \text{and} \qquad \texttt{Causal}[\tau, m] \not\le \tau \quad (\textsc{Non-Erasure})
 $$
@@ -194,6 +194,12 @@ $$
 
 Rule $\textsc{T-Caus-BinOp}$ enforces strict mode agreement ($m_1 = m_2$). Combining observed and intervened data without an explicit extraction construct is rejected at compile time.
 
+#### Runtime Value Wrappers
+$$
+\frac{\Gamma \vdash e : \tau}{\Gamma \vdash \mathbf{temp}(e, k) : \texttt{Temporal}[\tau, k]} \, (\textsc{T-TempVal}) \qquad
+\frac{\Gamma \vdash e : \tau}{\Gamma \vdash \mathbf{caus}(e, m) : \texttt{Causal}[\tau, m]} \, (\textsc{T-CausVal})
+$$
+
 ---
 
 ## 5. Dynamic Operational Semantics
@@ -246,12 +252,23 @@ $$
 \langle \mathbf{temp}(v, k).\text{snapshot}(), \sigma, t \rangle \xrightarrow{\tau_{\text{step}}} \langle v, \sigma, t \rangle \, (\textsc{E-Snap-Val})
 $$
 
-#### Binary Operations
+#### Binary Operations & Evaluation
+Primitive operations evaluate total functions via $\tilde{\oplus}$ (formalized as $\text{evalPrimOp}$ in Lean 4):
+$$
+\langle v_1 \oplus v_2, \sigma, t \rangle \xrightarrow{\tau_{\text{step}}} \langle v_1 \tilde{\oplus} v_2, \sigma, t \rangle \, (\textsc{E-Op-Val})
+$$
 $$
 \langle \mathbf{temp}(v_1, k_1) \oplus \mathbf{temp}(v_2, k_2), \sigma, t \rangle \xrightarrow{\tau_{\text{step}}} \langle \mathbf{temp}(v_1 \tilde{\oplus} v_2, \max(k_1, k_2)), \sigma, t \rangle \, (\textsc{E-Temp-Op})
 $$
 $$
 \langle \mathbf{caus}(v_1, m) \oplus \mathbf{caus}(v_2, m), \sigma, t \rangle \xrightarrow{\tau_{\text{step}}} \langle \mathbf{caus}(v_1 \tilde{\oplus} v_2, m), \sigma, t \rangle \, (\textsc{E-Caus-Op})
+$$
+
+#### Wrapper Congruence
+Dynamic evaluation steps inside runtime temporal and causal wrappers:
+$$
+\frac{\langle e, \sigma, t \rangle \xrightarrow{\ell} \langle e', \sigma', t \rangle}{\langle \mathbf{temp}(e, k), \sigma, t \rangle \xrightarrow{\ell} \langle \mathbf{temp}(e', k), \sigma', t \rangle} \, (\textsc{E-Temp-Cong}) \qquad
+\frac{\langle e, \sigma, t \rangle \xrightarrow{\ell} \langle e', \sigma', t \rangle}{\langle \mathbf{caus}(e, m), \sigma, t \rangle \xrightarrow{\ell} \langle \mathbf{caus}(e', m), \sigma', t \rangle} \, (\textsc{E-Caus-Cong})
 $$
 
 #### Causal Intervention ($\text{do}$-calculus)
@@ -263,43 +280,49 @@ $$
 
 ## 6. Metatheory and Soundness Proofs
 
+The core metatheoretical properties of $\lambda_{\text{neuron}}$ have been formalized and machine-checked in **Lean 4** ([`formal/lean/LambdaNeuron.lean`](file:///C:/Users/ADMIN/neuron-lang/formal/lean/LambdaNeuron.lean)).
+
 ### 6.1 Basic Type Safety
 
-\begin{lemma}[Canonical Forms]
+\begin{theorem}[Type-Tag Family Invariance \& Canonical Forms]
 \label{lem:canonical}
-Let $v$ be a closed value.
-1. If $\emptyset \vdash v : B$, then $v = c$ with $\text{ty}(c) = B$.
-2. If $\emptyset \vdash v : \tau_1 \xrightarrow{\epsilon} \tau_2$, then $v = \lambda x:\tau_1'.\, e$.
-3. If $\emptyset \vdash v : \tau_1 \times \tau_2$, then $v = (v_1, v_2)$.
-4. If $\emptyset \vdash v : \texttt{Temporal}[\tau, \Delta]$, then $v = \mathbf{temp}(v', \Delta')$ with $\Delta' \le \Delta$ and $\emptyset \vdash v' : \tau$.
-5. If $\emptyset \vdash v : \texttt{Causal}[\tau, m]$, then $v = \mathbf{caus}(v', m)$ with $\emptyset \vdash v' : \tau$.
-\end{lemma}
-\begin{proof}
-By straightforward inspection of the value grammar and subtyping rules.
-\end{proof}
-
-\begin{lemma}[Substitution Lemma]
-If $\Gamma, x : \tau_1 \vdash e : \tau_2$ and $\Gamma \vdash v : \tau_1$, then $\Gamma \vdash e[x \mapsto v] : \tau_2$.
-\end{lemma}
-\begin{proof}
-By structural induction on the typing derivation of $e$, utilizing transitivity of subtyping.
-\end{proof}
-
-\begin{theorem}[Progress]
-If $\emptyset \vdash e : \tau$, then for any valid store $\sigma \models t$, either $e$ is a value $v$ or there exist $e', \sigma', \ell$ such that $\langle e, \sigma, t \rangle \xrightarrow{\ell} \langle e', \sigma', t \rangle$.
+Let $\text{tyTag} : \text{Ty} \to \mathbb{N}$ assign a unique integer to each type constructor family ($\text{base}=0..2, \text{arrow}=3, \text{prod}=4, \text{temporal}=5, \text{causal}=6$), and let $\text{valTag} : \text{Val} \to \mathbb{N}$ index value constructors.
+1. \textbf{Subtyping Tag Preservation:} If $\tau_1 \le \tau_2$, then $\text{tyTag}(\tau_1) = \text{tyTag}(\tau_2)$ (\texttt{sub\_preserves\_tag}, machine-checked in Lean 4).
+2. \textbf{Value Natural Typing:} For any closed value $v$ and type $\tau$, if $\emptyset \vdash v : \tau$, then $\text{valTag}(v) = \text{tyTag}(\tau)$ (\texttt{val\_tyTag}, machine-checked in Lean 4).
+3. \textbf{Canonical Forms:} Consequently, every value typed at $\tau_1 \xrightarrow{\epsilon} \tau_2$ is a lambda ($\lambda x.\, e$), every value typed at $\tau_1 \times \tau_2$ is a pair $(v_1, v_2)$, every value typed at $\texttt{Temporal}[\tau, k]$ is a temporal wrapper $\mathbf{temp}(v, k)$, and every value typed at $\texttt{Causal}[\tau, m]$ is a causal wrapper $\mathbf{caus}(v, m)$.
 \end{theorem}
-\begin{proof}
-By induction on the typing derivation $\emptyset \vdash e : \tau$:
-- **Case T-Var**: Vacuous in the empty context.
-- **Case T-Const, T-Abs**: $e$ is already a value; progress holds.
-- **Case T-App**: $e = e_1\, e_2$. If $e_1$ is not a value, it steps via evaluation context $E = [\cdot]\, e_2$. If $e_1$ is a value but $e_2$ is not, $e_2$ steps via $E = v_1\, [\cdot]$. If both are values, by Lemma~\ref{lem:canonical}, $e_1 = \lambda x:\tau_1'.\, e_0$, and rule $\textsc{E-Beta}$ applies.
-- **Case T-Pair, T-Proj1, T-Proj2**: Either subterms step via contexts, or redexes evaluate via $\textsc{E-Proj1}/\textsc{E-Proj2}$.
-- **Case T-Eval**: $e = s.\text{eval}()$. By store validity $\sigma \models t$, the cell $\sigma(t + \text{off}(s))(\text{root}(s))$ is defined. Rule $\textsc{E-Eval}$ applies immediately.
-- **Case T-Snapshot-Safe**: $e = e_0.\text{snapshot}()$ with $k \le 0$. If $e_0$ is not a value, it steps via context. If $e_0$ is a value, by Lemma~\ref{lem:canonical}, $e_0 = \mathbf{temp}(v_0, k)$, and $\textsc{E-Snap-Val}$ applies. (Future offsets $k > 0$ yield compile-time errors via $\textsc{T-Snapshot-Leak}$).
-- **Case T-Temp-BinOp**: When both operands are evaluated to values $\mathbf{temp}(v_1, k_1)$ and $\mathbf{temp}(v_2, k_2)$, rule $\textsc{E-Temp-Op}$ applies.
-- **Case T-Caus-BinOp**: Both operands have matching mode $m$. By Lemma~\ref{lem:canonical}, $e_1 = \mathbf{caus}(v_1, m)$ and $e_2 = \mathbf{caus}(v_2, m)$. Rule $\textsc{E-Caus-Op}$ applies.
-- **Case T-Sub**: Follows directly from the induction hypothesis. $\blacksquare$
+
+\begin{theorem}[Progress — Machine-Checked in Lean 4 with Zero Sorry]
+\label{thm:progress}
+Every closed, well-typed expression $e$ is either a value or can take an operational reduction step:
+$$
+\emptyset \vdash e : \tau \implies e \in \text{Val} \lor \exists e', \sigma', \ell.\ \langle e, \sigma, t \rangle \xrightarrow{\ell} \langle e', \sigma', t \rangle
+$$
+\end{theorem}
+\begin{proof}[Proof Sketch (Lean 4 Mechanization)]
+By induction on the typing derivation $\emptyset \vdash e : \tau$ generalized over arbitrary context $\Gamma$ with $\Gamma = \emptyset$.
+- Variables are discharged as vacuous because lookup in $\emptyset$ yields $\bot$.
+- Constants and abstractions are immediate values ($e \in \text{Val}$).
+- Application $e_1\, e_2$: By induction, $e_1$ either steps (yielding $\textsc{E-App-Left}$) or is a value. If $e_1 \in \text{Val}$, $e_2$ either steps ($\textsc{E-App-Right}$) or is a value. When both are values, by Theorem~\ref{lem:canonical} $e_1$ must be $\lambda x.\, e_0$, enabling $\beta$-reduction ($\textsc{E-Beta}$).
+- Pairs and projections: Analogously use $\textsc{E-Pair-Left}$, $\textsc{E-Pair-Right}$, and canonical form product inversion to step via $\textsc{E-Proj1}$/$\textsc{E-Proj2}$.
+- Stream materialization $s.\text{eval}()$: Discharged as impossible in empty context $\Gamma = \emptyset$ by lemma \texttt{stream\_typing\_empty\_impossible}.
+- Binary operations $e_1 \oplus e_2$: Step when either operand steps, or reduce via $\textsc{E-Op-Val}$ using total primitive evaluation \texttt{evalPrimOp}.
+- Snapshot $e.\text{snapshot}()$: Steps by congruence $\textsc{E-Snap-Cong}$ or reduces by $\textsc{E-Snap-Val}$ via canonical form temporal inversion.
+- Runtime wrappers $\mathbf{temp}(e, k)$ and $\mathbf{caus}(e, m)$: Step by wrapper congruence ($\textsc{E-Temp-Cong}$, $\textsc{E-Caus-Cong}$) when the inner expression steps, or form values when the inner expression is a value.
+All cases are machine-checked in Lean 4 without axioms or unproven subgoals (\texttt{sorry}). $\blacksquare$
 \end{proof}
+
+### 6.2 The Mechanized Soundness Audit: 7 Calculus Bugs Discovered and Resolved
+
+Formal mechanization in Lean 4 served as a rigorous verification gate, uncovering 7 structural defects in earlier informal formulations of $\lambda_{\text{neuron}}$:
+
+1. **Bug #1 (Runtime Representation Gap):** Evaluated values $\mathbf{temp}(v, k)$ and $\mathbf{caus}(v, m)$ lacked corresponding constructors in the expression syntax $\text{Expr}$, causing `valToExpr` to strip wrappers and creating stuck states under substitution. *Fix:* Introduced explicit $\text{Expr}.\mathbf{temp}(e, k)$ and $\text{Expr}.\mathbf{caus}(e, m)$.
+2. **Bug #2 (Wrapper Stripping in Embedding):** `valToExpr` mapped wrapped values to unwrapped inner terms. *Fix:* Restored wrapper preservation so that `valToExpr(Val.temp v k) = Expr.temp (valToExpr v) k`.
+3. **Bug #3 (Missing Runtime Value Typing):** No typing rules existed to type $\text{Expr}.\mathbf{temp}$ and $\text{Expr}.\mathbf{caus}$. *Fix:* Added $\textsc{T-TempVal}$ and $\textsc{T-CausVal}$.
+4. **Bug #4 (Missing Small-Step Congruence Rules):** Twelve congruence stepping rules were missing from the reduction relation, including evaluation under observation, snapshots, and extractions. *Fix:* Added explicit context congruence transitions.
+5. **Bug #5 (Primitive Operation Evaluation Gap):** Primitive operations on scalar values lacked an operational reduction step. *Fix:* Added $\text{evalPrimOp}$ and $\textsc{E-Op-Val}$.
+6. **Bug #6 (Wrapper Congruence Gap):** Terms wrapped in $\mathbf{temp}(e, k)$ and $\mathbf{caus}(e, m)$ could not evaluate inner non-value expressions $e \to e'$. *Fix:* Added $\textsc{E-Temp-Cong}$ and $\textsc{E-Caus-Cong}$.
+7. **Bug #7 (Unsound Implicit Ingestion vs. Canonical Forms):** Subtyping rules $\textsc{Sub-Temp-Ingest}$ and $\textsc{Sub-Caus-Ingest}$ allowed raw types to be implicitly subsumed into temporal and causal wrappers ($\tau_1 \le \texttt{Temporal}[\tau_2, k]$). This broke canonical forms: an integer $5 : \texttt{Int}$ could be typed as $\texttt{Temporal}[\texttt{Int}, 0]$, making $5.\text{snapshot}()$ well-typed but unable to step under $\textsc{E-Snap-Val}$. *Fix:* Eliminated implicit ingestion; temporal and causal wrappers are strictly explicit, restoring constructor tag invariance ($\text{tyTag}$).
 
 \begin{theorem}[Subject Reduction / Type Preservation]
 If $\Gamma \vdash e : \tau$ and $\langle e, \sigma, t \rangle \xrightarrow{\ell} \langle e', \sigma', t \rangle$, then $\Gamma \vdash e' : \tau$.

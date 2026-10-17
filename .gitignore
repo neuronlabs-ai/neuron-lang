@@ -50,6 +50,10 @@ data/
 *stock*
 *ohlcv*
 *market*
+*ftmo*
+*quantum*
+*alpha*
+*hamiltonian*
 
 # Node modules (VSCode extension)
 node_modules/
@@ -63,3 +67,6 @@ test_math_cap.nr
 tools/submission.csv
 checkpoint_*.json
 discovered_prime_*.json
+quant/
+eval_*.txt
+ground_truth*.txt

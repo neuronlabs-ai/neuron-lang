@@ -16,6 +16,8 @@ r#"// ════════════════════════�
 #![allow(unused_mut)]
 #![allow(non_snake_case)]
 #![allow(dead_code)]
+#![allow(unused_assignments)]
+#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use neuron_runtime::tensor::{Tensor, tensor_neg, tensor_gelu};
@@ -257,6 +259,77 @@ fn jit_matmul(vm: &mut VM, a: &Value, b: &Value) -> Value {
     res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
 }
 
+fn jit_matmul_add(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let (bias_plain, bias_wraps) = bias.clone().strip_wrappers();
+    let wraps = Value::combine_wrappers(Value::combine_wrappers(a_wraps, b_wraps), bias_wraps);
+    let res = match (&a_plain, &b_plain) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let mut r = vm.tape.matmul(ta, tb);
+            if let Value::Tensor(tbias) = &bias_plain {
+                r = neuron_runtime::tensor::tensor_add(&r, tbias);
+            } else if let Value::Float(fbias) = bias_plain {
+                r = r.map(|x| x + fbias);
+            }
+            Value::Tensor(r)
+        }
+        _ => panic!("MatMulAdd requires tensor operands"),
+    };
+    res.apply_wrappers(wraps)
+}
+
+fn jit_matmul_relu(vm: &mut VM, a: &Value, b: &Value) -> Value {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let wraps = Value::combine_wrappers(a_wraps, b_wraps);
+    let res = match (&a_plain, &b_plain) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let r = vm.tape.matmul(ta, tb);
+            Value::Tensor(vm.tape.relu(&r))
+        }
+        _ => panic!("MatMulReLU requires tensor operands"),
+    };
+    res.apply_wrappers(wraps)
+}
+
+fn jit_matmul_add_relu(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let (bias_plain, bias_wraps) = bias.clone().strip_wrappers();
+    let wraps = Value::combine_wrappers(Value::combine_wrappers(a_wraps, b_wraps), bias_wraps);
+    let res = match (&a_plain, &b_plain) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let mut r = vm.tape.matmul(ta, tb);
+            if let Value::Tensor(tbias) = &bias_plain {
+                r = neuron_runtime::tensor::tensor_add(&r, tbias);
+            } else if let Value::Float(fbias) = bias_plain {
+                r = r.map(|x| x + fbias);
+            }
+            Value::Tensor(vm.tape.relu(&r))
+        }
+        _ => panic!("MatMulAddReLU requires tensor operands"),
+    };
+    res.apply_wrappers(wraps)
+}
+
+fn jit_abs(vm: &mut VM, a: &Value) -> Value {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = match &a_plain {
+        Value::Tensor(t) => {
+            let mut r = t.clone();
+            for x in r.data.iter_mut() {
+                *x = x.abs();
+            }
+            r.id = vm.tape.alloc_id();
+            Value::Tensor(r)
+        }
+        Value::Int(i) => Value::Int(i.abs()),
+        _ => Value::Float(a_plain.as_float().abs()),
+    };
+    res.apply_wrappers(wraps)
+}
+
 fn jit_relu(vm: &mut VM, a: &Value) -> Value {
     let (a_plain, wraps) = a.clone().strip_wrappers();
     let res = if let Value::Tensor(t) = &a_plain {
@@ -283,6 +356,26 @@ fn jit_tanh(vm: &mut VM, a: &Value) -> Value {
         Value::Tensor(vm.tape.tanh(t))
     } else {
         Value::Float(a_plain.as_float().tanh())
+    };
+    res.apply_wrappers(wraps)
+}
+
+fn jit_exp(vm: &mut VM, a: &Value) -> Value {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
+        Value::Tensor(vm.tape.exp(t))
+    } else {
+        Value::Float(a_plain.as_float().exp())
+    };
+    res.apply_wrappers(wraps)
+}
+
+fn jit_log(vm: &mut VM, a: &Value) -> Value {
+    let (a_plain, wraps) = a.clone().strip_wrappers();
+    let res = if let Value::Tensor(t) = &a_plain {
+        Value::Tensor(vm.tape.log(t))
+    } else {
+        Value::Float(a_plain.as_float().ln())
     };
     res.apply_wrappers(wraps)
 }
@@ -585,6 +678,53 @@ fn jit_mod(vm: &mut VM, a: &Value, b: &Value) -> Value {
     }
 }
 
+fn jit_pow(vm: &mut VM, a: &Value, b: &Value) -> Value {
+    let (a_plain, a_wraps) = a.clone().strip_wrappers();
+    let (b_plain, b_wraps) = b.clone().strip_wrappers();
+    let res = match (&a_plain, &b_plain) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            Value::Tensor(vm.tape.pow(ta, tb))
+        }
+        (Value::Tensor(ta), Value::Float(y)) => {
+            let mut tb = Tensor::full(&ta.shape, *y);
+            tb.id = vm.tape.alloc_id();
+            Value::Tensor(vm.tape.pow(ta, &tb))
+        }
+        (Value::Tensor(ta), Value::Int(y)) => {
+            let mut tb = Tensor::full(&ta.shape, *y as f64);
+            tb.id = vm.tape.alloc_id();
+            Value::Tensor(vm.tape.pow(ta, &tb))
+        }
+        (Value::Int(x), Value::Tensor(tb)) => {
+            let mut ta = Tensor::full(&tb.shape, *x as f64);
+            ta.id = vm.tape.alloc_id();
+            Value::Tensor(vm.tape.pow(&ta, tb))
+        }
+        (Value::Float(x), Value::Tensor(tb)) => {
+            let mut ta = Tensor::full(&tb.shape, *x);
+            ta.id = vm.tape.alloc_id();
+            Value::Tensor(vm.tape.pow(&ta, tb))
+        }
+        (Value::Int(x), Value::Int(y)) => {
+            if *y >= 0 && *y <= 64 {
+                match x.checked_pow(*y as u32) {
+                    Some(p) => Value::Int(p),
+                    None => Value::Float((*x as f64).powi(*y as i32)),
+                }
+            } else if *y < 0 {
+                Value::Float((*x as f64).powi(*y as i32))
+            } else {
+                Value::Float((*x as f64).powf(*y as f64))
+            }
+        }
+        (Value::Float(x), Value::Float(y)) => Value::Float(x.powf(*y)),
+        (Value::Float(x), Value::Int(y)) => Value::Float(x.powi(*y as i32)),
+        (Value::Int(x), Value::Float(y)) => Value::Float((*x as f64).powf(*y)),
+        _ => Value::Float(a_plain.as_float().powf(b_plain.as_float())),
+    };
+    res.apply_wrappers(Value::combine_wrappers(a_wraps, b_wraps))
+}
+
 fn jit_and(a: &Value, b: &Value) -> Value {
     Value::Bool(a.as_bool() && b.as_bool())
 }
@@ -732,11 +872,18 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             IROp::Mul => format!("jit_mul(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Div => format!("jit_div(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Mod => format!("jit_mod(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::Pow => format!("jit_pow(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Neg => format!("jit_neg(vm, &v{})", node.inputs[0]),
                             IROp::MatMul => format!("jit_matmul(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::MatMulAdd => format!("jit_matmul_add(vm, &v{}, &v{}, &v{})", node.inputs[0], node.inputs[1], node.inputs[2]),
+                            IROp::MatMulReLU => format!("jit_matmul_relu(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::MatMulAddReLU => format!("jit_matmul_add_relu(vm, &v{}, &v{}, &v{})", node.inputs[0], node.inputs[1], node.inputs[2]),
                             IROp::ReLU => format!("jit_relu(vm, &v{})", node.inputs[0]),
                             IROp::Sigmoid => format!("jit_sigmoid(vm, &v{})", node.inputs[0]),
                             IROp::Tanh => format!("jit_tanh(vm, &v{})", node.inputs[0]),
+                            IROp::Exp => format!("jit_exp(vm, &v{})", node.inputs[0]),
+                            IROp::Log => format!("jit_log(vm, &v{})", node.inputs[0]),
+                            IROp::Abs => format!("jit_abs(vm, &v{})", node.inputs[0]),
                             IROp::Softmax { dim } => format!("jit_softmax(vm, &v{}, {})", node.inputs[0], dim),
                             IROp::MSELoss => format!("jit_mse(vm, &v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::GeLU => format!("jit_gelu(vm, &v{})", node.inputs[0]),
@@ -824,6 +971,55 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                         Value::Tensor(Tensor::zeros(&[1]))
                     }}
                 }}"#, node.inputs[0], wrt_str)
+                            }
+
+                            IROp::Hessian { wrt } => {
+                                let wrt_str = match wrt {
+                                    Some(ref w) => format!("Some({:?}.to_string())", w),
+                                    None => "None".to_string(),
+                                };
+                                format!(
+            r#"{{
+                    let (val_plain, _wraps) = v{}.clone().strip_wrappers();
+                    let val = &val_plain;
+                    if let Value::Tensor(loss_t) = val {{
+                        let mut found = None;
+                        if let Some(ref param_name) = {} {{
+                            if let Some(Value::Tensor(param)) = locals.get(param_name) {{
+                                let h = vm.tape.hessian(loss_t.id, param.id);
+                                found = Some(Value::Tensor(h));
+                            }}
+                        }}
+                        found.unwrap_or_else(|| Value::Tensor(Tensor::zeros(&[1, 1])))
+                    }} else {{
+                        Value::Tensor(Tensor::zeros(&[1, 1]))
+                    }}
+                }}"#, node.inputs[0], wrt_str)
+                            }
+
+                            IROp::HVP { wrt } => {
+                                let wrt_str = match wrt {
+                                    Some(ref w) => format!("Some({:?}.to_string())", w),
+                                    None => "None".to_string(),
+                                };
+                                let v_in = if node.inputs.len() > 1 { node.inputs[1] } else { node.inputs[0] };
+                                format!(
+            r#"{{
+                    let (val_plain, _wraps) = v{}.clone().strip_wrappers();
+                    let (v_plain, _wraps_v) = v{}.clone().strip_wrappers();
+                    if let (Value::Tensor(loss_t), Value::Tensor(v_t)) = (&val_plain, &v_plain) {{
+                        let mut found = None;
+                        if let Some(ref param_name) = {} {{
+                            if let Some(Value::Tensor(param)) = locals.get(param_name) {{
+                                let hv = vm.tape.hessian_vector_product(loss_t.id, param.id, v_t);
+                                found = Some(Value::Tensor(hv));
+                            }}
+                        }}
+                        found.unwrap_or_else(|| Value::Tensor(Tensor::zeros(&[1])))
+                    }} else {{
+                        Value::Tensor(Tensor::zeros(&[1]))
+                    }}
+                }}"#, node.inputs[0], v_in, wrt_str)
                             }
 
                             IROp::Backward => {
@@ -968,15 +1164,42 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                     Value::Tensor(t.transpose({}, {}))
                 }} else {{ Value::Void }}"#, node.inputs[0], dim0, dim1)
                             }
-
                             IROp::Print => {
-                                format!(
-            r#"{{
-                    println!("{{}}", v{}.display());
+                                if node.inputs.is_empty() {
+                                    r#"{
+                    println!();
                     vm.effect_log.push("io".into());
                     Value::Void
-                }}"#, node.inputs[0])
+                }"#.to_string()
+                                } else {
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.display()", id)).collect();
+                                    format!(
+            r#"{{
+                    let parts = vec![{}];
+                    println!("{{}}", parts.join(" "));
+                    vm.effect_log.push("io".into());
+                    Value::Void
+                }}"#, parts.join(", "))
+                                }
                             }
+
+                            IROp::PrintInline => {
+                                if node.inputs.is_empty() {
+                                    "Value::Void".to_string()
+                                } else {
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.display()", id)).collect();
+                                    format!(
+            r#"{{
+                    use std::io::Write;
+                    let parts = vec![{}];
+                    print!("{{}}", parts.join(" "));
+                    let _ = std::io::stdout().flush();
+                    vm.effect_log.push("io".into());
+                    Value::Void
+                }}"#, parts.join(", "))
+                                }
+                            }
+
 
                             IROp::Input => {
                                 r#"{
@@ -988,6 +1211,32 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                     vm.effect_log.push("io".into());
                     Value::Str(input_str.trim().to_string())
                 }"#.to_string()
+                            }
+
+                            IROp::ParseFloat => {
+                                format!(
+            r#"{{
+                    let val: f64 = match &v{} {{
+                        Value::Str(text) => text.trim().parse::<f64>().unwrap_or(0.0),
+                        Value::Int(i) => *i as f64,
+                        Value::Float(f) => *f,
+                        _ => 0.0,
+                    }};
+                    Value::Float(val)
+                }}"#, node.inputs[0])
+                            }
+
+                            IROp::ParseInt => {
+                                format!(
+            r#"{{
+                    let val: i64 = match &v{} {{
+                        Value::Str(text) => text.trim().parse::<i64>().unwrap_or(0),
+                        Value::Int(i) => *i,
+                        Value::Float(f) => *f as i64,
+                        _ => 0,
+                    }};
+                    Value::Int(val)
+                }}"#, node.inputs[0])
                             }
 
                             IROp::EmbedString => {

@@ -4,7 +4,7 @@
 /// By living in the runtime crate, they are compiled once and shared across all JIT invocations,
 /// eliminating the need to recompile them for every property test or JIT build.
 
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, tensor_add};
 use crate::vm::{Value, VM};
 use std::collections::HashMap;
 
@@ -126,6 +126,84 @@ pub fn jit_div(vm: &mut VM, a: &Value, b: &Value) -> Value {
     }
 }
 
+pub fn jit_pow(vm: &mut VM, a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Tensor(ta), Value::Int(y)) => {
+            let exp_f = *y as f64;
+            let mut res = ta.clone();
+            for x in res.data.iter_mut() {
+                *x = x.powf(exp_f);
+            }
+            res.id = vm.tape.alloc_id();
+            Value::Tensor(res)
+        }
+        (Value::Tensor(ta), Value::Float(y)) => {
+            let exp_f = *y;
+            let mut res = ta.clone();
+            for x in res.data.iter_mut() {
+                *x = x.powf(exp_f);
+            }
+            res.id = vm.tape.alloc_id();
+            Value::Tensor(res)
+        }
+        (Value::Int(x), Value::Int(y)) => {
+            if *y >= 0 && *y <= 64 {
+                match x.checked_pow(*y as u32) {
+                    Some(p) => Value::Int(p),
+                    None => Value::Float((*x as f64).powf(*y as f64)),
+                }
+            } else {
+                Value::Float((*x as f64).powf(*y as f64))
+            }
+        }
+        (Value::Float(x), Value::Float(y)) => Value::Float(x.powf(*y)),
+        (Value::Float(x), Value::Int(y)) => Value::Float(x.powi(*y as i32)),
+        (Value::Int(x), Value::Float(y)) => Value::Float((*x as f64).powf(*y)),
+        _ => Value::Float(a.as_float().powf(b.as_float())),
+    }
+}
+
+pub fn jit_exp(vm: &mut VM, a: &Value) -> Value {
+    if let Value::Tensor(t) = a {
+        let mut res = t.clone();
+        for x in res.data.iter_mut() {
+            *x = x.exp();
+        }
+        res.id = vm.tape.alloc_id();
+        Value::Tensor(res)
+    } else {
+        Value::Float(a.as_float().exp())
+    }
+}
+
+pub fn jit_log(vm: &mut VM, a: &Value) -> Value {
+    if let Value::Tensor(t) = a {
+        let mut res = t.clone();
+        for x in res.data.iter_mut() {
+            *x = x.ln();
+        }
+        res.id = vm.tape.alloc_id();
+        Value::Tensor(res)
+    } else {
+        Value::Float(a.as_float().ln())
+    }
+}
+
+pub fn jit_abs(vm: &mut VM, a: &Value) -> Value {
+    match a {
+        Value::Tensor(t) => {
+            let mut res = t.clone();
+            for x in res.data.iter_mut() {
+                *x = x.abs();
+            }
+            res.id = vm.tape.alloc_id();
+            Value::Tensor(res)
+        }
+        Value::Int(i) => Value::Int(i.abs()),
+        _ => Value::Float(a.as_float().abs()),
+    }
+}
+
 pub fn jit_neg(vm: &mut VM, a: &Value) -> Value {
     match a {
         Value::Tensor(ta) => Value::Tensor(vm.tape.neg(ta)),
@@ -205,6 +283,46 @@ pub fn jit_matmul(vm: &mut VM, a: &Value, b: &Value) -> Value {
             Value::Tensor(vm.tape.matmul(ta, tb))
         }
         _ => panic!("JIT matmul requires tensor operands"),
+    }
+}
+
+pub fn jit_matmul_add(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value {
+    match (a, b) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let mut r = vm.tape.matmul(ta, tb);
+            if let Value::Tensor(tbias) = bias {
+                r = tensor_add(&r, tbias);
+            } else if let Value::Float(fbias) = bias {
+                r = r.map(|x| x + fbias);
+            }
+            Value::Tensor(r)
+        }
+        _ => panic!("JIT matmul_add requires tensor operands"),
+    }
+}
+
+pub fn jit_matmul_relu(vm: &mut VM, a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let r = vm.tape.matmul(ta, tb);
+            Value::Tensor(vm.tape.relu(&r))
+        }
+        _ => panic!("JIT matmul_relu requires tensor operands"),
+    }
+}
+
+pub fn jit_matmul_add_relu(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value {
+    match (a, b) {
+        (Value::Tensor(ta), Value::Tensor(tb)) => {
+            let mut r = vm.tape.matmul(ta, tb);
+            if let Value::Tensor(tbias) = bias {
+                r = tensor_add(&r, tbias);
+            } else if let Value::Float(fbias) = bias {
+                r = r.map(|x| x + fbias);
+            }
+            Value::Tensor(vm.tape.relu(&r))
+        }
+        _ => panic!("JIT matmul_add_relu requires tensor operands"),
     }
 }
 

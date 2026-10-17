@@ -81,6 +81,20 @@ layer Embedding(vocab_size: Int, embed_dim: Int):
     return embedded
 
 // ─────────────────────────────────────────────
+//  Byte-Level Native Embedding Layer
+//  Token-free UTF-8 byte substrate (256 raw bytes)
+// ─────────────────────────────────────────────
+@compile(target="auto")
+layer ByteEmbedding(embed_dim: Int):
+  weight: Tensor[256, embed_dim] = normal_init(256, embed_dim, 0.0, 0.02)
+
+  fn forward(self, byte_indices: Tensor[B, S]) -> Tensor[B, S, embed_dim]:
+    // Direct projection from raw 256-byte space
+    let embedded = byte_indices @ self.weight
+    return embedded
+
+
+// ─────────────────────────────────────────────
 //  Normalization Layers
 // ─────────────────────────────────────────────
 

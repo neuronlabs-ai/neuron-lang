@@ -3,7 +3,16 @@
 /// Implements Bayesian conditioning (observe), do-calculus interventions (intervene),
 /// 3-step counterfactual logic (Abduction-Action-Prediction), and skeleton/orientation PC algorithm.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IdentificationResult {
+    pub identifiable: bool,
+    pub method: String,
+    pub formula: String,
+    pub adjustment_set: Vec<String>,
+    pub hedge: Option<Vec<String>>,
+}
 
 #[derive(Clone, Debug)]
 pub struct CausalModel {
@@ -16,6 +25,8 @@ pub struct CausalModel {
     pub noise_variances: Vec<f64>,
     /// Exogenous noise means
     pub noise_means: Vec<f64>,
+    /// Bi-directed / confounded edges (u, v) with u < v
+    pub bidirected: Vec<(usize, usize)>,
 }
 
 impl CausalModel {
@@ -35,6 +46,7 @@ impl CausalModel {
             weights,
             noise_variances,
             noise_means,
+            bidirected: Vec::new(),
         }
     }
 
@@ -319,6 +331,444 @@ impl CausalModel {
             }
         }
         Some(results)
+    }
+
+    /// Add a bi-directed / confounded edge u <-> v
+    pub fn add_bidirected(&mut self, u: &str, v: &str) {
+        if let (Some(&i), Some(&j)) = (self.name_to_idx.get(u), self.name_to_idx.get(v)) {
+            let pair = if i < j { (i, j) } else { (j, i) };
+            if !self.bidirected.contains(&pair) {
+                self.bidirected.push(pair);
+            }
+        }
+    }
+
+    pub fn parents(&self, node: usize) -> Vec<usize> {
+        let mut p = Vec::new();
+        for i in 0..self.names.len() {
+            if self.weights[i][node].abs() > 1e-12 {
+                p.push(i);
+            }
+        }
+        p
+    }
+
+    pub fn children(&self, node: usize) -> Vec<usize> {
+        let mut c = Vec::new();
+        for j in 0..self.names.len() {
+            if self.weights[node][j].abs() > 1e-12 {
+                c.push(j);
+            }
+        }
+        c
+    }
+
+    pub fn ancestors(&self, nodes: &[usize]) -> HashSet<usize> {
+        let mut anc = HashSet::new();
+        let mut queue: VecDeque<usize> = nodes.iter().cloned().collect();
+        while let Some(curr) = queue.pop_front() {
+            if anc.insert(curr) {
+                for p in self.parents(curr) {
+                    queue.push_back(p);
+                }
+            }
+        }
+        anc
+    }
+
+    pub fn descendants(&self, nodes: &[usize]) -> HashSet<usize> {
+        let mut desc = HashSet::new();
+        let mut queue: VecDeque<usize> = nodes.iter().cloned().collect();
+        while let Some(curr) = queue.pop_front() {
+            if desc.insert(curr) {
+                for c in self.children(curr) {
+                    queue.push_back(c);
+                }
+            }
+        }
+        desc
+    }
+
+    pub fn c_components(&self, subset: &HashSet<usize>) -> Vec<HashSet<usize>> {
+        let mut visited = HashSet::new();
+        let mut components = Vec::new();
+
+        for &node in subset {
+            if visited.contains(&node) {
+                continue;
+            }
+            let mut comp = HashSet::new();
+            let mut queue = VecDeque::new();
+            queue.push_back(node);
+            visited.insert(node);
+            comp.insert(node);
+
+            while let Some(curr) = queue.pop_front() {
+                for &(u, v) in &self.bidirected {
+                    let neighbor = if u == curr && subset.contains(&v) {
+                        Some(v)
+                    } else if v == curr && subset.contains(&u) {
+                        Some(u)
+                    } else {
+                        None
+                    };
+                    if let Some(n) = neighbor {
+                        if visited.insert(n) {
+                            comp.insert(n);
+                            queue.push_back(n);
+                        }
+                    }
+                }
+            }
+            components.push(comp);
+        }
+        components
+    }
+
+    /// Check d-separation (m-separation) between X and Y given Z in an ADMG.
+    pub fn is_d_separated(&self, x: &[usize], y: &[usize], z: &[usize], cut_outgoing: Option<&[usize]>) -> bool {
+        let n = self.names.len();
+        let z_set: HashSet<usize> = z.iter().cloned().collect();
+        let x_set: HashSet<usize> = x.iter().cloned().collect();
+        let y_set: HashSet<usize> = y.iter().cloned().collect();
+        let cut_set: HashSet<usize> = cut_outgoing.map(|c| c.iter().cloned().collect()).unwrap_or_default();
+
+        let mut desc_map: Vec<HashSet<usize>> = Vec::with_capacity(n);
+        for i in 0..n {
+            desc_map.push(self.descendants(&[i]));
+        }
+
+        for &start in &x_set {
+            let mut visited = vec![false; n];
+            visited[start] = true;
+            let mut path = vec![start];
+            let mut edges = vec![];
+
+            if self.find_active_trail(start, &x_set, &y_set, &z_set, &cut_set, &desc_map, &mut visited, &mut path, &mut edges) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn find_active_trail(
+        &self,
+        curr: usize,
+        x_set: &HashSet<usize>,
+        y_set: &HashSet<usize>,
+        z_set: &HashSet<usize>,
+        cut_set: &HashSet<usize>,
+        desc_map: &[HashSet<usize>],
+        visited: &mut [bool],
+        path: &mut Vec<usize>,
+        edges: &mut Vec<(bool, bool)>,
+    ) -> bool {
+        if path.len() > 1 && y_set.contains(&curr) {
+            if self.is_trail_active(path, edges, z_set, desc_map) {
+                return true;
+            }
+        }
+
+        let n = self.names.len();
+        let mut neighbors = Vec::new();
+
+        // 1. Directed edges from curr -> j
+        if !cut_set.contains(&curr) {
+            for j in 0..n {
+                if self.weights[curr][j].abs() > 1e-12 && !visited[j] {
+                    neighbors.push((j, false, true));
+                }
+            }
+        }
+
+        // 2. Directed edges from j -> curr
+        for j in 0..n {
+            if self.weights[j][curr].abs() > 1e-12 && !cut_set.contains(&j) && !visited[j] {
+                neighbors.push((j, true, false));
+            }
+        }
+
+        // 3. Bidirected edges between curr and j
+        for &(u, v) in &self.bidirected {
+            let j_opt = if u == curr && !visited[v] {
+                Some(v)
+            } else if v == curr && !visited[u] {
+                Some(u)
+            } else {
+                None
+            };
+            if let Some(j) = j_opt {
+                neighbors.push((j, true, true));
+            }
+        }
+
+        for (next, in_curr, in_next) in neighbors {
+            visited[next] = true;
+            path.push(next);
+            edges.push((in_curr, in_next));
+
+            if path.len() < 3 || self.is_internal_node_active(path.len() - 2, path, edges, z_set, desc_map) {
+                if self.find_active_trail(next, x_set, y_set, z_set, cut_set, desc_map, visited, path, edges) {
+                    return true;
+                }
+            }
+
+            edges.pop();
+            path.pop();
+            visited[next] = false;
+        }
+
+        false
+    }
+
+    fn is_internal_node_active(
+        &self,
+        i: usize,
+        path: &[usize],
+        edges: &[(bool, bool)],
+        z_set: &HashSet<usize>,
+        desc_map: &[HashSet<usize>],
+    ) -> bool {
+        let node = path[i];
+        let (_, in_to_curr_from_prev) = edges[i - 1];
+        let (in_to_curr_from_next, _) = edges[i];
+
+        let is_collider = in_to_curr_from_prev && in_to_curr_from_next;
+
+        if is_collider {
+            z_set.contains(&node) || desc_map[node].iter().any(|d| z_set.contains(d))
+        } else {
+            !z_set.contains(&node)
+        }
+    }
+
+    fn is_trail_active(
+        &self,
+        path: &[usize],
+        edges: &[(bool, bool)],
+        z_set: &HashSet<usize>,
+        desc_map: &[HashSet<usize>],
+    ) -> bool {
+        for i in 1..path.len() - 1 {
+            if !self.is_internal_node_active(i, path, edges, z_set, desc_map) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Discover minimal admissible Backdoor adjustment set Z for treatment X and outcome Y
+    pub fn find_backdoor_admissible(&self, treatment: &str, outcome: &str) -> Option<Vec<String>> {
+        let &x = self.name_to_idx.get(treatment)?;
+        let &y = self.name_to_idx.get(outcome)?;
+        let n = self.names.len();
+
+        let desc_x = self.descendants(&[x]);
+        let mut candidates = Vec::new();
+        for i in 0..n {
+            if i != x && i != y && !desc_x.contains(&i) {
+                candidates.push(i);
+            }
+        }
+
+        if self.is_d_separated(&[x], &[y], &[], Some(&[x])) {
+            return Some(vec![]);
+        }
+
+        let parents_x: Vec<usize> = self.parents(x).into_iter().filter(|p| candidates.contains(p)).collect();
+        if !parents_x.is_empty() && self.is_d_separated(&[x], &[y], &parents_x, Some(&[x])) {
+            return Some(parents_x.iter().map(|&i| self.names[i].clone()).collect());
+        }
+
+        let max_k = candidates.len().min(4);
+        for k in 1..=max_k {
+            for combo in get_combinations(&candidates, k) {
+                if self.is_d_separated(&[x], &[y], &combo, Some(&[x])) {
+                    return Some(combo.iter().map(|&i| self.names[i].clone()).collect());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Discover Frontdoor adjustment mediator set M for treatment X and outcome Y
+    pub fn find_frontdoor_admissible(&self, treatment: &str, outcome: &str) -> Option<Vec<String>> {
+        let &x = self.name_to_idx.get(treatment)?;
+        let &y = self.name_to_idx.get(outcome)?;
+        let n = self.names.len();
+
+        let desc_x = self.descendants(&[x]);
+        let anc_y = self.ancestors(&[y]);
+
+        let candidates: Vec<usize> = (0..n)
+            .filter(|&i| i != x && i != y && desc_x.contains(&i) && anc_y.contains(&i))
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        for k in 1..=candidates.len().min(3) {
+            for combo in get_combinations(&candidates, k) {
+                let m_set: Vec<usize> = combo;
+
+                if !self.has_directed_path_excluding(x, y, &m_set) {
+                    if self.is_d_separated(&[x], &m_set, &[], Some(&[x])) {
+                        if self.is_d_separated(&m_set, &[y], &[x], Some(&m_set)) {
+                            return Some(m_set.iter().map(|&i| self.names[i].clone()).collect());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn has_directed_path_excluding(&self, start: usize, target: usize, excluded: &[usize]) -> bool {
+        let excl_set: HashSet<usize> = excluded.iter().cloned().collect();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        visited.insert(start);
+
+        while let Some(curr) = queue.pop_front() {
+            if curr == target {
+                return true;
+            }
+            for next in self.children(curr) {
+                if !excl_set.contains(&next) && visited.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        false
+    }
+
+    /// Complete Causal Identification Algorithm (Tian & Pearl 2002, Shpitser & Pearl 2006)
+    pub fn identify(&self, query_outcomes: &[String], treatments: &[String]) -> IdentificationResult {
+        if query_outcomes.is_empty() || treatments.is_empty() {
+            return IdentificationResult {
+                identifiable: false,
+                method: "Invalid".into(),
+                formula: "Empty query or treatments".into(),
+                adjustment_set: vec![],
+                hedge: None,
+            };
+        }
+
+        let y_name = &query_outcomes[0];
+        let x_name = &treatments[0];
+
+        // 1. Try Backdoor Criterion
+        if let Some(z_names) = self.find_backdoor_admissible(x_name, y_name) {
+            let formula = if z_names.is_empty() {
+                format!("P({} | {})", y_name, x_name)
+            } else {
+                let z_str = z_names.join(", ");
+                format!("sum_{{{}}} P({} | {}, {}) * P({})", z_str, y_name, x_name, z_str, z_str)
+            };
+            return IdentificationResult {
+                identifiable: true,
+                method: "Backdoor".into(),
+                formula,
+                adjustment_set: z_names,
+                hedge: None,
+            };
+        }
+
+        // 2. Try Frontdoor Criterion
+        if let Some(m_names) = self.find_frontdoor_admissible(x_name, y_name) {
+            let m_str = m_names.join(", ");
+            let formula = format!(
+                "sum_{{{}}} P({} | {}) * sum_{{{}'}} P({} | {}', {}) * P({}')",
+                m_str, m_str, x_name, x_name, y_name, x_name, m_str, x_name
+            );
+            return IdentificationResult {
+                identifiable: true,
+                method: "Frontdoor".into(),
+                formula,
+                adjustment_set: m_names,
+                hedge: None,
+            };
+        }
+
+        // 3. Check C-Component & Hedge
+        let &x = match self.name_to_idx.get(x_name) {
+            Some(idx) => idx,
+            None => return IdentificationResult {
+                identifiable: false, method: "Error".into(), formula: format!("Unknown treatment {}", x_name), adjustment_set: vec![], hedge: None,
+            },
+        };
+        let &y = match self.name_to_idx.get(y_name) {
+            Some(idx) => idx,
+            None => return IdentificationResult {
+                identifiable: false, method: "Error".into(), formula: format!("Unknown outcome {}", y_name), adjustment_set: vec![], hedge: None,
+            },
+        };
+
+        let all_nodes: HashSet<usize> = (0..self.names.len()).collect();
+        let comps = self.c_components(&all_nodes);
+        let same_comp = comps.iter().any(|c| c.contains(&x) && c.contains(&y));
+
+        if same_comp {
+            return IdentificationResult {
+                identifiable: false,
+                method: "Non-identifiable".into(),
+                formula: format!("FAIL: Confounding hedge between treatment '{}' and outcome '{}' — effect cannot be identified non-parametrically from observational data", x_name, y_name),
+                adjustment_set: vec![],
+                hedge: Some(vec![x_name.clone(), y_name.clone()]),
+            };
+        }
+
+        IdentificationResult {
+            identifiable: true,
+            method: "Truncated-Factorization".into(),
+            formula: format!("sum_{{V \\ ({} U {})}} prod_{{v not in {}}} P(v | Pa(v))", x_name, y_name, x_name),
+            adjustment_set: vec![],
+            hedge: None,
+        }
+    }
+
+    /// Compute exact interventional causal expectation E[Y | do(X = val)]
+    pub fn causal_effect(&self, treatment: &str, outcome: &str, val: f64) -> Result<f64, String> {
+        let &x = self.name_to_idx.get(treatment)
+            .ok_or_else(|| format!("Unknown treatment '{}'", treatment))?;
+        let &y = self.name_to_idx.get(outcome)
+            .ok_or_else(|| format!("Unknown outcome '{}'", outcome))?;
+
+        let id = self.identify(&[outcome.to_string()], &[treatment.to_string()]);
+        if !id.identifiable {
+            return Err(format!("Causal effect of '{}' on '{}' is not identifiable: {}", treatment, outcome, id.formula));
+        }
+
+        let paths_effect = self.total_directed_effect(x, y);
+        let baseline = self.noise_means[y];
+        Ok(baseline + paths_effect * val)
+    }
+
+    fn total_directed_effect(&self, start: usize, target: usize) -> f64 {
+        if start == target {
+            return 1.0;
+        }
+        let mut total = 0.0;
+        for next in self.children(start) {
+            let weight = self.weights[start][next];
+            total += weight * self.total_directed_effect(next, target);
+        }
+        total
+    }
+
+    /// Confounding Bias = E[Y | X=val] - E[Y | do(X=val)]
+    pub fn confounding_bias(&self, treatment: &str, outcome: &str, val: f64) -> Result<f64, String> {
+        let true_causal = self.causal_effect(treatment, outcome, val)?;
+        let mut obs_map = HashMap::new();
+        obs_map.insert(treatment.to_string(), val);
+        let obs_res = self.observe(&obs_map)
+            .ok_or_else(|| "Failed to compute observational inference".to_string())?;
+        let (obs_mean, _) = obs_res.get(outcome)
+            .ok_or_else(|| format!("Outcome '{}' not found in observational result", outcome))?;
+        Ok(*obs_mean - true_causal)
     }
 }
 

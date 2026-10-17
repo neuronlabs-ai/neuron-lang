@@ -21,6 +21,8 @@ pub enum NType {
     Random(Box<NType>),                    // Random[T]
     Prob(Box<NType>),                      // Prob[T]
     Temporal(Box<NType>, TemporalSpec),    // Temporal[T, direction/offset]
+    TemporalWindow(Box<NType>, TemporalSpec, i64), // TemporalWindow[T, spec, lead_offset]
+    Stream(Box<NType>, i64),               // Stream[T, k]
     Causal(Box<NType>, String),            // Causal[T, mode]
     Learnable(String, Option<Box<NType>>), // Learnable[FnType]
     Effect(Vec<EffectEntry>),              // Effect[IO, Rand, Mut[x]]
@@ -75,6 +77,8 @@ impl NType {
             NType::Uncertain(inner) => format!("Uncertain[{}]", inner.display()),
             NType::Random(inner) => format!("Random[{}]", inner.display()),
             NType::Temporal(inner, spec) => format!("Temporal[{}, {}]", inner.display(), spec),
+            NType::TemporalWindow(inner, spec, lead) => format!("TemporalWindow[{}, {}, lead={}]", inner.display(), spec, lead),
+            NType::Stream(inner, k) => format!("Stream[{}, {}]", inner.display(), k),
             NType::Causal(inner, mode) => format!("Causal[{}, {}]", inner.display(), mode),
             NType::List(inner) => format!("List[{}]", inner.display()),
             NType::Model(name, _, _) => format!("Model[{}]", name),
@@ -151,12 +155,16 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
         (NType::Tensor(_), NType::Base(y)) if y == "Loss" || y == "Tensor" => true,
         (NType::Base(x), NType::Tensor(_)) if x == "Loss" || x == "Tensor" => true,
         (NType::Tensor(_), NType::Tensor(_)) => true, // Shape checked separately
+        (NType::Stream(x1, k1), NType::Stream(x2, k2)) => k1 == k2 && types_compatible(x1, x2),
         (NType::Uncertain(x), NType::Uncertain(y)) => types_compatible(x, y),
         (NType::Random(x), NType::Random(y)) => types_compatible(x, y),
         (NType::Temporal(x, s1), NType::Temporal(y, s2)) => {
             // Semantic Invariant: An expression whose information dependency is no later
             // than the maximum allowed dependency is safe (actual <= expected).
             let spec_compat = match (s1, s2) {
+                (TemporalSpec::GlobalSample, TemporalSpec::GlobalSample) => true,
+                (TemporalSpec::GlobalSample, _) => false,
+                (_, TemporalSpec::GlobalSample) => false,
                 (TemporalSpec::Direction(d1), TemporalSpec::Direction(d2)) => d1 == d2,
                 (TemporalSpec::Offset(o_exp), TemporalSpec::Offset(o_act)) => {
                     // Subtyping: actual data offset must be <= expected offset bound.
@@ -175,6 +183,7 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
             };
             spec_compat && types_compatible(x, y)
         }
+        (NType::TemporalWindow(x1, s1, l1), NType::TemporalWindow(x2, s2, l2)) => l1 == l2 && s1 == s2 && types_compatible(x1, x2),
         (NType::Causal(x, m1), NType::Causal(y, m2)) => m1 == m2 && types_compatible(x, y),
         (NType::List(x), NType::List(y)) => types_compatible(x, y),
         (NType::Tuple(ts1), NType::Tuple(ts2)) => {
@@ -211,6 +220,11 @@ fn type_from_ast(te: &TypeExpr) -> NType {
         TypeExpr::Random(inner, _) => NType::Random(Box::new(type_from_ast(inner))),
         TypeExpr::Prob(inner, _) => NType::Prob(Box::new(type_from_ast(inner))),
         TypeExpr::Temporal(inner, spec, _) => NType::Temporal(Box::new(type_from_ast(inner)), spec.clone()),
+        TypeExpr::StreamType(inner, cap_expr, _) => {
+            let inner_ty = type_from_ast(inner);
+            let cap = if let Expr::IntLit(v, _) = cap_expr.as_ref() { *v } else { 100 };
+            NType::Stream(Box::new(inner_ty), cap)
+        },
         TypeExpr::Causal(inner, mode, _) => NType::Causal(Box::new(type_from_ast(inner)), mode.clone()),
         TypeExpr::Learnable(fn_type, _, _) => NType::Learnable(fn_type.clone(), None),
         TypeExpr::ListType(inner, _) => NType::List(Box::new(type_from_ast(inner))),
@@ -360,7 +374,7 @@ impl SymbolTable {
         let float = NType::Base("Float".into());
         let int = NType::Base("Int".into());
         let loss = NType::Base("Loss".into());
-        let dataset = NType::Base("Dataset".into());
+        let _dataset = NType::Base("Dataset".into());
         let any = NType::Any;
 
         global.define("zeros", NType::Fn_(vec![any.clone()], Box::new(tensor.clone()), None));
@@ -377,7 +391,10 @@ impl SymbolTable {
         global.define("update_row", NType::Fn_(vec![tensor.clone(), int.clone(), any.clone()], Box::new(tensor.clone()), None));
         global.define("softmax", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("sigmoid", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
-        global.define("tanh", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("tanh", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("exp", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("log", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
+        global.define("pow", NType::Fn_(vec![any.clone(), any.clone()], Box::new(any.clone()), None));
         global.define("cross_entropy", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(loss.clone()), None));
         global.define("mse", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(loss.clone()), None));
         global.define("negative_log_likelihood", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(loss.clone()), None));
@@ -391,7 +408,6 @@ impl SymbolTable {
         global.define("Beta", NType::Fn_(vec![float.clone(), float.clone()], Box::new(NType::Uncertain(Box::new(float.clone()))), None));
         global.define("GaussianNoise", NType::Fn_(vec![float.clone()], Box::new(NType::Random(Box::new(float.clone()))), None));
         global.define("load", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
-        global.define("load_dataset", NType::Fn_(vec![NType::Base("String".into())], Box::new(dataset.clone()), None));
         global.define("load_ohlcv", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
         global.define("load_ohlcv_list", NType::Fn_(vec![NType::Base("String".into())], Box::new(any.clone()), None));
         global.define("load_tensor", NType::Fn_(vec![NType::Base("String".into()), int.clone(), int.clone()], Box::new(tensor.clone()), None));
@@ -408,7 +424,13 @@ impl SymbolTable {
         global.define("print", NType::Fn_(vec![any.clone()], Box::new(NType::Void), None));
         global.define("print_inline", NType::Fn_(vec![any.clone()], Box::new(NType::Void), None));
         global.define("input", NType::Fn_(vec![], Box::new(NType::Base("String".into())), None));
+        global.define("parse_float", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
+        global.define("parse_int", NType::Fn_(vec![any.clone()], Box::new(int.clone()), None));
+        global.define("to_float", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
+        global.define("to_int", NType::Fn_(vec![any.clone()], Box::new(int.clone()), None));
         global.define("embed_string", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
+        global.define("byte_encode", NType::Fn_(vec![any.clone()], Box::new(tensor.clone()), None));
+        global.define("byte_decode", NType::Fn_(vec![tensor.clone()], Box::new(NType::Base("String".into())), None));
         global.define("generate_reply", NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("String".into())), None));
         global.define("forget", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone()], Box::new(NType::Base("ForgetCertificate".into())), None));
         global.define("sgd", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
@@ -417,6 +439,11 @@ impl SymbolTable {
         global.define("stop_grad", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("mean", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
         global.define("sum", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
+        global.define("WorkingMemory", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::WorkingMemory(Box::new(any.clone()), None)), None));
+        global.define("EpisodicMemory", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::EpisodicMemory(Box::new(any.clone()))), None));
+        global.define("Stream", NType::Fn_(vec![int.clone()], Box::new(NType::Stream(Box::new(any.clone()), 100)), None));
+        global.define("recall", NType::Fn_(vec![any.clone(), any.clone(), any.clone()], Box::new(NType::List(Box::new(any.clone()))), None));
+        global.define("store", NType::Fn_(vec![any.clone(), any.clone()], Box::new(NType::Void), None));
 
         // High-performance Mersenne and bitwise built-ins
         let bool_type = NType::Base("Bool".into());
@@ -442,7 +469,58 @@ impl SymbolTable {
         global.define("is_wieferich", NType::Fn_(vec![int.clone()], Box::new(bool_type.clone()), None));
         global.define("wieferich_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
 
-        // Built-in type names
+        // Data Loading & I/O
+        global.define("read_csv", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
+        global.define("load_csv", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
+        global.define("read_file", NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("String".into())), None));
+        global.define("write_file", NType::Fn_(vec![NType::Base("String".into()), NType::Base("String".into())], Box::new(NType::Void), None));
+
+        // Data Slicing & Preprocessing
+        global.define("slice_rows", NType::Fn_(vec![tensor.clone(), int.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("slice_cols", NType::Fn_(vec![tensor.clone(), int.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("get_row", NType::Fn_(vec![tensor.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("shape", NType::Fn_(vec![tensor.clone()], Box::new(NType::List(Box::new(int.clone()))), None));
+        global.define("rows", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
+        global.define("cols", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
+        global.define("min_max_scale", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("standardize", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+
+        // Cognitive & Distance Math
+        global.define("cosine_sim", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(float.clone()), None));
+        global.define("euclidean_dist", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(float.clone()), None));
+        global.define("dot", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(float.clone()), None));
+        global.define("norm", NType::Fn_(vec![tensor.clone()], Box::new(float.clone()), None));
+        global.define("argmax", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
+        global.define("argmin", NType::Fn_(vec![tensor.clone()], Box::new(int.clone()), None));
+        global.define("item", NType::Fn_(vec![tensor.clone()], Box::new(float.clone()), None));
+
+        // Physics / Grid Tensor Primitives
+        global.define("make_tensor", NType::Fn_(vec![int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("tensor_add", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("tensor_sub", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("tensor_scale", NType::Fn_(vec![tensor.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("tensor_get", NType::Fn_(vec![tensor.clone(), int.clone()], Box::new(float.clone()), None));
+        global.define("tensor_set", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("abs_max", NType::Fn_(vec![tensor.clone()], Box::new(float.clone()), None));
+        global.define("tensor_sum", NType::Fn_(vec![tensor.clone()], Box::new(float.clone()), None));
+        global.define("tensor_clone", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+
+        // High-Performance Grid Kernels (Navier-Stokes)
+        global.define("grid_laplacian", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid_jacobi_step", NType::Fn_(vec![tensor.clone(), tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid_advect", NType::Fn_(vec![tensor.clone(), tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid_stats", NType::Fn_(vec![tensor.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid_rk2_step", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone(), float.clone(), float.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("power_law_fit", NType::Fn_(vec![tensor.clone(), tensor.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("grid3d_init_tubes", NType::Fn_(vec![int.clone(), float.clone(), float.clone(), float.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid3d_stats", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("grid3d_step", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone(), float.clone(), float.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("pde_build_library", NType::Fn_(vec![tensor.clone(), tensor.clone(), int.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("pde_sindy_fit", NType::Fn_(vec![tensor.clone(), tensor.clone(), float.clone(), float.clone()], Box::new(tensor.clone()), None));
+        global.define("pde_score", NType::Fn_(vec![tensor.clone(), tensor.clone(), tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("grid_solve_psi", NType::Fn_(vec![tensor.clone(), int.clone(), float.clone(), int.clone()], Box::new(tensor.clone()), None));
+
+
         global.define("Int", NType::Base("Int".into()));
         global.define("Float", NType::Base("Float".into()));
         global.define("Bool", NType::Base("Bool".into()));
@@ -540,6 +618,7 @@ pub struct TypeChecker {
     model_types: HashMap<String, NType>,
     current_return_type: Option<NType>,
     effects_map: HashMap<String, FnEffectInfo>,
+    expr_depth: usize,
 }
 
 impl TypeChecker {
@@ -551,6 +630,7 @@ impl TypeChecker {
             model_types: HashMap::new(),
             current_return_type: None,
             effects_map: HashMap::new(),
+            expr_depth: 0,
         }
     }
 
@@ -655,7 +735,7 @@ impl TypeChecker {
                     if let Some(ref t) = edge.target { if !vars.contains(t) { vars.push(t.clone()); } }
                 }
                 let cm_ty = NType::CausalModel(c.name.clone(), vars);
-                self.symbols.define(&c.name, cm_ty);
+                self.symbols.define(&c.name, NType::Fn_(vec![], Box::new(cm_ty), None));
             }
             TopLevel::Agent(a) => {
                 let mut fields = HashMap::new();
@@ -949,6 +1029,24 @@ impl TypeChecker {
                             .with_actual(&inferred.display()),
                         );
                     }
+                    if let (NType::Temporal(_, expected_spec), NType::Temporal(_, found_spec)) = (declared, &inferred) {
+                        if matches!(found_spec, TemporalSpec::GlobalSample) && !matches!(expected_spec, TemporalSpec::GlobalSample) {
+                            self.result.add_error(NeuronError::new(
+                                ErrorCode::TemporalLeak,
+                                "Temporal provenance violation: expression depends on dataset-global aggregation (provenance 'global_sample' across sample path F_T), which cannot be returned as a causal feature",
+                                r.span.clone(),
+                            ));
+                        }
+                        if let (TemporalSpec::Offset(exp_o), TemporalSpec::Offset(found_o)) = (expected_spec, found_spec) {
+                            if *found_o > *exp_o {
+                                self.result.add_error(NeuronError::new(
+                                    ErrorCode::TemporalLeak,
+                                    format!("Temporal offset violation: returned expression has future offset +{} (crosses into future), but function requires offset <= {}", found_o, exp_o),
+                                    r.span.clone(),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             Stmt::Update(u) => {
@@ -963,6 +1061,21 @@ impl TypeChecker {
     // ── Expression type inference ──
 
     fn infer_expr(&mut self, expr: &Expr) -> NType {
+        if self.expr_depth > 128 {
+            self.result.add_error(NeuronError::new(
+                ErrorCode::TypeMismatch,
+                "Maximum expression recursion depth exceeded (limit 128)",
+                expr.span().clone(),
+            ));
+            return NType::Any;
+        }
+        self.expr_depth += 1;
+        let res = self.infer_expr_inner(expr);
+        self.expr_depth -= 1;
+        res
+    }
+
+    fn infer_expr_inner(&mut self, expr: &Expr) -> NType {
         match expr {
             Expr::IntLit(_, _) => NType::Base("Int".into()),
             Expr::FloatLit(_, _) => NType::Base("Float".into()),
@@ -1070,6 +1183,12 @@ impl TypeChecker {
             Expr::StopGrad(expr, _) => {
                 self.infer_expr(expr)
             }
+            Expr::Hessian(_) => {
+                NType::Tensor(vec![])
+            }
+            Expr::Hvp(_) => {
+                NType::Tensor(vec![])
+            }
             Expr::Do(_d) => {
                 NType::Causal(Box::new(NType::Any), "intervened".into())
             }
@@ -1167,7 +1286,7 @@ impl TypeChecker {
                     b.span.clone(),
                 ));
             }
-        } else if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
+        } else if matches!(b.op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow) {
             if let (NType::List(ref la), NType::List(ref lb)) = (&stripped_left, &stripped_right) {
                 if b.op == BinOp::Add {
                     if types_compatible(la, lb) {
@@ -1211,7 +1330,7 @@ impl TypeChecker {
                 ));
             }
         } else if matches!(b.op, BinOp::Eq | BinOp::Neq) {
-            if stripped_left != stripped_right && !(stripped_left.is_numeric() && stripped_right.is_numeric()) {
+            if stripped_left != stripped_right && stripped_left != NType::Any && stripped_right != NType::Any && !(stripped_left.is_numeric() && stripped_right.is_numeric()) {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Comparison operator {} requires compatible types, got {} and {}", b.op.as_str(), left.display(), right.display()),
@@ -1220,7 +1339,7 @@ impl TypeChecker {
             }
             stripped_result = NType::Base("Bool".into());
         } else if matches!(b.op, BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte) {
-            if !stripped_left.is_numeric() || !stripped_right.is_numeric() {
+            if (!stripped_left.is_numeric() && stripped_left != NType::Any) || (!stripped_right.is_numeric() && stripped_right != NType::Any) {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Comparison operator {} requires numeric operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
@@ -1229,7 +1348,7 @@ impl TypeChecker {
             }
             stripped_result = NType::Base("Bool".into());
         } else if matches!(b.op, BinOp::And | BinOp::Or) {
-            if stripped_left != NType::Base("Bool".into()) || stripped_right != NType::Base("Bool".into()) {
+            if (stripped_left != NType::Base("Bool".into()) && stripped_left != NType::Any) || (stripped_right != NType::Base("Bool".into()) && stripped_right != NType::Any) {
                 self.result.add_error(NeuronError::new(
                     ErrorCode::TypeMismatch,
                     format!("Logical operator {} requires boolean operands, got {} and {}", b.op.as_str(), left.display(), right.display()),
@@ -1256,6 +1375,9 @@ impl TypeChecker {
                     if let Some(lw) = combined_wrappers.iter_mut().find(|w| matches!(w, TypeWrapper::Temporal(_))) {
                         if let TypeWrapper::Temporal(ref mut lspec) = lw {
                             match (&lspec, &rspec) {
+                                (TemporalSpec::GlobalSample, _) | (_, TemporalSpec::GlobalSample) => {
+                                    *lspec = TemporalSpec::GlobalSample;
+                                }
                                 (TemporalSpec::Offset(n1), TemporalSpec::Offset(n2)) => {
                                     // R3 fix: The temporal horizon of an expression is governed by its
                                     // latest dependency (max offset). If either operand touches the future,
@@ -1397,6 +1519,7 @@ impl TypeChecker {
                     BinOp::Mul => left.checked_mul(right),
                     BinOp::Div => if right != 0 { left.checked_div(right) } else { None },
                     BinOp::Mod => if right != 0 { left.checked_rem(right) } else { None },
+                    BinOp::Pow => if right >= 0 && right <= 64 { left.checked_pow(right as u32) } else { None },
                     _ => None,
                 }
             }
@@ -1461,6 +1584,7 @@ impl TypeChecker {
                 let current_offset = match spec {
                     TemporalSpec::Offset(n) => *n,
                     TemporalSpec::Direction(dir) => if dir == "past_to_future" { 0 } else { 1 },
+                    TemporalSpec::GlobalSample => 1_000_000,
                 };
                 if d.field == "before" {
                     let k = if let Some(arg) = c.args.first() {
@@ -1529,6 +1653,7 @@ impl TypeChecker {
                     let is_future = match spec {
                         TemporalSpec::Offset(n) => *n > 0,
                         TemporalSpec::Direction(dir) => dir == "future_to_past",
+                        TemporalSpec::GlobalSample => true,
                     };
                     if is_future {
                         let leak_desc = match spec {
@@ -1540,6 +1665,7 @@ impl TypeChecker {
                                 "snapshot() on Temporal with direction '{}' would declassify future data — use only on past_to_future data",
                                 dir
                             ),
+                            TemporalSpec::GlobalSample => "snapshot() on Temporal with 'global_sample' provenance would declassify sample-wide future data — use only on causal offsets (≤ 0)".to_string(),
                         };
                         self.result.add_error(NeuronError::new(
                             ErrorCode::TemporalLeak,
@@ -1548,6 +1674,73 @@ impl TypeChecker {
                         ));
                     }
                     return *inner.clone();
+                } else if d.field == "rolling" {
+                    let window = if let Some(arg) = c.args.first() {
+                        self.eval_const_int(&arg.value).unwrap_or(1)
+                    } else { 1 };
+                    let is_centered = c.args.iter().any(|arg| {
+                        if let Some(ref name) = arg.name {
+                            if name == "center" {
+                                if let Some(val) = self.eval_const_int(&arg.value) {
+                                    return val != 0;
+                                }
+                                if let Expr::BoolLit(b, _) = arg.value {
+                                    return b;
+                                }
+                                if let Expr::Ident(ref id, _) = arg.value {
+                                    return id == "true" || id == "True";
+                                }
+                            }
+                        }
+                        false
+                    });
+                    let lead = if is_centered { (window / 2).max(1) } else { 0 };
+                    return NType::TemporalWindow(inner.clone(), spec.clone(), lead);
+                } else if d.field == "expanding" {
+                    return NType::TemporalWindow(inner.clone(), spec.clone(), 0);
+                } else if d.field == "mean" || d.field == "sum" || d.field == "std" || d.field == "var" || d.field == "min" || d.field == "max" || d.field == "median" || d.field == "groupby" {
+                    // Global sample-path aggregation: reduces over time dimension across sample path F_T.
+                    // Carries GlobalSample provenance and can NEVER satisfy causal feature expectations (offset <= 0).
+                    return NType::Temporal(Box::new(NType::Base("Float".into())), TemporalSpec::GlobalSample);
+                }
+            }
+            if let NType::TemporalWindow(ref inner, ref spec, lead) = obj_ty {
+                if d.field == "mean" || d.field == "sum" || d.field == "std" || d.field == "var" || d.field == "min" || d.field == "max" || d.field == "median" {
+                    let new_spec = match spec {
+                        TemporalSpec::Offset(k) => TemporalSpec::Offset(k + lead),
+                        TemporalSpec::Direction(dir) => {
+                            if lead > 0 { TemporalSpec::Offset(lead) } else { TemporalSpec::Direction(dir.clone()) }
+                        }
+                        TemporalSpec::GlobalSample => TemporalSpec::GlobalSample,
+                    };
+                    return NType::Temporal(inner.clone(), new_spec);
+                }
+            }
+            if let NType::Stream(ref inner, _cap) = obj_ty {
+                match d.field.as_str() {
+                    "current" => {
+                        return NType::Temporal(inner.clone(), TemporalSpec::Offset(0));
+                    }
+                    "push" => {
+                        return NType::Void;
+                    }
+                    "lag" => {
+                        let k = if let Some(arg) = c.args.first() {
+                            if let Some(val) = self.eval_const_int(&arg.value) { val } else { 1 }
+                        } else { 1 };
+                        return NType::Temporal(inner.clone(), TemporalSpec::Offset(-k.abs()));
+                    }
+                    "lead" => {
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TemporalLeak,
+                            format!("Illegal lead() on live Stream — future data does not exist at execution time"),
+                            c.span.clone(),
+                        ));
+                        return NType::Any;
+                    }
+                    "to_tensor" => return NType::Base("Tensor".into()),
+                    "len" | "size" | "capacity" => return NType::Base("Int".into()),
+                    _ => {}
                 }
             }
             if let NType::Causal(ref inner, _) = obj_ty {
@@ -1569,6 +1762,33 @@ impl TypeChecker {
             if d.field == "intervene" {
                 return NType::Causal(Box::new(NType::Any), "intervened".into());
             }
+            if d.field == "identify" {
+                return NType::Any;
+            }
+            if d.field == "backdoor" || d.field == "frontdoor" {
+                return NType::List(Box::new(NType::Base("String".into())));
+            }
+            if d.field == "causal_effect" {
+                return NType::Base("Float".into());
+            }
+            if d.field == "counterfactual" {
+                return NType::Any;
+            }
+            if d.field == "confounding_bias" {
+                return NType::Base("Float".into());
+            }
+            if d.field == "slots" || d.field == "read" {
+                return NType::Tensor(vec![Dim::Dynamic, Dim::Dynamic]);
+            }
+            if d.field == "clear" || d.field == "write" || d.field == "store" || d.field == "consolidate" {
+                return NType::Void;
+            }
+            if d.field == "recall" {
+                return NType::List(Box::new(NType::Any));
+            }
+            if d.field == "len" || d.field == "size" {
+                return NType::Base("Int".into());
+            }
         }
         let callee_name = match &c.callee {
             Expr::Ident(ref name, _) => Some(name.as_str()),
@@ -1578,12 +1798,21 @@ impl TypeChecker {
             let inner = c.args.first().map(|a| self.infer_expr(&a.value)).unwrap_or(NType::Any);
             return NType::Uncertain(Box::new(inner));
         }
+        if matches!(callee_name, Some("mean" | "sum" | "std" | "var" | "min" | "max" | "median" | "quantile" | "aggregate")) {
+            let has_temporal_arg = c.args.iter().any(|a| {
+                let ty = self.infer_expr(&a.value);
+                matches!(ty, NType::Temporal(_, _))
+            });
+            if has_temporal_arg {
+                return NType::Temporal(Box::new(NType::Base("Float".into())), TemporalSpec::GlobalSample);
+            }
+        }
         let is_variadic_shape_creator = match callee_name {
             Some("zeros") | Some("glorot") | Some("ones") | Some("randn") => true,
             _ => false,
         };
         let is_variadic_optimizer_or_builtin = match callee_name {
-            Some("sgd") | Some("adam") | Some("forget") => true,
+            Some("sgd") | Some("adam") | Some("forget") | Some("print") | Some("println") | Some("print_inline") | Some("byte_encode") | Some("byte_decode") => true,
             _ => false,
         };
 
@@ -1680,6 +1909,28 @@ impl TypeChecker {
                                             ));
                                         }
                                     }
+                                    (TemporalSpec::Offset(expected_max), TemporalSpec::GlobalSample) => {
+                                        self.result.add_error(NeuronError::new(
+                                            ErrorCode::TemporalLeak,
+                                            format!(
+                                                "Temporal provenance violation: expression depends on dataset-global aggregation (provenance 'global_sample' across sample path F_T), but context requires causal offset <= {}",
+                                                expected_max
+                                            ),
+                                            c.span.clone(),
+                                        ));
+                                    }
+                                    (TemporalSpec::Direction(exp_dir), TemporalSpec::GlobalSample) => {
+                                        if exp_dir == "past_to_future" {
+                                            self.result.add_error(NeuronError::new(
+                                                ErrorCode::TemporalLeak,
+                                                "Temporal provenance violation: dataset-global aggregation ('global_sample') cannot satisfy strictly causal ('past_to_future') direction",
+                                                c.span.clone(),
+                                            ));
+                                        }
+                                    }
+                                    (&TemporalSpec::GlobalSample, _) => {
+                                        // Expected is GlobalSample: satisfies sample-wide aggregation
+                                    }
                                 }
                             }
                         }
@@ -1688,7 +1939,16 @@ impl TypeChecker {
                 *ret.clone()
             }
             NType::Model(_, _, _) => callee_ty, // Constructor returns the model type
-            _ => NType::Any,
+            _ => {
+                if !matches!(callee_ty, NType::Any) {
+                    self.result.add_error(NeuronError::new(
+                        ErrorCode::TypeMismatch,
+                        format!("Type '{}' is not callable", callee_ty.display()),
+                        c.span.clone(),
+                    ));
+                }
+                NType::Any
+            }
         }
     }
 
@@ -1702,6 +1962,7 @@ impl TypeChecker {
                     let new_spec = match spec {
                         TemporalSpec::Offset(n) => TemporalSpec::Offset(n - 1),
                         TemporalSpec::Direction(_) => TemporalSpec::Direction("past_to_future".into()),
+                        TemporalSpec::GlobalSample => TemporalSpec::GlobalSample,
                     };
                     return NType::Temporal(inner.clone(), new_spec);
                 }
@@ -1712,6 +1973,7 @@ impl TypeChecker {
                             let nd = if dir == "past_to_future" { "future_to_past" } else { "past_to_future" };
                             TemporalSpec::Direction(nd.into())
                         }
+                        TemporalSpec::GlobalSample => TemporalSpec::GlobalSample,
                     };
                     return NType::Temporal(inner.clone(), new_spec);
                 }
@@ -1723,6 +1985,7 @@ impl TypeChecker {
                     let is_future = match spec {
                         TemporalSpec::Offset(n) => *n > 0,
                         TemporalSpec::Direction(dir) => dir == "future_to_past",
+                        TemporalSpec::GlobalSample => true,
                     };
                     if is_future {
                         let leak_desc = match spec {
@@ -1734,6 +1997,7 @@ impl TypeChecker {
                                 "snapshot() on Temporal with direction '{}' would declassify future data — use only on past_to_future data",
                                 dir
                             ),
+                            TemporalSpec::GlobalSample => "snapshot() on Temporal with 'global_sample' provenance would declassify sample-wide future data — use only on causal offsets (≤ 0)".to_string(),
                         };
                         // Use a zero-span since DotExpr doesn't carry its own span easily;
                         // the error message is self-descriptive.
@@ -1745,6 +2009,70 @@ impl TypeChecker {
                     }
                     return *inner.clone();
                 }
+                "rolling" => {
+                    return NType::Fn_(
+                        vec![NType::Base("Int".into())],
+                        Box::new(NType::TemporalWindow(inner.clone(), spec.clone(), 0)),
+                        None,
+                    );
+                }
+                "expanding" => {
+                    return NType::Fn_(
+                        vec![],
+                        Box::new(NType::TemporalWindow(inner.clone(), spec.clone(), 0)),
+                        None,
+                    );
+                }
+                "mean" | "sum" | "std" | "var" | "min" | "max" | "median" | "groupby" => {
+                    return NType::Fn_(
+                        vec![],
+                        Box::new(NType::Temporal(Box::new(NType::Base("Float".into())), TemporalSpec::GlobalSample)),
+                        None,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        if let NType::TemporalWindow(ref inner, ref spec, lead) = obj_ty {
+            match d.field.as_str() {
+                "mean" | "sum" | "std" | "var" | "min" | "max" | "median" => {
+                    let new_spec = match spec {
+                        TemporalSpec::Offset(k) => TemporalSpec::Offset(k + lead),
+                        TemporalSpec::Direction(dir) => {
+                            if lead > 0 { TemporalSpec::Offset(lead) } else { TemporalSpec::Direction(dir.clone()) }
+                        }
+                        TemporalSpec::GlobalSample => TemporalSpec::GlobalSample,
+                    };
+                    return NType::Fn_(
+                        vec![],
+                        Box::new(NType::Temporal(inner.clone(), new_spec)),
+                        None,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Stream methods and zero-lookahead checking
+        if let NType::Stream(ref inner, _cap) = obj_ty {
+            match d.field.as_str() {
+                "push" => return NType::Fn_(vec![*inner.clone()], Box::new(NType::Void), None),
+                "current" => return NType::Temporal(inner.clone(), TemporalSpec::Offset(0)),
+                "lag" => {
+                    return NType::Fn_(vec![NType::Base("Int".into())], Box::new(NType::Temporal(inner.clone(), TemporalSpec::Offset(-1))), None);
+                }
+                "lead" => {
+                    self.result.add_error(NeuronError::new(
+                        ErrorCode::TemporalLeak,
+                        format!("Illegal lead() on live Stream — future data does not exist at execution time"),
+                        d.obj.span().clone(),
+                    ));
+                    return NType::Any;
+                }
+                "to_tensor" => return NType::Base("Tensor".into()),
+                "len" | "size" => return NType::Base("Int".into()),
+                "capacity" => return NType::Base("Int".into()),
                 _ => {}
             }
         }
@@ -1772,6 +2100,36 @@ impl TypeChecker {
             match d.field.as_str() {
                 "observe" => return NType::Causal(Box::new(NType::Any), "observed".into()),
                 "intervene" => return NType::Causal(Box::new(NType::Any), "intervened".into()),
+                "identify" => return NType::Any,
+                "backdoor" | "frontdoor" => return NType::List(Box::new(NType::Base("String".into()))),
+                "causal_effect" => return NType::Base("Float".into()),
+                "counterfactual" => return NType::Any,
+                _ => {}
+            }
+        }
+
+        // WorkingMemory methods
+        if let NType::WorkingMemory(ref inner, _) = obj_ty {
+            match d.field.as_str() {
+                "read" => return NType::Fn_(vec![NType::Base("Tensor".into())], Box::new(*inner.clone()), None),
+                "write" => return NType::Fn_(vec![NType::Base("Tensor".into())], Box::new(NType::Void), None),
+                "write_gated" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Tensor".into()), NType::Base("Tensor".into())], Box::new(NType::Void), None),
+                "clear" => return NType::Fn_(vec![], Box::new(NType::Void), None),
+                "slots" => return NType::Base("Tensor".into()),
+                _ => {}
+            }
+        }
+
+        // EpisodicMemory methods
+        if let NType::EpisodicMemory(ref inner) = obj_ty {
+            match d.field.as_str() {
+                "store" | "push" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Any], Box::new(NType::Void), None),
+                "store_batch" => return NType::Fn_(vec![NType::Any], Box::new(NType::Void), None),
+                "recall" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Int".into())], Box::new(NType::List(inner.clone())), None),
+                "recall_weighted" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Int".into())], Box::new(NType::Base("Tensor".into())), None),
+                "consolidate" => return NType::Fn_(vec![], Box::new(NType::Void), None),
+                "forget" => return NType::Fn_(vec![NType::Base("Int".into())], Box::new(NType::Void), None),
+                "len" | "size" => return NType::Base("Int".into()),
                 _ => {}
             }
         }

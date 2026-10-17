@@ -77,6 +77,8 @@ pub enum TokenType {
     Observe,
     Grad,
     StopGrad,
+    Hessian,
+    Hvp,
     Explain,
     // AGI keywords
     Agent,
@@ -89,6 +91,7 @@ pub enum TokenType {
 
     // ── Type keywords ──
     TensorKw,
+    StreamKw,
     UncertainKw,
     RandomKw,
     ProbKw,
@@ -133,7 +136,9 @@ pub enum TokenType {
     Bang,
     Arrow,       // ->
     UnicodeArrow, // →
+    BiArrow,     // <-> or ↔
     Question,
+    Caret,
 
     // ── Delimiters ──
     LParen,
@@ -193,6 +198,8 @@ impl TokenType {
             Self::Observe => "OBSERVE",
             Self::Grad => "GRAD",
             Self::StopGrad => "STOP_GRAD",
+            Self::Hessian => "HESSIAN",
+            Self::Hvp => "HVP",
             Self::Explain => "EXPLAIN",
             Self::Agent => "AGENT",
             Self::Meta => "META",
@@ -202,6 +209,7 @@ impl TokenType {
             Self::Stream => "STREAM",
             Self::Reward => "REWARD",
             Self::TensorKw => "TENSOR",
+            Self::StreamKw => "STREAM_TYPE",
             Self::UncertainKw => "UNCERTAIN",
             Self::RandomKw => "RANDOM",
             Self::ProbKw => "PROB",
@@ -243,7 +251,9 @@ impl TokenType {
             Self::Bang => "BANG",
             Self::Arrow => "ARROW",
             Self::UnicodeArrow => "UNICODE_ARROW",
+            Self::BiArrow => "BI_ARROW",
             Self::Question => "QUESTION",
+            Self::Caret => "CARET",
             Self::LParen => "LPAREN",
             Self::RParen => "RPAREN",
             Self::LBracket => "LBRACKET",
@@ -292,11 +302,14 @@ pub fn lookup_keyword(word: &str) -> Option<TokenType> {
         "observe" => Some(TokenType::Observe),
         "grad" => Some(TokenType::Grad),
         "stop_grad" => Some(TokenType::StopGrad),
+        "hessian" => Some(TokenType::Hessian),
+        "hvp" => Some(TokenType::Hvp),
         "explain" => Some(TokenType::Explain),
         "true" => Some(TokenType::True),
         "false" => Some(TokenType::False),
         "and" => Some(TokenType::And),
         "or" => Some(TokenType::Or),
+        "not" => Some(TokenType::Bang),
         "agent" => Some(TokenType::Agent),
         "meta" => Some(TokenType::Meta),
         "search" => Some(TokenType::Search),
@@ -306,6 +319,7 @@ pub fn lookup_keyword(word: &str) -> Option<TokenType> {
         "reward" => Some(TokenType::Reward),
         // Type keywords
         "Tensor" => Some(TokenType::TensorKw),
+        "Stream" => Some(TokenType::StreamKw),
         "Uncertain" => Some(TokenType::UncertainKw),
         "Random" => Some(TokenType::RandomKw),
         "Prob" => Some(TokenType::ProbKw),

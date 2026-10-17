@@ -4,6 +4,23 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.1] — 2026-10-17
+
+### Added
+- **AST Data Provenance Tracking Engine (`flow.py`)**:
+  - Full partition provenance tracking across train/test splits, slices, and cross-validation loops.
+  - Detects partition contamination when training variables are concatenated or reassigned with test data (`X_train = pd.concat([X_train, X_test])`).
+  - Follows aliases (`X_eval = X_test`), `.merge()`, `.append()`, and inter-procedural helper function return lineages.
+  - New diagnostic code **`F002`**: Flags data contamination and test partition variables passed to `.fit()`, `.fit_transform()`, and `.train()`.
+- **Rule `T016` (`merge_asof_direction`)**: Detects lookahead bias in `pd.merge_asof()` joins using `direction='nearest'` or `'forward'`.
+- **Rule `T017` (`target_laundering`)**:
+  - Flags target laundering via group aggregations across the un-split dataset (`df.groupby('regime')['target'].transform('mean')`).
+  - Validates legitimate fold-local target encoding computed strictly within training folds (`train_df.groupby('regime')['target'].mean()`).
+  - Emits diagnostic warnings for test set mappings missing `.fillna(train_prior_mean)` to guard against inference failures on unseen categories/regimes.
+- **Rule `C002` Refinement**: Distinguishes fold-local engineered features (`train_df[['volatility', 'regime_success_rate']]`) from raw target columns (`target`, `label`, `future_price`).
+- **VS Code Extension v1.0.1**: Upgraded `pycheck-neuron` VS Code extension to v1.0.1 with instant linting for provenance contamination and target laundering.
+- **Unit Test Suite Expansion**: Added 16 new unit tests, bringing total test suite to 95 tests with 100% pass rate.
+
 ---
 
 ## [1.0.0] — 2026-10-05

@@ -103,6 +103,19 @@ fn fold_op(op: &IROp, inputs: &[&IRConst]) -> Option<IRConst> {
                 }
             } else { None }
         }
+        IROp::Pow => {
+            if inputs.len() >= 2 {
+                match (inputs[0], inputs[1]) {
+                    (IRConst::Int(a), IRConst::Int(b)) if *b >= 0 && *b <= 64 => {
+                        a.checked_pow(*b as u32).map(IRConst::Int)
+                    }
+                    (IRConst::Float(a), IRConst::Float(b)) => Some(IRConst::Float(a.powf(*b))),
+                    (IRConst::Float(a), IRConst::Int(b)) => Some(IRConst::Float(a.powi(*b as i32))),
+                    (IRConst::Int(a), IRConst::Float(b)) => Some(IRConst::Float((*a as f64).powf(*b))),
+                    _ => None,
+                }
+            } else { None }
+        }
 
         // ── Unary ──
         IROp::Neg => match inputs.first() {
@@ -148,6 +161,19 @@ fn fold_op(op: &IROp, inputs: &[&IRConst]) -> Option<IRConst> {
         },
         IROp::Sqrt => match inputs.first() {
             Some(IRConst::Float(a)) if *a >= 0.0 => Some(IRConst::Float(a.sqrt())),
+            _ => None,
+        },
+        IROp::Exp => match inputs.first() {
+            Some(IRConst::Float(a)) => Some(IRConst::Float(a.exp())),
+            _ => None,
+        },
+        IROp::Log => match inputs.first() {
+            Some(IRConst::Float(a)) if *a > 0.0 => Some(IRConst::Float(a.ln())),
+            _ => None,
+        },
+        IROp::Abs => match inputs.first() {
+            Some(IRConst::Int(a)) => Some(IRConst::Int(a.abs())),
+            Some(IRConst::Float(a)) => Some(IRConst::Float(a.abs())),
             _ => None,
         },
 
@@ -294,6 +320,21 @@ fn simplify_algebraic(op: &IROp, inputs: &[ValueId], constants: &HashMap<ValueId
             }
         }
 
+        // ── x ^ 0 → 1,  x ^ 1 → x,  0 ^ y → 0,  1 ^ y → 1 ──
+        IROp::Pow if inputs.len() == 2 => {
+            if is_zero_const(inputs[1], constants) {
+                Some(Simplification::ReplaceWithConst(IRConst::Int(1)))
+            } else if is_one_const(inputs[1], constants) {
+                Some(Simplification::ReplaceWith(inputs[0]))
+            } else if is_zero_const(inputs[0], constants) {
+                Some(Simplification::ReplaceWithConst(IRConst::Int(0)))
+            } else if is_one_const(inputs[0], constants) {
+                Some(Simplification::ReplaceWithConst(IRConst::Int(1)))
+            } else {
+                None
+            }
+        }
+
         // ── Neg(Neg(x)) → x ──
         // This would require tracking what op produced an input, which needs
         // a separate lookup. Skip for now — handled by multi-pass convergence.
@@ -418,6 +459,7 @@ fn op_key(op: &IROp) -> String {
         IROp::Mul => "Mul".to_string(),
         IROp::Div => "Div".to_string(),
         IROp::Mod => "Mod".to_string(),
+        IROp::Pow => "Pow".to_string(),
         IROp::Neg => "Neg".to_string(),
         IROp::MatMul => "MatMul".to_string(),
         IROp::ReLU => "ReLU".to_string(),
@@ -425,6 +467,12 @@ fn op_key(op: &IROp) -> String {
         IROp::Sigmoid => "Sigmoid".to_string(),
         IROp::Tanh => "Tanh".to_string(),
         IROp::Sqrt => "Sqrt".to_string(),
+        IROp::Exp => "Exp".to_string(),
+        IROp::Log => "Log".to_string(),
+        IROp::Abs => "Abs".to_string(),
+        IROp::MatMulAdd => "MatMulAdd".to_string(),
+        IROp::MatMulReLU => "MatMulReLU".to_string(),
+        IROp::MatMulAddReLU => "MatMulAddReLU".to_string(),
         IROp::Softmax { dim } => format!("Softmax_{}", dim),
         IROp::Sum { dim } => format!("Sum_{:?}", dim),
         IROp::Mean { dim } => format!("Mean_{:?}", dim),
@@ -688,11 +736,108 @@ fn pass_tensor_fusion(func: &mut IRFunction) -> bool {
         changed = true;
     }
 
-    // NOTE: MatMul → ReLU fusion was removed because the previous implementation
-    // replaced ReLU with a plain MatMul, deleting the activation entirely.
-    // This caused relu(negative) to return negative values instead of 0.0.
-    // To re-enable, implement a proper IROp::MatMulReLU fused op that preserves
-    // ReLU semantics (clamping negative values to zero after matrix multiply).
+    let loaded_names: HashSet<&str> = func.blocks.iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|n| if let IROp::Load { name } = &n.op { Some(name.as_str()) } else { None })
+        .collect();
+
+    // Check if a value's only consumers are the current node and unread stores
+    let is_safe_to_fuse = |val_id: ValueId, consumer_id: ValueId| -> Option<Vec<(usize, usize)>> {
+        let mut dead_stores = Vec::new();
+        for b in &func.blocks {
+            match &b.terminator {
+                Terminator::Return(Some(id)) if *id == val_id => return None,
+                Terminator::Branch { cond, .. } if *cond == val_id => return None,
+                _ => {}
+            }
+        }
+        for (bi, b) in func.blocks.iter().enumerate() {
+            for (ni, n) in b.instructions.iter().enumerate() {
+                if n.id == consumer_id {
+                    continue;
+                }
+                if n.inputs.contains(&val_id) {
+                    if let IROp::Store { name } = &n.op {
+                        if !name.starts_with("self.") && !loaded_names.contains(name.as_str()) {
+                            dead_stores.push((bi, ni));
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(dead_stores)
+    };
+
+    // Fused MatMul patterns:
+    // 1. MatMul(A, B) -> Add(res, bias) => MatMulAdd(A, B, bias)
+    // 2. MatMul(A, B) -> ReLU(res) => MatMulReLU(A, B)
+    // 3. MatMulAdd(A, B, bias) -> ReLU(res) => MatMulAddReLU(A, B, bias)
+    let mut matmul_fusions: Vec<(usize, usize, IROp, Vec<ValueId>, usize, usize, Vec<(usize, usize)>)> = Vec::new();
+    for (bi, block) in func.blocks.iter().enumerate() {
+        for (ni, node) in block.instructions.iter().enumerate() {
+            match &node.op {
+                IROp::Add if node.inputs.len() == 2 => {
+                    // Check if input 0 is MatMul with single use in same block
+                    if let Some(&(pbi, pni)) = producers.get(&node.inputs[0]) {
+                        if pbi == bi && pni < ni {
+                            if let Some(dead_stores) = is_safe_to_fuse(node.inputs[0], node.id) {
+                                let inner = &func.blocks[pbi].instructions[pni];
+                                if matches!(inner.op, IROp::MatMul) && inner.inputs.len() == 2 {
+                                    let fused_inputs = vec![inner.inputs[0], inner.inputs[1], node.inputs[1]];
+                                    matmul_fusions.push((bi, ni, IROp::MatMulAdd, fused_inputs, pbi, pni, dead_stores));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    // Check if input 1 is MatMul with single use in same block
+                    if let Some(&(pbi, pni)) = producers.get(&node.inputs[1]) {
+                        if pbi == bi && pni < ni {
+                            if let Some(dead_stores) = is_safe_to_fuse(node.inputs[1], node.id) {
+                                let inner = &func.blocks[pbi].instructions[pni];
+                                if matches!(inner.op, IROp::MatMul) && inner.inputs.len() == 2 {
+                                    let fused_inputs = vec![inner.inputs[0], inner.inputs[1], node.inputs[0]];
+                                    matmul_fusions.push((bi, ni, IROp::MatMulAdd, fused_inputs, pbi, pni, dead_stores));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                IROp::ReLU if node.inputs.len() == 1 => {
+                    if let Some(&(pbi, pni)) = producers.get(&node.inputs[0]) {
+                        if pbi == bi && pni < ni {
+                            if let Some(dead_stores) = is_safe_to_fuse(node.inputs[0], node.id) {
+                                let inner = &func.blocks[pbi].instructions[pni];
+                                if matches!(inner.op, IROp::MatMul) && inner.inputs.len() == 2 {
+                                    let fused_inputs = vec![inner.inputs[0], inner.inputs[1]];
+                                    matmul_fusions.push((bi, ni, IROp::MatMulReLU, fused_inputs, pbi, pni, dead_stores));
+                                } else if matches!(inner.op, IROp::MatMulAdd) && inner.inputs.len() == 3 {
+                                    let fused_inputs = vec![inner.inputs[0], inner.inputs[1], inner.inputs[2]];
+                                    matmul_fusions.push((bi, ni, IROp::MatMulAddReLU, fused_inputs, pbi, pni, dead_stores));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for (bi, ni, fused_op, fused_inputs, pbi, pni, dead_stores) in matmul_fusions {
+        func.blocks[pbi].instructions[pni].op = IROp::Nop;
+        for (sbi, sni) in dead_stores {
+            func.blocks[sbi].instructions[sni].op = IROp::Nop;
+        }
+        func.blocks[bi].instructions[ni].op = fused_op;
+        func.blocks[bi].instructions[ni].inputs = fused_inputs;
+        changed = true;
+    }
 
     changed
 }

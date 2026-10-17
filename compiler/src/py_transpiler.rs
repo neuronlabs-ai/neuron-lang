@@ -476,11 +476,18 @@ if __name__ == "__main__":
                     IROp::Sub => format!("v{} - v{}", node.inputs[0], node.inputs[1]),
                     IROp::Mul => format!("v{} * v{}", node.inputs[0], node.inputs[1]),
                     IROp::Div => format!("v{} / v{}", node.inputs[0], node.inputs[1]),
+                    IROp::Pow => format!("v{} ** v{}", node.inputs[0], node.inputs[1]),
                     IROp::Neg => format!("-v{}", node.inputs[0]),
                     IROp::MatMul => format!("v{} @ v{}", node.inputs[0], node.inputs[1]),
+                    IROp::MatMulAdd => format!("(v{} @ v{}) + v{}", node.inputs[0], node.inputs[1], node.inputs[2]),
+                    IROp::MatMulReLU => format!("torch.relu(v{} @ v{})", node.inputs[0], node.inputs[1]),
+                    IROp::MatMulAddReLU => format!("torch.relu((v{} @ v{}) + v{})", node.inputs[0], node.inputs[1], node.inputs[2]),
                     IROp::ReLU => format!("torch.relu(v{})", node.inputs[0]),
                     IROp::Sigmoid => format!("torch.sigmoid(v{})", node.inputs[0]),
                     IROp::Tanh => format!("torch.tanh(v{})", node.inputs[0]),
+                    IROp::Exp => format!("torch.exp(v{})", node.inputs[0]),
+                    IROp::Log => format!("torch.log(v{})", node.inputs[0]),
+                    IROp::Abs => format!("torch.abs(v{})", node.inputs[0]),
                     IROp::Softmax { dim } => format!("torch.softmax(v{}, dim={})", node.inputs[0], dim),
                     IROp::MSELoss => format!("torch.nn.functional.mse_loss(v{}, v{})", node.inputs[0], node.inputs[1]),
                     IROp::Mod => format!("py_mod(v{}, v{})", node.inputs[0], node.inputs[1]),
@@ -551,6 +558,23 @@ r#"(lambda loss, target: (
     )[1])(v{}, {})"#, node.inputs[0], wrt_arg)
                     }
 
+                    IROp::Hessian { wrt } => {
+                        let wrt_arg = match wrt {
+                            Some(ref w) => format!("locals_dict.get({:?})", w),
+                            None => "None".to_string(),
+                        };
+                        format!("torch.autograd.functional.hessian(lambda x: v{}, {})", node.inputs[0], wrt_arg)
+                    }
+
+                    IROp::HVP { wrt } => {
+                        let wrt_arg = match wrt {
+                            Some(ref w) => format!("locals_dict.get({:?})", w),
+                            None => "None".to_string(),
+                        };
+                        let v_arg = if node.inputs.len() > 1 { format!("v{}", node.inputs[1]) } else { "torch.zeros_like(x)".to_string() };
+                        format!("torch.autograd.functional.hvp(lambda x: v{}, {}, {})[1]", node.inputs[0], wrt_arg, v_arg)
+                    }
+
                     IROp::Backward => {
                         format!("v{}.backward(retain_graph=True)", node.inputs[0])
                     }
@@ -606,6 +630,14 @@ r#"(lambda obj: (
 
                     IROp::Input => {
                         "input(\"> \")".to_string()
+                    }
+
+                    IROp::ParseFloat => {
+                        format!("float(v{})", node.inputs[0])
+                    }
+
+                    IROp::ParseInt => {
+                        format!("int(v{})", node.inputs[0])
                     }
 
                     IROp::EmbedString => {

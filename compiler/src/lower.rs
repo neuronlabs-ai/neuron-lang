@@ -329,7 +329,12 @@ impl Lowerer {
                 for edge in &c.edges {
                     if let Some(ref t) = edge.target {
                         for s in &edge.sources {
-                            edge_strs.push(format!("{}->{}", s, t));
+                            let sep = if edge.kind == CausalEdgeKind::Confounded { "<->" } else { "->" };
+                            if let Some(w) = edge.weight {
+                                edge_strs.push(format!("{}{}{}={}", s, sep, t, w));
+                            } else {
+                                edge_strs.push(format!("{}{}{}", s, sep, t));
+                            }
                         }
                     }
                 }
@@ -715,7 +720,9 @@ impl Lowerer {
                 // that were modified in either branch so that subsequent references
                 // use runtime Load { name } instead of stale SSA IDs
                 self.env = env_snapshot;
-                let modified_names: std::collections::HashSet<String> = then_defined.union(&else_defined).cloned().collect();
+                let mut modified_names: std::collections::HashSet<String> = then_defined.union(&else_defined).cloned().collect();
+                self.collect_modified_vars(&i.then_body, &mut modified_names);
+                self.collect_modified_vars(&i.else_body, &mut modified_names);
                 for name in &modified_names {
                     for scope in self.env.iter_mut() {
                         scope.remove(name);
@@ -769,6 +776,7 @@ impl Lowerer {
                     BinOp::Mul => IROp::Mul,
                     BinOp::Div => IROp::Div,
                     BinOp::Mod => IROp::Mod,
+                    BinOp::Pow => IROp::Pow,
                     BinOp::MatMul => IROp::MatMul,
                     BinOp::Lt => IROp::Lt,
                     BinOp::Lte => IROp::Lte,
@@ -808,7 +816,11 @@ impl Lowerer {
                             "snapshot" => IRType::Any,
                             _ => IRType::Temporal(Box::new(IRType::Any), "past_to_future".into()),
                         };
-                        return self.emit(func, op, vec![receiver_id], out_ty);
+                        let mut inputs = vec![receiver_id];
+                        if t_id != 0 {
+                            inputs.push(t_id);
+                        }
+                        return self.emit(func, op, inputs, out_ty);
                     }
                 }
 
@@ -850,6 +862,10 @@ impl Lowerer {
                         "relu" => return self.emit(func, IROp::ReLU, arg_ids, IRType::Tensor(vec![])),
                         "gelu" => return self.emit(func, IROp::GeLU, arg_ids, IRType::Tensor(vec![])),
                         "sqrt" => return self.emit(func, IROp::Sqrt, arg_ids, IRType::Tensor(vec![])),
+                        "exp" => return self.emit(func, IROp::Exp, arg_ids, IRType::Tensor(vec![])),
+                        "log" => return self.emit(func, IROp::Log, arg_ids, IRType::Tensor(vec![])),
+                        "abs" => return self.emit(func, IROp::Abs, arg_ids, IRType::Tensor(vec![])),
+                        "pow" => return self.emit(func, IROp::Pow, arg_ids, IRType::Tensor(vec![])),
                         "softmax" => return self.emit(func, IROp::Softmax { dim: -1 }, arg_ids, IRType::Tensor(vec![])),
                         "sigmoid" => return self.emit(func, IROp::Sigmoid, arg_ids, IRType::Tensor(vec![])),
                         "tanh" => return self.emit(func, IROp::Tanh, arg_ids, IRType::Tensor(vec![])),
@@ -868,7 +884,7 @@ impl Lowerer {
                         "update_row" => return self.emit(func, IROp::UpdateRow, arg_ids, IRType::Tensor(vec![])),
                         "print" => return self.emit(func, IROp::Print, arg_ids, IRType::Void),
                         "print_inline" => return self.emit(func, IROp::PrintInline, arg_ids, IRType::Void),
-                        "UNCERTAIN" | "Normal" | "Beta" | "GaussianNoise" => {
+                        "UNCERTAIN" | "Uncertain" | "Normal" | "Beta" | "GaussianNoise" => {
                             return self.emit(func, IROp::UncertainWrap, arg_ids, IRType::Uncertain(Box::new(IRType::F64)));
                         }
                         "recall" => {
@@ -880,6 +896,8 @@ impl Lowerer {
                         "store" => return self.emit(func, IROp::MemoryStore, arg_ids, IRType::Void),
                         "len" => return self.emit(func, IROp::ListLen, arg_ids, IRType::I64),
                         "input" => return self.emit(func, IROp::Input, arg_ids, IRType::String),
+                        "parse_float" | "to_float" => return self.emit(func, IROp::ParseFloat, arg_ids, IRType::F64),
+                        "parse_int" | "to_int" => return self.emit(func, IROp::ParseInt, arg_ids, IRType::I64),
                         "embed_string" => return self.emit(func, IROp::EmbedString, arg_ids, IRType::Tensor(vec![1, 8])),
                         "generate_reply" => return self.emit(func, IROp::GenerateReply, arg_ids, IRType::String),
                         "search" => return self.emit(func, IROp::Search { strategy: "default".into(), max_iter: 100 }, arg_ids, IRType::Any),
@@ -978,6 +996,15 @@ impl Lowerer {
             Expr::Grad(g) => {
                 let expr_id = self.lower_expr(func, &g.expr);
                 self.emit(func, IROp::Grad { wrt: g.wrt.clone() }, vec![expr_id], IRType::Tensor(vec![]))
+            }
+            Expr::Hessian(h) => {
+                let expr_id = self.lower_expr(func, &h.expr);
+                self.emit(func, IROp::Hessian { wrt: h.wrt.clone() }, vec![expr_id], IRType::Tensor(vec![]))
+            }
+            Expr::Hvp(h) => {
+                let expr_id = self.lower_expr(func, &h.expr);
+                let v_id = self.lower_expr(func, &h.v);
+                self.emit(func, IROp::HVP { wrt: h.wrt.clone() }, vec![expr_id, v_id], IRType::Tensor(vec![]))
             }
             Expr::StopGrad(expr, _) => {
                 let expr_id = self.lower_expr(func, expr);

@@ -86,8 +86,12 @@ pub enum IROp {
     Mul,
     Div,
     Mod,
+    Pow,
     Neg,
     MatMul,
+    MatMulAdd,
+    MatMulReLU,
+    MatMulAddReLU,
     
     // ── Comparison and list helper ──
     Lt,
@@ -101,12 +105,15 @@ pub enum IROp {
     Not,
     ListLen,
     
-    // ── Activations ──
+    // ── Activations & Transcendental Math ──
     ReLU,
     GeLU,
     Sigmoid,
     Tanh,
     Sqrt,
+    Exp,
+    Log,
+    Abs,
     Softmax { dim: i64 },
     
     // ── Reductions ──
@@ -138,6 +145,8 @@ pub enum IROp {
     
     // ── Autograd ──
     Grad { wrt: Option<String> },
+    Hessian { wrt: Option<String> },
+    HVP { wrt: Option<String> },
     Backward,
     StopGrad,
     
@@ -201,6 +210,8 @@ pub enum IROp {
     Print,
     PrintInline,
     Input,
+    ParseFloat,
+    ParseInt,
     EmbedString,
     GenerateReply,
     Nop,

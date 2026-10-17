@@ -1,7 +1,7 @@
 {
   "name": "neuron-lang-vscode",
   "displayName": "NEURON Programming Language",
-  "description": "Official VS Code language support for NEURON — Differentiable & Causal AI Language",
+  "description": "Official VS Code language support for NEURON — AI-Native, Differentiable & Causal Language",
   "version": "1.0.0",
   "publisher": "neuronlabs-ai",
   "engines": {
@@ -10,7 +10,17 @@
   "categories": [
     "Programming Languages",
     "Machine Learning",
-    "Linters"
+    "Linters",
+    "Snippets"
+  ],
+  "keywords": [
+    "neuron",
+    "ai",
+    "autograd",
+    "causal",
+    "machine learning",
+    "deep learning",
+    "differentiable programming"
   ],
   "activationEvents": [
     "onLanguage:neuron"
@@ -38,15 +48,79 @@
         "path": "./syntaxes/neuron.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "neuron.check",
+        "title": "NEURON: Type Check Current File",
+        "category": "NEURON"
+      },
+      {
+        "command": "neuron.run",
+        "title": "NEURON: Run Current File (VM)",
+        "category": "NEURON"
+      },
+      {
+        "command": "neuron.jit",
+        "title": "NEURON: JIT Run Current File (Native)",
+        "category": "NEURON"
+      },
+      {
+        "command": "neuron.transpile",
+        "title": "NEURON: Transpile to PyTorch Python",
+        "category": "NEURON"
+      },
+      {
+        "command": "neuron.restartServer",
+        "title": "NEURON: Restart Language Server",
+        "category": "NEURON"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceLangId == neuron",
+          "command": "neuron.run",
+          "group": "neuron_commands@1"
+        },
+        {
+          "when": "resourceLangId == neuron",
+          "command": "neuron.jit",
+          "group": "neuron_commands@2"
+        },
+        {
+          "when": "resourceLangId == neuron",
+          "command": "neuron.check",
+          "group": "neuron_commands@3"
+        },
+        {
+          "when": "resourceLangId == neuron",
+          "command": "neuron.transpile",
+          "group": "neuron_commands@4"
+        }
+      ]
+    },
     "configuration": {
-      "title": "NEURON",
+      "title": "NEURON Language Configuration",
       "properties": {
         "neuron.compilerPath": {
           "type": "string",
           "default": "neuronc",
-          "description": "Path to the neuronc compiler binary"
+          "description": "Path to the neuronc compiler binary executable"
+        },
+        "neuron.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the NEURON Language Server"
         }
       }
     }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

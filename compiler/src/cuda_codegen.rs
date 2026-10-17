@@ -32,11 +32,16 @@ fn is_fusable(op: &IROp) -> bool {
             | IROp::Sub
             | IROp::Mul
             | IROp::Div
+            | IROp::Pow
             | IROp::Neg
             | IROp::ReLU
             | IROp::GeLU
             | IROp::Sigmoid
             | IROp::Tanh
+            | IROp::Exp
+            | IROp::Log
+            | IROp::Abs
+            | IROp::Sqrt
             | IROp::Const(_)
     )
 }
@@ -77,6 +82,9 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                             | IROp::Glorot(_)
                             | IROp::Randn(_)
                             | IROp::MatMul
+                            | IROp::MatMulAdd
+                            | IROp::MatMulReLU
+                            | IROp::MatMulAddReLU
                             | IROp::Linear { .. }
                             | IROp::Conv2D { .. }
                             | IROp::LayerNorm { .. }
@@ -138,11 +146,16 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                             | IROp::Sub
                             | IROp::Mul
                             | IROp::Div
+                            | IROp::Pow
                             | IROp::Neg
                             | IROp::ReLU
                             | IROp::GeLU
                             | IROp::Sigmoid
                             | IROp::Tanh
+                            | IROp::Exp
+                            | IROp::Log
+                            | IROp::Abs
+                            | IROp::Sqrt
                             | IROp::Dropout { .. }
                             | IROp::Index => {
                                 if node.inputs.iter().any(|i| set.contains(i)) {
@@ -161,6 +174,9 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                     let output_is_tensor = set.contains(&node.id);
                     match &node.op {
                         IROp::MatMul
+                        | IROp::MatMulAdd
+                        | IROp::MatMulReLU
+                        | IROp::MatMulAddReLU
                         | IROp::Linear { .. }
                         | IROp::Conv2D { .. }
                         | IROp::LayerNorm { .. }
@@ -185,6 +201,10 @@ pub fn get_global_tensor_fields(all_funcs: &[IRFunction]) -> HashSet<String> {
                         | IROp::GeLU
                         | IROp::Sigmoid
                         | IROp::Tanh
+                        | IROp::Exp
+                        | IROp::Log
+                        | IROp::Abs
+                        | IROp::Sqrt
                         | IROp::Dropout { .. } => {
                             if output_is_tensor {
                                 for &input in &node.inputs {
@@ -256,6 +276,9 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                         | IROp::Glorot(_)
                         | IROp::Randn(_)
                         | IROp::MatMul
+                        | IROp::MatMulAdd
+                        | IROp::MatMulReLU
+                        | IROp::MatMulAddReLU
                         | IROp::Linear { .. }
                         | IROp::Conv2D { .. }
                         | IROp::LayerNorm { .. }
@@ -317,11 +340,16 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                         | IROp::Sub
                         | IROp::Mul
                         | IROp::Div
+                        | IROp::Pow
                         | IROp::Neg
                         | IROp::ReLU
                         | IROp::GeLU
                         | IROp::Sigmoid
                         | IROp::Tanh
+                        | IROp::Exp
+                        | IROp::Log
+                        | IROp::Abs
+                        | IROp::Sqrt
                         | IROp::Dropout { .. }
                         | IROp::Index => {
                             if node.inputs.iter().any(|i| set.contains(i)) {
@@ -340,6 +368,9 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                 let output_is_tensor = set.contains(&node.id);
                 match &node.op {
                     IROp::MatMul
+                    | IROp::MatMulAdd
+                    | IROp::MatMulReLU
+                    | IROp::MatMulAddReLU
                     | IROp::Linear { .. }
                     | IROp::Conv2D { .. }
                     | IROp::LayerNorm { .. }
@@ -364,6 +395,10 @@ pub fn get_tensor_ids(func: &IRFunction, all_funcs: &[IRFunction]) -> HashSet<us
                     | IROp::GeLU
                     | IROp::Sigmoid
                     | IROp::Tanh
+                    | IROp::Exp
+                    | IROp::Log
+                    | IROp::Abs
+                    | IROp::Sqrt
                     | IROp::Dropout { .. } => {
                         if output_is_tensor {
                             for &input in &node.inputs {
@@ -566,6 +601,11 @@ pub fn generate_cuda_kernels(func: &IRFunction, all_funcs: &[IRFunction]) -> Vec
                     let in1 = format_input(node.inputs[1], &inputs, &tensor_ids);
                     format!("{} / {}", in0, in1)
                 }
+                IROp::Pow => {
+                    let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
+                    let in1 = format_input(node.inputs[1], &inputs, &tensor_ids);
+                    format!("powf({}, {})", in0, in1)
+                }
                 IROp::Neg => {
                     let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
                     format!("-{}", in0)
@@ -585,6 +625,22 @@ pub fn generate_cuda_kernels(func: &IRFunction, all_funcs: &[IRFunction]) -> Vec
                 IROp::Tanh => {
                     let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
                     format!("tanh({})", in0)
+                }
+                IROp::Exp => {
+                    let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
+                    format!("exp({})", in0)
+                }
+                IROp::Log => {
+                    let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
+                    format!("log({})", in0)
+                }
+                IROp::Abs => {
+                    let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
+                    format!("fabs({})", in0)
+                }
+                IROp::Sqrt => {
+                    let in0 = format_input(node.inputs[0], &inputs, &tensor_ids);
+                    format!("sqrt({})", in0)
                 }
                 _ => "0.0".to_string(),
             };
