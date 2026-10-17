@@ -4,6 +4,7 @@ import os
 import hashlib
 from pycheck.analyzer import analyze_file, format_output
 from pycheck.rules import ALL_RULES
+from pycheck.audit import generate_proof_of_causality_certificate, format_certificate_text
 
 
 def main():
@@ -16,6 +17,7 @@ def main():
         print("Options:")
         print("  --json               Output diagnostics as JSON")
         print("  --gitlab             Output diagnostics in GitLab Code Quality JSON format")
+        print("  --audit, -a          Generate a verifiable Proof-of-Causality Audit Certificate")
         print("  -o, --output <file>  Write JSON / GitLab report directly to specified file")
         print("  --info               Include info-level diagnostics")
         print("  --quiet              Only show errors (no warnings)")
@@ -38,6 +40,7 @@ def main():
     is_quiet = '--quiet' in args
     is_json = '--json' in args
     is_gitlab = '--gitlab' in args
+    is_audit = '--audit' in args or '-a' in args or (len(args) > 0 and args[0] == 'audit')
 
     output_file = None
     if '--output' in args:
@@ -58,6 +61,8 @@ def main():
             continue
         if a in ('--output', '-o'):
             skip_next = True
+            continue
+        if a == 'audit':
             continue
         if not a.startswith('-'):
             filepath = a
@@ -118,9 +123,8 @@ def main():
 
         if diagnostics:
             files_with_issues += 1
-            if is_json:
-                all_json_results[f_path] = diagnostics
-            elif is_gitlab:
+            all_json_results[f_path] = diagnostics
+            if is_gitlab:
                 rel_path = os.path.relpath(f_path).replace("\\", "/")
                 for d in diagnostics:
                     sev_map = {
@@ -144,10 +148,28 @@ def main():
                     })
                 if output_file:
                     format_output(f_path, diagnostics, source_lines, show_info=show_info)
-            else:
+            elif not is_json:
                 format_output(f_path, diagnostics, source_lines, show_info=show_info)
 
-    if is_gitlab:
+    if is_audit:
+        cert = generate_proof_of_causality_certificate(
+            target_path=filepath,
+            total_files=len(files_to_scan),
+            total_errors=total_errors,
+            total_warnings=total_warnings,
+            diagnostics_by_file=all_json_results
+        )
+        if output_file:
+            if output_file.endswith('.json'):
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(cert, f, indent=2)
+            else:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(format_certificate_text(cert))
+            print(f"Proof-of-Causality Audit Certificate written to: {output_file}\n")
+        print(format_certificate_text(cert))
+        print()
+    elif is_gitlab:
         gl_content = json.dumps(gitlab_issues, indent=2)
         if output_file:
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -163,7 +185,7 @@ def main():
             print(json_content)
 
     # Print summary if human output or if output was redirected to a file
-    if (not is_json and not is_gitlab) or output_file:
+    if (not is_json and not is_gitlab and not is_audit) or (output_file and not is_audit):
         if len(files_to_scan) > 1 or output_file:
             clean_files = len(files_to_scan) - files_with_issues
             print("=================================================================")
@@ -179,8 +201,9 @@ def main():
                     print(f"  These {total_errors} error(s) would be COMPILE-TIME ERRORS in NEURON")
                 elif total_warnings > 0:
                     print(f"  These {total_warnings} temporal issue(s) are guarded at compile-time in NEURON")
-                print("  Explore the zero-leakage language: https://github.com/neuronlabs-ai/neuron-lang")
-                print("  Python detected: 0 of these issues at runtime")
+                print("  Python detected: 0 of these issues at runtime.")
+                print("  --> NEURON Zero-Leakage Language: https://github.com/neuronlabs-ai/neuron-lang")
+                print("  --> PyCheck Documentation & CI/CD: https://github.com/neuronlabs-ai/pycheck")
             print("=================================================================\n")
 
     if total_errors > 0:

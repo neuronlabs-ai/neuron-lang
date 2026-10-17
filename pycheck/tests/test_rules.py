@@ -410,7 +410,7 @@ model.fit(X, c)
 
 class TestIntegration:
     def test_rule_count(self):
-        assert len(ALL_RULES) >= 30, f"Expected 30+ rules, got {len(ALL_RULES)}"
+        assert len(ALL_RULES) == 32, f"Expected exactly 32 rules, got {len(ALL_RULES)}"
 
     def test_all_rules_have_code(self):
         for rule in ALL_RULES:

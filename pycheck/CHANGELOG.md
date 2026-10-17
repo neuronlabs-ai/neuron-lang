@@ -4,9 +4,19 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.2] — 2026-10-17
+
+### Changed
+- **Documentation & PyPI Sync**: Updated package documentation, distribution metadata, and PyPI project specifications to explicitly reflect all **32 rules** across all 4 categories (17 Temporal `T001`–`T017`, 7 Causal `C001`–`C007`, 6 Uncertainty `U001`–`U006`, 2 Data Quality `D002`–`D003`).
+- **Test Suite Verification**: Updated integration test assertion (`test_rules.py`) to strictly enforce the exact 32-rule invariant.
+- **Proof-of-Causality & Server Enhancements**: Integrated cryptographic audit certificate generation (`pycheck --audit`) and automated webhook gatekeeper endpoints.
+
+---
+
 ## [1.0.1] — 2026-10-17
 
 ### Added
+- **Rule Suite Expansion (32 rules total)**: Added rules `T016` (`merge_asof_direction`) and `T017` (`target_laundering`), expanding the active safety suite from 30 to 32 rules.
 - **AST Data Provenance Tracking Engine (`flow.py`)**:
   - Full partition provenance tracking across train/test splits, slices, and cross-validation loops.
   - Detects partition contamination when training variables are concatenated or reassigned with test data (`X_train = pd.concat([X_train, X_test])`).
@@ -19,7 +29,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Emits diagnostic warnings for test set mappings missing `.fillna(train_prior_mean)` to guard against inference failures on unseen categories/regimes.
 - **Rule `C002` Refinement**: Distinguishes fold-local engineered features (`train_df[['volatility', 'regime_success_rate']]`) from raw target columns (`target`, `label`, `future_price`).
 - **VS Code Extension v1.0.1**: Upgraded `pycheck-neuron` VS Code extension to v1.0.1 with instant linting for provenance contamination and target laundering.
-- **Unit Test Suite Expansion**: Added 16 new unit tests, bringing total test suite to 95 tests with 100% pass rate.
+- **Unit Test Suite Expansion**: Added 16 new unit tests, bringing total test suite to 97 tests with 100% pass rate.
 
 ---
 
@@ -57,7 +67,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [0.2.0] — 2026-09-05
 
 ### Added
-- Initial 30-rule implementation
+- Initial 30-rule prototype implementation (expanded to 32 rules in v1.0.1+)
 - Basic taint tracking
 - CLI with `--json`, `--quiet`, `--info` flags
 

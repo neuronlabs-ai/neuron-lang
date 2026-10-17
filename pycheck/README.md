@@ -244,21 +244,43 @@ The `pycheck-vscode` extension gives you **real-time red/yellow squiggles** as y
 
 ---
 
-## Beyond Python: the NEURON Language
+---
 
-PyCheck catches these bugs **after you write them**.
+## PyCheck Cloud & Enterprise SaaS
 
-[NEURON](https://github.com/neuronlabs-ai/neuron-lang) prevents them **before the program compiles** — by encoding time horizons, causal modes, and uncertainty directly into the type system:
+For institutional hedge funds, algorithmic trading desks, and enterprise ML engineering teams, **PyCheck Cloud** provides continuous compliance and automated gatekeeping:
 
+* **Automated PR / MR Gatekeeping**: GitHub App & GitLab integration that automatically blocks pull requests containing temporal leaks, lookahead joins, or cross-fold contamination before they reach production.
+* **Proof-of-Causality Audit Certificates**: Cryptographically verifiable backtest audit reports (PDF & JSON) certifying that quantitative strategies and feature pipelines are provably free of temporal lookahead bias for LP allocators and risk committees.
+* **Firm-Wide Policy Engine**: Author proprietary firm-specific invariants, restrict internal data feed schemas, and monitor leak incident trends across 50+ quant researchers.
+* **Air-Gapped & On-Prem Deployment**: Private VPC and on-premise Kubernetes support for proprietary trading strategies that cannot leave your internal network.
+
+> See the [Enterprise CI/CD Integration](#enterprise-cicd--gitlab-integration) section or visit [https://github.com/neuronlabs-ai/pycheck](https://github.com/neuronlabs-ai/pycheck) to learn more or request institutional access.
+
+---
+
+## PyCheck & NEURON: Working Hand-in-Hand
+
+PyCheck and the **[NEURON Programming Language](https://github.com/neuronlabs-ai/neuron-lang)** represent a dual-defense ecosystem against algorithmic failures:
+
+| System | Role | Mechanism | Guarantee |
+| :--- | :--- | :--- | :--- |
+| **PyCheck** | **The Diagnostic Layer** for existing Python code | 2-pass AST data flow & provenance static analysis | Flags known leakage patterns & contamination in seconds |
+| **NEURON** | **The Permanent Cure** for future algorithmic systems | Type-theoretic stochastic filtration proofs ($\mathcal{F}_t$) | **100% mathematical compile-time proof**; zero runtime overhead |
+
+### The Migration Pathway
+1. **Audit Today with PyCheck**: Run `pycheck` across existing Python/Pandas/PyTorch repositories to identify lookahead leaks and target laundering.
+2. **Transpile with `py2nr`**: Use the automated transpiler to convert validated feature pipelines into typed NEURON modules.
+3. **Deploy with 100% Compile-Time Safety**:
 ```python
-# In NEURON, this is a compile-time error — not a runtime surprise:
+# In NEURON, lookahead bias is a compile-time type error — not a runtime surprise:
 fn strategy(prices: Temporal[Tensor, 0]) -> Tensor:
-  let future = prices.shift(-1)
-  # error[TemporalLeak]: shift(-1) produces offset +1 > 0
-  # Lookahead bias detected at compile time.
+  let future = prices.shift(1)  # NEURON uses causal algebraic offsets (+1 is future)
+  # error[TemporalLeak]: operation requires filtration F_{t+1}, but context is F_t (offset 0)
+  # Lookahead bias rejected at compile time before execution.
 ```
 
-For 100% compile-time temporal proofs, type-checked do-calculus, and native ahead-of-time compilation, see the [NEURON language](https://github.com/neuronlabs-ai/neuron-lang).
+Explore the language: [https://github.com/neuronlabs-ai/neuron-lang](https://github.com/neuronlabs-ai/neuron-lang)
 
 ---
 
