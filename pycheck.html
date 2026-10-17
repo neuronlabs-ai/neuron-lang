@@ -682,7 +682,8 @@
           <span style="color: #cbd5e1;">https://api.neuron-lab.org/webhook/github</span>
         </div>
 
-        <button type="button" onclick="closeCheckoutModal()" class="btn btn-primary" style="width: 100%; cursor: pointer;">Done &bull; Return to PyCheck</button>
+        <a id="success-hub-btn" href="success.html" class="btn btn-primary" style="display: block; text-align: center; margin-bottom: 0.75rem; text-decoration: none; font-weight: 700;">Open Complete Onboarding &amp; Setup Hub &rarr;</a>
+        <button type="button" onclick="closeCheckoutModal()" class="btn btn-ghost" style="width: 100%; cursor: pointer;">Done &bull; Return to PyCheck</button>
       </div>
     </div>
   </div>
@@ -829,6 +830,11 @@
 
       document.getElementById('issued-license-key').textContent = licenseKey;
       document.getElementById('issued-cli-key').textContent = licenseKey;
+
+      const hubBtn = document.getElementById('success-hub-btn');
+      if (hubBtn) {
+        hubBtn.href = `success.html?key=${encodeURIComponent(licenseKey)}&org=${encodeURIComponent(org || 'Your Quantitative Team')}&plan=${encodeURIComponent(currentPlan)}&seats=${encodeURIComponent(currentSeats)}`;
+      }
     }
 
     // Close on backdrop click
