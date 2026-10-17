@@ -149,8 +149,8 @@
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
           </div>
-          <h3>Native Autograd</h3>
-          <p>Every function is differentiable. Tape-based reverse-mode AD with backward passes for MatMul, ReLU, Softmax, CrossEntropy, MSE, Sqrt, Sum, Mean.</p>
+          <h3>Second-Order Curvature Engine</h3>
+          <p>Native <code>hessian(loss, wrt=x)</code>, <code>grad(grad(...))</code>, and $\mathcal{O}(N)$ Hessian-Vector Products (HvP). Enables exact 1-step Newton-Raphson optimization without quadratic memory explosions.</p>
         </div>
         <div class="feature-card reveal reveal-delay-2">
           <div class="feature-icon">
@@ -177,10 +177,9 @@
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
           </div>
-          <h3>Dynamic JIT Compiler</h3>
+          <h3>Dynamic Cranelift JIT</h3>
           <p>Compiles math kernels directly into native assembly or CUDA code at runtime. Sub-millisecond compilation scaling for deep networks, bypassing the interpreter.</p>
         </div>
-        <div class="feature-card reveal reveal-delay-1">
         <div class="feature-card reveal reveal-delay-1">
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
@@ -318,6 +317,7 @@ subtyping constraint (offset &le; 0). Compilation halted.
               <button class="tab-btn" data-tab="matmul">Matrix Math</button>
               <button class="tab-btn" data-tab="temporal">Temporal</button>
               <button class="tab-btn" data-tab="causal">Causal</button>
+              <button class="tab-btn" data-tab="second_order">Hessian &amp; Curvature</button>
               <button class="tab-btn" data-tab="uncertainty">Uncertainty</button>
               <button class="tab-btn" data-tab="forgetting">Forgetting</button>
             </div>

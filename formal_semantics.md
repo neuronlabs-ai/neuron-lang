@@ -9,11 +9,11 @@
 
 ## 1. Introduction
 
-Modern machine learning systems routinely execute computations where domain-specific correctness depends on physical and statistical constraints not captured by conventional types:
+Modern numerical and machine learning systems routinely execute computations where computational correctness depends on physical, temporal, and statistical constraints not captured by conventional types:
 1. **Temporal Non-Interference (Lookahead Bias):** In time-series forecasting, backtesting, and online RL, computing decisions at epoch $t$ using data from timestamps $t' > t$ represents a **lookahead leak**. Such leaks produce overfitted evaluations and severe live deployment failures.
 2. **Causal Mode Safety (Confounding Bias):** In observational vs. experimental studies, computing treatment effects by subtracting associational conditionals $P(Y \mid X=1) - P(Y \mid X=0)$ rather than interventional distributions $P(Y \mid \text{do}(X=1)) - P(Y \mid \text{do}(X=0))$ introduces confounding bias when unobserved common causes exist ($X \leftarrow U \rightarrow Y$).
 
-NEURON enforces these safety properties at compile time. This document formalizes the core theoretical calculus $\lambda_{\text{neuron}}$, establishing small-step operational reduction rules, typing judgments, and metatheoretical soundness proofs. The calculus has been mechanized and machine-checked in **Lean 4** ([`formal/lean/LambdaNeuron.lean`](file:///C:/Users/ADMIN/neuron-lang/formal/lean/LambdaNeuron.lean)), where the **Progress Theorem has been formally proved with zero `sorry`**, alongside 15 foundational supporting lemmas including Causal Mode Isolation, Store Invariance, Subtype Tag Preservation, and Canonical Forms.
+NEURON enforces these safety properties at compile time. This document formalizes the core theoretical calculus $\lambda_{\text{neuron}}$, establishing small-step operational reduction rules, typing judgments, and metatheoretical soundness proofs. The calculus has been formally verified with machine-checked operational proofs in **Lean 4**, where the **Progress Theorem has been proved with zero `sorry`**, alongside 15 foundational supporting lemmas including Causal Mode Isolation, Store Invariance, Subtype Tag Preservation, and Canonical Forms.
 
 Crucially, this formalization resolves the relationship between a type's **static upper-bound dependency horizon** ($\Delta$) and its **dynamic evaluation read footprint** ($\mathcal{R}(\mathcal{T})$) via a labeled transition system, establishing an airtight proof of **Temporal Non-Interference**. On the causal side, we prove **Intervention Integrity / Causal Mode Isolation**, while explicitly formalizing automated causal identification completeness as an orthogonal open problem. Mechanizing $\lambda_{\text{neuron}}$ in Lean 4 uncovered and resolved seven subtle semantic bugs present in earlier informal specifications.
 
@@ -280,7 +280,7 @@ $$
 
 ## 6. Metatheory and Soundness Proofs
 
-The core metatheoretical properties of $\lambda_{\text{neuron}}$ have been formalized and machine-checked in **Lean 4** ([`formal/lean/LambdaNeuron.lean`](file:///C:/Users/ADMIN/neuron-lang/formal/lean/LambdaNeuron.lean)).
+The core metatheoretical properties of $\lambda_{\text{neuron}}$ have been formalized and verified in **Lean 4**.
 
 ### 6.1 Basic Type Safety
 
