@@ -3,7 +3,7 @@
 
 **Fayo Ibrahim & The NEURON Development Team**  
 *Neuron Labs*  
-*September 2026*
+*October 2026*
 
 ---
 
@@ -16,7 +16,8 @@ We present **NEURON**, a complete, statically typed, natively differentiable pro
 2. **Causal Mode Integrity:** First-class causal types (`Causal[T, m]`) that distinguish observational conditional distributions from Pearl's interventional $do$-calculus operations at compile time, eliminating confounding bias and invalid observational arithmetic.
 3. **Uncertainty Propagation:** First-class distribution types (`Uncertain[T]`) that track confidence intervals and error bounds through arithmetic operations.
 4. **Verifiable Machine Unlearning:** A first-class `forget()` primitive with gradient ascent, Fisher information scrubbing, and task negation, producing cryptographically verifiable audit certificates (`ForgetCertificate`) to satisfy regulatory unlearning mandates (e.g., GDPR Article 17, copyright erasure).
-5. **A Sovereign 5-Target Compiler Toolchain:** Implemented in ~29,000 lines of Rust with zero unsafe blocks in critical paths, comprising an AST type checker, a 6-pass IR optimization pipeline, and five execution backends: an autograd VM interpreter, a dynamic Rust JIT compiler (`libloading`), an ahead-of-time (AOT) native executable compiler (`target-cpu=native`), an in-browser WebAssembly target (`wasm-bindgen`), and a PyTorch Python transpiler.
+5. **A Sovereign Multi-Target Compiler Toolchain:** Implemented in Rust comprising an AST type checker, a 6-pass IR optimization pipeline, Cranelift native JIT compilation, CUDA NVRTC kernel compilation, Triton codegen, ahead-of-time (AOT) binary generation, and in-browser WebAssembly execution.
+6. **The Dual-Defense Ecosystem (PyCheck):** Paired with PyCheck (published on PyPI as `pycheck-neuron`), an AST data provenance engine that brings NEURON's temporal filtration rules and data partition lineage tracking to legacy Python ML pipelines.
 
 This paper provides an architectural and formal overview of NEURON, its core calculus $\lambda_{\text{neuron}}$, its compiler and optimizer pipeline, its runtime execution engines, and its empirical evaluation across automated test suites, fuzzing, and endurance benchmarks.
 
