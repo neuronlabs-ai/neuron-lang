@@ -245,7 +245,7 @@ NEURON compiles a unified IR representation into five distinct execution targets
 - **Interactive REPL (`neuronc repl`):** Live evaluation terminal with type inspection (`:type`), code loading (`:load`), and explanation (`:explain`).
 - **Desktop IDE (`desktop/`):** Standalone browser-based IDE powered by client-side WebAssembly.
 - **Language Server Protocol (`neuronc lsp`):** Standard LSP implementation providing real-time diagnostics, hover types, and autocompletion in VS Code.
-- **PyCheck Linter (`pycheck`):** Standalone Python static analyzer with a 30-rule security registry and a 2-pass data-flow taint engine that detects temporal leaks and causal errors in legacy Python/PyTorch code.
+- **PyCheck Linter (`pycheck`):** Standalone Python static analyzer (`pycheck-neuron` on PyPI) with a 32-rule security registry and a 2-pass AST data-flow and partition provenance tracking engine (`F001`, `F002`) that detects temporal leaks, non-causal joins (`merge_asof`), target laundering (`T017`), and causal errors in legacy Python/PyTorch code.
 
 ---
 

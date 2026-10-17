@@ -1,5 +1,5 @@
 // NEURON Website — Live In-Browser WebAssembly Engine & UI Logic
-import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js?v=20260905_live_wasm_v3';
+import init, { type_check, eval_neuron, transpile_to_python } from './neuron_wasm.js?v=20261017_live_wasm_v4';
 
 // ══════════════════════════════════════════════════
 // 1. Curated Code Snippets & Descriptions
@@ -238,7 +238,7 @@ function initApp() {
   async function loadWasm() {
     try {
       const t0 = performance.now();
-      await init('neuron_wasm_bg.wasm?v=20260905_live_wasm_v3');
+      await init('neuron_wasm_bg.wasm?v=20261017_live_wasm_v4');
       const elapsed = Math.round(performance.now() - t0);
 
       wasmReady = true;

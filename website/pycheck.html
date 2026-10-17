@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PyCheck is a static AST analyzer and data provenance engine that detects temporal lookahead bias, causal confusion, and data contamination in Python ML code.">
+  <meta name="keywords" content="PyCheck, ML safety, lookahead bias, data leakage, time series, quantitative finance, causal inference, linter, static analysis">
+  <title>PyCheck — ML Safety Analyzer & Provenance Engine</title>
+  <link rel="stylesheet" href="style.css">
+  
+  <meta property="og:title" content="PyCheck — ML Safety Analyzer & Provenance Engine">
+  <meta property="og:description" content="32 rules. Zero dependencies. Catches the silent lookahead bugs that cost millions in Python ML and quant code.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://neuronlabs-ai.github.io/neuron-lang/neuron_github_logo.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://neuronlabs-ai.github.io/neuron-lang/neuron_github_logo.png">
+
+  <style>
+    .terminal-box {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9rem;
+      color: #e2e8f0;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      line-height: 1.6;
+    }
+    .terminal-err { color: #f87171; font-weight: bold; }
+    .terminal-warn { color: #fbbf24; font-weight: bold; }
+    .terminal-help { color: #38bdf8; }
+    .terminal-highlight { color: #a78bfa; }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+      margin: 2rem 0;
+    }
+    .feature-card {
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 1.5rem;
+      transition: border-color 0.2s;
+    }
+    .feature-card:hover {
+      border-color: #38bdf8;
+    }
+    .feature-card h3 {
+      margin-top: 0;
+      color: #38bdf8;
+      font-size: 1.15rem;
+    }
+    .pill-badge {
+      display: inline-block;
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      margin-bottom: 0.75rem;
+    }
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 2rem 0;
+    }
+    .comparison-table th, .comparison-table td {
+      border: 1px solid #334155;
+      padding: 0.85rem 1rem;
+      text-align: left;
+    }
+    .comparison-table th {
+      background: #1e293b;
+      color: #f8fafc;
+    }
+    .comparison-table tr:nth-child(even) {
+      background: rgba(30, 41, 59, 0.3);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header class="navbar">
+    <div class="container navbar-container">
+      <a href="index.html" class="logo">
+        <img src="logo.png" alt="NEURON Logo" class="logo-img">
+        <span>NEURON</span>
+      </a>
+      <nav>
+        <ul class="nav-links" id="nav-links">
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="index.html#playground">Playground</a></li>
+          <li><a href="pycheck.html" style="color: #38bdf8; font-weight: bold;">PyCheck Linter</a></li>
+          <li><a href="paper.html">Paper</a></li>
+          <li>
+            <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="nav-btn nav-btn-primary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+              PyCheck GitHub
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="hero-badge-dot" style="background: #38bdf8;"></span>
+        <span>v1.0.1 on PyPI — 32 Rules + AST Data Provenance Engine</span>
+      </div>
+      <h1>PyCheck<br><span class="gradient-text">ML Safety Analyzer</span></h1>
+      <p class="hero-lead">32 specialized rules. Zero dependencies. Catches the silent temporal lookahead leaks, causal confusion, and cross-fold data contamination that cost millions in backtesting.</p>
+
+      <div class="terminal-box" style="max-width: 650px; margin: 1.5rem auto; text-align: left;">
+        <span style="color: #64748b;"># Install from PyPI</span><br>
+        <span style="color: #38bdf8;">$</span> pip install pycheck-neuron<br><br>
+        <span style="color: #64748b;"># Scan any Python script or Jupyter Notebook</span><br>
+        <span style="color: #38bdf8;">$</span> pycheck my_strategy.py
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Content -->
+  <main class="container" style="padding-bottom: 5rem;">
+
+    <section>
+      <h2>The Problem It Solves</h2>
+      <p>In quantitative trading and machine learning, <strong>lookahead bias</strong> and <strong>data leakage</strong> produce backtests with 95% simulated accuracy that instantly collapse in live production. Python, PyTest, Mypy, and IDEs are completely blind to these bugs because the syntax is valid.</p>
+
+      <div class="terminal-box">
+<span class="terminal-err">ERROR[T001]</span>: .shift(-1) accesses data 1 rows INTO THE FUTURE<br>
+--> strategy.py:4:14<br>
+   4 |  df['target'] = df['close'].shift(-1)<br>
+                     ^^^^^^^^^^^<br>
+<span class="terminal-help">     help: Use .shift(1) to access past data instead</span><br><br>
+<span class="terminal-err">ERROR[F002]</span>: Data contamination: 'X_train' contains test partition data (concatenation via pd.concat)<br>
+--> strategy.py:12:15<br>
+  12 |  scaler.fit_transform(X_train)<br>
+                      ^^^^^^^^^^^<br>
+<span class="terminal-help">     help: Ensure training data does not contain test fold data</span><br><br>
+-----------------------------------------------------------------<br>
+<span class="terminal-highlight">These errors would be COMPILE-TIME ERRORS in NEURON.</span><br>
+Python detected: 0 of these issues at runtime.
+      </div>
+    </section>
+
+    <!-- Capabilities Grid -->
+    <section style="margin-top: 3.5rem;">
+      <h2>4 Specialized Defense Layers</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="pill-badge">Layer 1</div>
+          <h3>AST Data Provenance (F001, F002)</h3>
+          <p>Does not just rely on variable names. Tracks partition lineage across <code>pd.concat</code>, aliases (<code>X_eval = X_test</code>), reassignments, and helper function return values.</p>
+        </div>
+        <div class="feature-card">
+          <div class="pill-badge">Layer 2</div>
+          <h3>Temporal Leaks (T001–T017)</h3>
+          <p>Catches negative leads (<code>shift(-1)</code>, <code>diff(-5)</code>), non-causal centered rolling windows, time-series random shuffle splits, and lookahead joins (<code>merge_asof</code>).</p>
+        </div>
+        <div class="feature-card">
+          <div class="pill-badge">Layer 3</div>
+          <h3>Target Laundering (T017)</h3>
+          <p>Flags un-split global target aggregations (<code>df.groupby()['target']</code>) while validating fold-local transformations with <code>.fillna()</code> inference fallbacks.</p>
+        </div>
+        <div class="feature-card">
+          <div class="pill-badge">Layer 4</div>
+          <h3>Causal & Uncertainty (C001–U006)</h3>
+          <p>Detects correlation used for causal decisions, target in feature matrix, survivorship bias filtering, and uncalibrated point predictions without uncertainty bounds.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CI/CD & Enterprise -->
+    <section style="margin-top: 3.5rem;">
+      <h2>Enterprise CI/CD & PR Gatekeeping</h2>
+      <p>PyCheck natively exports into the <strong>GitLab Code Quality</strong> and <strong>GitHub Actions</strong> report format, enabling quantitative desks to block leaky pull requests before they reach production:</p>
+
+      <div class="terminal-box">
+<span style="color: #64748b;"># Run in GitLab CI or GitHub Actions</span><br>
+<span style="color: #38bdf8;">$</span> pycheck . --gitlab --output gl-codequality.json
+      </div>
+      <p>GitLab and GitHub automatically annotate pull request diffs with inline error markers on every line where future data is inadvertently accessed.</p>
+    </section>
+
+    <!-- The NEURON Synergy -->
+    <section style="margin-top: 3.5rem;">
+      <h2>PyCheck &amp; NEURON: Working Hand-in-Hand</h2>
+      <p>PyCheck and the <a href="index.html" style="color: #38bdf8;">NEURON Programming Language</a> represent a complete, two-step safety ecosystem:</p>
+
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>System</th>
+            <th>Role</th>
+            <th>Mechanism</th>
+            <th>Guarantee</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>PyCheck</strong></td>
+            <td>The Diagnostic Layer for existing Python code</td>
+            <td>2-pass AST data flow & partition provenance</td>
+            <td>Detects known leaks in seconds with zero runtime dependencies</td>
+          </tr>
+          <tr>
+            <td><strong>NEURON</strong></td>
+            <td>The Permanent Cure for new algorithmic systems</td>
+            <td>Type-theoretic stochastic filtration proofs (&#119865;<sub>t</sub>)</td>
+            <td><strong>100% mathematical compile-time proof</strong>; zero runtime overhead</td>
+          </tr>
+        </tbody>
+      </table>
+      
+      <div style="text-align: center; margin-top: 2rem;">
+        <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-primary" style="margin-right: 1rem;">View PyCheck on GitHub</a>
+        <a href="index.html" class="btn btn-ghost">Explore NEURON Language</a>
+      </div>
+    </section>
+
+  </main>
+
+  <footer style="border-top: 1px solid #334155; padding: 2rem 0; text-align: center; color: #64748b; font-size: 0.85rem;">
+    <div class="container">
+      <p>&copy; 2026 NEURON Team. PyCheck is open-source under the MIT License.</p>
+    </div>
+  </footer>
+
+</body>
+</html>
