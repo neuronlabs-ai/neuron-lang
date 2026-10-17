@@ -692,8 +692,16 @@
     // PyCheck Cloud Interactive Checkout Logic
     // ══════════════════════════════════════════════════
     
-    // Configurable Stripe Payment Link / Checkout Endpoint
-    let STRIPE_PAYMENT_LINK = "https://buy.stripe.com/test_pycheck_team_pro";
+    // =========================================================================
+    // STRIPE CHECKOUT / PAYMENT GATEWAY CONFIGURATION (PLACEHOLDER)
+    // -------------------------------------------------------------------------
+    // Step 1: Create a Stripe account at https://dashboard.stripe.com
+    // Step 2: Go to "Payment Links" -> Create a recurring subscription product:
+    //         - Name: "PyCheck Team Pro"
+    //         - Price: $79.00 / seat / month (with 14-day free trial enabled)
+    // Step 3: Paste your live Stripe Payment Link below:
+    // =========================================================================
+    let STRIPE_PAYMENT_LINK = "https://buy.stripe.com/PLACEHOLDER_SETUP_STRIPE_FIRST";
     
     let currentPlan = 'pro';
     let currentCycle = 'monthly';
@@ -793,8 +801,8 @@
 
       if (currentPaymentMode === 'stripe') {
         // If live Stripe link is configured (not placeholder)
-        if (STRIPE_PAYMENT_LINK && !STRIPE_PAYMENT_LINK.includes("test_pycheck_team_pro")) {
-          const redirectUrl = `${STRIPE_PAYMENT_LINK}?prefilled_email=${encodeURIComponent(email)}&client_reference_id=${encodeURIComponent(org)}`;
+        if (STRIPE_PAYMENT_LINK && !STRIPE_PAYMENT_LINK.includes("PLACEHOLDER") && !STRIPE_PAYMENT_LINK.includes("test_pycheck")) {
+          const redirectUrl = `${STRIPE_PAYMENT_LINK}?prefilled_email=${encodeURIComponent(email)}&client_reference_id=${encodeURIComponent(org)}&quantity=${currentSeats}`;
           window.location.href = redirectUrl;
           return;
         }
@@ -815,8 +823,8 @@
         document.getElementById('success-headline').textContent = '14-Day Free Trial Active!';
         document.getElementById('success-subtext').textContent = `Organization '${org}' provisioned with 32-rule gatekeeper.`;
       } else {
-        document.getElementById('success-headline').textContent = 'Stripe Trial Provisioned!';
-        document.getElementById('success-subtext').textContent = `Stripe receipt & credentials routed to ${email}.`;
+        document.getElementById('success-headline').textContent = 'Stripe Sandbox & Trial Provisioned!';
+        document.getElementById('success-subtext').textContent = `Stripe Payment Link is in placeholder onboarding mode. Full trial access provisioned for ${email}:`;
       }
 
       document.getElementById('issued-license-key').textContent = licenseKey;
