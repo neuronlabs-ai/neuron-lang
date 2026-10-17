@@ -102,7 +102,34 @@ fn main():
   print("Applying Fisher Information Noise Scrubbing to model...")
   let cert = forget(net, sensitive_data, "FisherScrubbing", 0.5)
   print("Unlearning verified: Certificate signed in-memory.")
-  print(cert.forgetting_successful)`
+  print(cert.forgetting_successful)`,
+
+  second_order: `// 7. Second-Order Curvature & 1-Step Newton-Raphson Optimization
+fn main():
+  // Initial parameter w
+  let w: Tensor[1] = zeros(1) + 10.0
+  print("Initial parameter w_0:")
+  print(w)
+
+  // Quadratic loss: L(w) = 0.5 * (3w - 6)^2  -> Minimum at w* = 2.0
+  let diff = 3.0 * w - 6.0
+  let loss = 0.5 * diff * diff
+
+  // First-order gradient: g = 3 * (3*10 - 6) = 72.0
+  let g = grad(loss, wrt=w)
+  print("First derivative (grad):")
+  print(g)
+
+  // Second-order curvature: H = 3^2 = 9.0
+  let H = hessian(loss, wrt=w)
+  print("Second derivative (Hessian matrix):")
+  print(H)
+
+  // Exact 1-step Newton-Raphson update: w* = w - H^(-1) * g
+  let step = g / H
+  let w_opt = w - step
+  print("Converged weight after 1 Newton step (w* = 2.0):")
+  print(w_opt)`
 };
 
 const snippetDescriptions = {
@@ -110,6 +137,7 @@ const snippetDescriptions = {
   matmul: "Sub-millisecond matrix multiplication and vectorized ReLU activation running on browser SIMD.",
   temporal: "Compile-time prevention of lookahead bias. The compiler catches future timestamp access before execution.",
   causal: "Prevents confusing observational correlation with interventional causation at compile time.",
+  second_order: "Calculates exact Hessian curvature and converges Newton-Raphson optimization in a single exact step.",
   uncertainty: "Tracks uncertainty distributions and confidence intervals across medical dosage predictions.",
   forgetting: "Provable machine unlearning in-place via Fisher Information Noise Scrubbing with verified bounds."
 };
