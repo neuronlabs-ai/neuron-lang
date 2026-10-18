@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PyCheck Cloud Post-Checkout Onboarding Hub. Activate your organization license key, install the GitHub App, and configure CI/CD PR gatekeeping.">
-  <title>PyCheck Cloud — Subscription Verified &amp; Onboarding Hub</title>
+  <meta name="description" content="PyCheck Cloud Quickstart &amp; CI/CD Setup Hub. Connect your GitHub or GitLab repository to the automated 32-rule AST Safety Gatekeeper in under 60 seconds.">
+  <title>PyCheck Cloud — Quickstart &amp; CI/CD Gatekeeper Setup Hub</title>
   <link rel="stylesheet" href="style.css">
   
   <style>
@@ -168,40 +168,30 @@
     <div class="success-card">
       <div class="badge-verified">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
-        SUBSCRIPTION ACTIVE &bull; 14-DAY RISK-FREE TRIAL
+        100% FREE &bull; OPEN SOURCE (MIT) &bull; PUBLIC BETA
       </div>
-      <h1 style="font-size: 2rem; margin: 0.5rem 0; color: #f8fafc;" id="welcome-header">Welcome to PyCheck Cloud</h1>
+      <h1 style="font-size: 2rem; margin: 0.5rem 0; color: #f8fafc;" id="welcome-header">PyCheck Quickstart &amp; CI/CD Setup Hub</h1>
       <p style="color: #94a3b8; font-size: 1rem; margin-bottom: 1.5rem;" id="welcome-subtext">
-        Your quantitative organization is now protected by the 32-rule AST Safety Gatekeeper. Here is your active license key and 60-second onboarding guide:
+        Zero paywalls. Connect your repository to the automated 32-rule AST Safety Gatekeeper in under 60 seconds:
       </p>
-
-      <!-- License Key Box -->
-      <div style="font-size: 0.85rem; color: #cbd5e1; font-weight: 600;">ORGANIZATION LICENSE KEY:</div>
-      <div class="key-display-box">
-        <span id="license-key-val">PYCHECK-PRO-7A9B-842C-1E3F</span>
-        <button type="button" class="copy-btn-action" onclick="copyLicenseKey()">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-          <span id="copy-btn-text">Copy Key</span>
-        </button>
-      </div>
 
       <!-- Account Summary Grid -->
       <div class="key-details-grid">
         <div>
-          <span style="color: #64748b;">Plan:</span><br>
-          <strong id="plan-val" style="color: #38bdf8;">PyCheck Team Pro</strong>
+          <span style="color: #64748b;">License:</span><br>
+          <strong id="plan-val" style="color: #4ade80;">MIT Open Source</strong>
         </div>
         <div>
-          <span style="color: #64748b;">Seats Authorized:</span><br>
-          <strong id="seats-val">5 Active Quant Seats</strong>
+          <span style="color: #64748b;">PR Scans:</span><br>
+          <strong id="seats-val" style="color: #38bdf8;">Unlimited PR Checks</strong>
         </div>
         <div>
-          <span style="color: #64748b;">Billing Status:</span><br>
-          <strong style="color: #4ade80;">Trial Active (Next charge in 14 days)</strong>
+          <span style="color: #64748b;">Setup Cost:</span><br>
+          <strong style="color: #4ade80;">Free Forever (Zero Cost)</strong>
         </div>
         <div>
-          <span style="color: #64748b;">Billing Management:</span><br>
-          <a href="https://billing.stripe.com/p/login/test_placeholder" target="_blank" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">Stripe Customer Portal &rarr;</a>
+          <span style="color: #64748b;">Source Repository:</span><br>
+          <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">GitHub Repository &rarr;</a>
         </div>
       </div>
     </div>
@@ -222,23 +212,23 @@
         Payload URL:   <span style="color: #38bdf8;">https://api.neuron-lab.org/webhook/github</span><br>
         Content type:  <span style="color: #cbd5e1;">application/json</span><br>
         Events:        <span style="color: #cbd5e1;">Pull Requests, Pushes</span><br>
-        Secret:        <span style="color: #fca5a5;" id="webhook-secret">whsec_pycheck_7a9b842c1e3f</span>
+        Secret:        <span style="color: #38bdf8;" id="webhook-secret">pycheck-public-beta</span>
       </div>
     </div>
 
     <!-- Step 2: Activate Local CLI -->
     <div class="step-card">
       <div class="step-number">2</div>
-      <h3 style="color: #38bdf8; margin: 0 0 0.5rem 0;">Activate PyCheck CLI on Developer Machines</h3>
+      <h3 style="color: #38bdf8; margin: 0 0 0.5rem 0;">Run PyCheck CLI Locally (Zero Dependencies)</h3>
       <p style="color: #94a3b8; font-size: 0.9rem;">
-        Your researchers can run PyCheck locally with zero dependencies. Activating with your license unlocks unlimited scans and team compliance reporting:
+        Your researchers can run PyCheck locally with zero configuration and zero external runtime dependencies. It inspects Python and Jupyter notebooks in milliseconds:
       </p>
 
       <div class="terminal-box">
         <span style="color: #64748b;"># Install PyCheck from PyPI</span><br>
         <span style="color: #38bdf8;">$</span> pip install pycheck-neuron<br><br>
-        <span style="color: #64748b;"># Activate organization license</span><br>
-        <span style="color: #38bdf8;">$</span> pycheck --activate <span id="cmd-license-key">PYCHECK-PRO-7A9B-842C-1E3F</span>
+        <span style="color: #64748b;"># Scan your quantitative strategy or pipeline</span><br>
+        <span style="color: #38bdf8;">$</span> pycheck my_strategy.py
       </div>
     </div>
 
@@ -319,59 +309,15 @@ pycheck:
   </footer>
 
   <script>
-    // ══════════════════════════════════════════════════
-    // Dynamic Session & License Key Initialization
-    // ══════════════════════════════════════════════════
-    
-    // Read parameters from URL (e.g. ?session_id=cs_test_... or ?key=... or localStorage)
+    // Read parameters from URL (e.g. ?org=my-org)
     const urlParams = new URLSearchParams(window.location.search);
-    const sessionId = urlParams.get('session_id') || ('sess_' + Math.random().toString(36).substring(2, 10));
-    const paramKey = urlParams.get('key');
     const paramOrg = urlParams.get('org');
-    const paramPlan = urlParams.get('plan');
-    const paramSeats = urlParams.get('seats');
-    
-    // Generate deterministic or retrieve license key
-    let licenseKey = paramKey || localStorage.getItem('pycheck_license_key');
-    if (!licenseKey) {
-      const hash1 = Math.random().toString(16).substring(2, 6).toUpperCase();
-      const hash2 = Math.random().toString(16).substring(2, 6).toUpperCase();
-      const hash3 = Math.random().toString(16).substring(2, 6).toUpperCase();
-      licenseKey = `PYCHECK-PRO-${hash1}-${hash2}-${hash3}`;
-      localStorage.setItem('pycheck_license_key', licenseKey);
-    } else {
-      localStorage.setItem('pycheck_license_key', licenseKey);
-    }
 
     if (paramOrg) {
       const headerEl = document.getElementById('welcome-header');
       if (headerEl) headerEl.textContent = `Welcome, ${paramOrg}!`;
       const subtextEl = document.getElementById('welcome-subtext');
-      if (subtextEl) subtextEl.textContent = `Organization '${paramOrg}' is now provisioned with the 32-rule AST Safety Gatekeeper. Here is your active license key and 60-second onboarding guide:`;
-    }
-
-    if (paramSeats) {
-      const seatsEl = document.getElementById('seats-val');
-      if (seatsEl) seatsEl.textContent = `${paramSeats} Active Quant Seat${parseInt(paramSeats) > 1 ? 's' : ''}`;
-    }
-
-    if (paramPlan) {
-      const planEl = document.getElementById('plan-val');
-      if (planEl) {
-        planEl.textContent = paramPlan === 'enterprise' ? 'PyCheck Institutional Enterprise' : 'PyCheck Team Pro';
-      }
-    }
-
-    document.getElementById('license-key-val').textContent = licenseKey;
-    document.getElementById('cmd-license-key').textContent = licenseKey;
-    document.getElementById('webhook-secret').textContent = 'whsec_' + licenseKey.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    function copyLicenseKey() {
-      navigator.clipboard.writeText(licenseKey).then(() => {
-        const btn = document.getElementById('copy-btn-text');
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = 'Copy Key'; }, 2000);
-      });
+      if (subtextEl) subtextEl.textContent = `Organization '${paramOrg}' can now connect to the automated 32-rule AST Safety Gatekeeper in under 60 seconds:`;
     }
 
     function switchCiTab(tab) {
