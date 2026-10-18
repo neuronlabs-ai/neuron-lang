@@ -210,150 +210,6 @@
       font-weight: bold;
     }
 
-    /* Checkout Modal */
-    .modal-backdrop {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(8px);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 9999;
-      padding: 1rem;
-    }
-    .modal-container {
-      background: #0d131f;
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      border-radius: 14px;
-      max-width: 580px;
-      width: 100%;
-      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(56, 189, 248, 0.15);
-      overflow: hidden;
-      max-height: 90vh;
-      overflow-y: auto;
-    }
-    .modal-header {
-      padding: 1.25rem 1.5rem;
-      border-bottom: 1px solid #1e293b;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .modal-close {
-      background: transparent;
-      border: none;
-      color: #94a3b8;
-      font-size: 1.5rem;
-      cursor: pointer;
-      line-height: 1;
-    }
-    .modal-close:hover { color: #f8fafc; }
-    .modal-body { padding: 1.5rem; }
-    .billing-cycle-toggle {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.5rem;
-      background: #090d16;
-      padding: 0.35rem;
-      border-radius: 8px;
-      margin-bottom: 1.25rem;
-      border: 1px solid #1e293b;
-    }
-    .cycle-btn {
-      background: transparent;
-      border: none;
-      color: #94a3b8;
-      padding: 0.55rem;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 0.82rem;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-    .cycle-btn.active {
-      background: #1e293b;
-      color: #38bdf8;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-    }
-    .form-group {
-      margin-bottom: 1rem;
-    }
-    .form-group label {
-      display: block;
-      font-size: 0.85rem;
-      color: #cbd5e1;
-      margin-bottom: 0.4rem;
-      font-weight: 500;
-    }
-    .form-input {
-      width: 100%;
-      background: #090d16;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      padding: 0.65rem 0.85rem;
-      color: #f8fafc;
-      font-size: 0.9rem;
-      outline: none;
-      box-sizing: border-box;
-      transition: border-color 0.2s;
-    }
-    .form-input:focus { border-color: #38bdf8; }
-    .seat-stepper {
-      display: flex;
-      align-items: center;
-    }
-    .seat-stepper button {
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: #f8fafc;
-      width: 2.25rem;
-      height: 2.25rem;
-      border-radius: 6px;
-      font-size: 1.1rem;
-      cursor: pointer;
-    }
-    .seat-stepper input {
-      width: 4rem;
-      text-align: center;
-      background: #090d16;
-      border: 1px solid #1e293b;
-      color: #f8fafc;
-      padding: 0.45rem;
-      border-radius: 6px;
-      margin: 0 0.5rem;
-      font-weight: bold;
-    }
-    .payment-options {
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-    }
-    .pay-option {
-      background: #090d16;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      display: flex;
-      align-items: flex-start;
-      gap: 0.75rem;
-      cursor: pointer;
-      transition: border-color 0.2s;
-    }
-    .pay-option.active {
-      border-color: #38bdf8;
-      background: rgba(56, 189, 248, 0.05);
-    }
-    .checkout-total-box {
-      background: #090d16;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      padding: 1rem 1.25rem;
-      margin-top: 1.25rem;
-    }
   </style>
 </head>
 <body>
@@ -370,12 +226,12 @@
           <li><a href="index.html#features">Features</a></li>
           <li><a href="index.html#playground">Playground</a></li>
           <li><a href="pycheck.html" style="color: #38bdf8; font-weight: bold;">PyCheck Platform</a></li>
-          <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#deploy">Deploy &amp; CI/CD</a></li>
           <li><a href="paper.html">Research Paper</a></li>
           <li>
             <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="nav-btn nav-btn-primary">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
-              GitHub (v1.0.1)
+              GitHub (v1.0.2)
             </a>
           </li>
         </ul>
@@ -388,7 +244,7 @@
     <div class="container">
       <div class="hero-badge">
         <span class="hero-badge-dot" style="background: #38bdf8;"></span>
-        <span>The Dual-Defense ML Safety Engine &bull; SaaS &bull; CI/CD Gatekeeper</span>
+        <span>100% Free &amp; Open Source (MIT) &bull; Free Public Beta for GitHub &amp; GitLab</span>
       </div>
       <h1>PyCheck Cloud<br><span class="gradient-text">Automated ML Safety &amp; Gatekeeping</span></h1>
       <p class="hero-lead">32 quantitative rules. Zero dependencies. Blocks the silent temporal lookahead leaks, causal confounding, and cross-fold data contamination that cost hedge funds millions in backtesting.</p>
@@ -400,9 +256,9 @@
         <span style="color: #38bdf8;">$</span> pycheck . --audit --output audit_certificate.json
       </div>
 
-      <div style="margin-top: 1.5rem; display: flex; justify-content: center; gap: 1rem;">
-        <button type="button" onclick="openCheckoutModal('pro')" class="btn btn-primary" style="cursor: pointer; border: none;">Start Free Trial / Pricing &rarr;</button>
-        <a href="#pr-gatekeeper" class="btn btn-ghost">View PR Gatekeeper Demo &darr;</a>
+      <div style="margin-top: 1.5rem; display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap;">
+        <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-primary">Install Free CLI (v1.0.2) &rarr;</a>
+        <a href="success.html" class="btn btn-ghost" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">Connect CI/CD Gatekeeper &rarr;</a>
       </div>
     </div>
   </section>
@@ -483,70 +339,73 @@
       </div>
     </section>
 
-    <!-- ═══ SaaS Pricing & Packaging Matrix ═══ -->
-    <section id="pricing" style="margin-top: 5rem;">
+    <!-- ═══ Open Source & Deployment Continuum ═══ -->
+    <section id="deploy" style="margin-top: 5rem;">
       <div style="text-align: center;">
-        <span class="pill-badge">Commercial SaaS Packaging</span>
-        <h2>Transparent SaaS Pricing for Every Scale</h2>
-        <p style="color: #94a3b8; max-width: 650px; margin: 0 auto;">From individual quant researchers running local models to multi-strategy quantitative hedge funds managing billions in assets.</p>
+        <span class="pill-badge">Zero Friction &bull; Open Source</span>
+        <h2>100% Free &amp; Open Source. Built for Every Developer &amp; Quant Desk.</h2>
+        <p style="color: #94a3b8; max-width: 650px; margin: 0.5rem auto 2.5rem auto;">No credit cards, no artificial seat limits, and no paywalls. PyCheck is open-source software built to eliminate data leakage across the entire ML ecosystem.</p>
       </div>
 
       <div class="pricing-grid">
         <!-- Community -->
         <div class="pricing-card">
           <div>
-            <h3>Community</h3>
-            <p style="color: #94a3b8; font-size: 0.85rem;">For individual quants, students, and open-source contributors.</p>
-            <div class="pricing-price">$0 <span>/ forever</span></div>
+            <span class="pill-badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; border-color: rgba(34, 197, 94, 0.3);">100% OPEN SOURCE</span>
+            <h3>Community CLI</h3>
+            <p style="color: #94a3b8; font-size: 0.85rem;">For individual quant researchers, data scientists, and students.</p>
+            <div class="pricing-price" style="font-size: 1.8rem; color: #4ade80;">Free Forever <span>(MIT)</span></div>
             <ul class="pricing-features">
               <li>Open-source CLI (<code>pip install pycheck-neuron</code>)</li>
               <li>32 Static AST rules for Python &amp; Jupyter</li>
               <li>VS Code real-time linting extension</li>
-              <li>Terminal human-readable diagnostics</li>
+              <li>Proof-of-Causality™ audit generator (<code>--audit</code>)</li>
               <li>GitLab Code Quality JSON format (<code>--gitlab</code>)</li>
+              <li>Zero external runtime dependencies</li>
             </ul>
           </div>
-          <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-ghost" style="width: 100%; text-align: center;">Install Free CLI</a>
+          <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-ghost" style="width: 100%; text-align: center; text-decoration: none;">Install Free CLI &rarr;</a>
         </div>
 
-        <!-- Team Pro -->
+        <!-- Team & CI/CD -->
         <div class="pricing-card featured">
-          <div class="pricing-badge">POPULAR FOR QUANT TEAMS</div>
+          <div class="pricing-badge">RECOMMENDED FOR TEAMS</div>
           <div>
-            <h3>Team Pro</h3>
-            <p style="color: #94a3b8; font-size: 0.85rem;">For boutique quant funds, fintechs, and machine learning desks.</p>
-            <div class="pricing-price">$79 <span>/ seat / mo</span></div>
+            <span class="pill-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3);">FREE PUBLIC BETA</span>
+            <h3>CI/CD PR Gatekeeper</h3>
+            <p style="color: #94a3b8; font-size: 0.85rem;">For quant teams, machine learning desks, and algorithmic trading funds.</p>
+            <div class="pricing-price" style="font-size: 1.8rem; color: #38bdf8;">Free Public Beta <span>(No Card)</span></div>
             <ul class="pricing-features">
               <li><strong>Everything in Community, plus:</strong></li>
-              <li>Automated GitHub App &amp; GitLab PR Gatekeeper Bot</li>
-              <li>Unlimited PR &amp; Merge Request scans</li>
-              <li>Inline code review diff comments &amp; status checks</li>
-              <li>Branch protection merge blocking</li>
-              <li>Slack &amp; Microsoft Teams alert webhooks</li>
-              <li>Team analytics web dashboard</li>
+              <li>Automated GitHub Actions &amp; GitLab CI PR bot</li>
+              <li>Unlimited Pull Request &amp; Merge Request scans</li>
+              <li>Inline code review diff comments on leaky lines</li>
+              <li>Automated branch protection merge blocking</li>
+              <li>Verifiable Proof-of-Causality™ CI artifacts</li>
+              <li>Turnkey webhook integration in under 60 seconds</li>
             </ul>
           </div>
-          <button type="button" onclick="openCheckoutModal('pro')" class="btn btn-primary" style="width: 100%; text-align: center; cursor: pointer; border: none;">Start 14-Day Free Trial &bull; Instant Setup</button>
+          <a href="success.html" class="btn btn-primary" style="width: 100%; text-align: center; text-decoration: none; font-weight: 700;">Connect Git Repository &rarr;</a>
         </div>
 
         <!-- Institutional Enterprise -->
         <div class="pricing-card">
           <div>
-            <h3>Institutional Enterprise</h3>
-            <p style="color: #94a3b8; font-size: 0.85rem;">For tier-1 hedge funds, asset managers, and banks requiring air-gapped security.</p>
-            <div class="pricing-price">$45k – $120k <span>/ year</span></div>
+            <span class="pill-badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.3);">INSTITUTIONAL</span>
+            <h3>Air-Gapped &amp; Custom</h3>
+            <p style="color: #94a3b8; font-size: 0.85rem;">For tier-1 funds, asset managers, and banks requiring on-premise governance.</p>
+            <div class="pricing-price" style="font-size: 1.8rem; color: #cbd5e1;">Self-Hosted <span>(VPC)</span></div>
             <ul class="pricing-features">
-              <li><strong>Everything in Team Pro, plus:</strong></li>
-              <li><strong>Proof-of-Causality™ Audit Certificates</strong> for LP investors</li>
-              <li>Executive Risk Dashboard with Leak Vulnerability Index (LVI)</li>
-              <li><strong>Air-Gapped Private VPC / On-Prem Kubernetes</strong> deployment</li>
-              <li>Zero source code ever leaves your internal network</li>
-              <li>Custom firm-specific invariant rule engine</li>
-              <li><strong>Bundled NEURON Compiler Enterprise License</strong> (AOT native, multi-GPU)</li>
-              <li>Dedicated quant safety architect &amp; 99.9% uptime SLA</li>
+              <li><strong>Everything in CI/CD Gatekeeper, plus:</strong></li>
+              <li><strong>Air-Gapped Private VPC / On-Prem Kubernetes</strong></li>
+              <li>Zero source code ever leaves your internal infrastructure</li>
+              <li>Custom firm-specific invariant rule engine (tickers, schemas, embargoes)</li>
+              <li>Signed Proof-of-Causality™ audit reports for LP allocators</li>
+              <li><strong>Bundled NEURON Compiler Architecture</strong> (AOT native, multi-GPU)</li>
+              <li>Direct engineering support &amp; dedicated SLA</li>
             </ul>
           </div>
-          <button type="button" onclick="openCheckoutModal('enterprise')" class="btn btn-ghost" style="width: 100%; text-align: center; cursor: pointer;">Request Enterprise License &bull; Net-30 / PO</button>
+          <a href="mailto:enterprise@neuron-lab.org?subject=PyCheck%20Enterprise%20VPC%20Inquiry" class="btn btn-ghost" style="width: 100%; text-align: center; text-decoration: none;">Inquire for Private VPC &rarr;</a>
         </div>
       </div>
     </section>
@@ -578,271 +437,6 @@
       <p>&copy; 2026 Neuron Labs &amp; the NEURON Contributors. PyCheck is open-source under the MIT License.</p>
       <p>Contact: <a href="mailto:contact@neuron-lab.org" style="color: #94a3b8;">contact@neuron-lab.org</a> &bull; Enterprise: <a href="mailto:enterprise@neuron-lab.org" style="color: #94a3b8;">enterprise@neuron-lab.org</a></p>
     </div>
-  <!-- ═══ Interactive Checkout & Onboarding Modal ═══ -->
-  <div id="checkout-modal" class="modal-backdrop" style="display: none;">
-    <div class="modal-container">
-      <div class="modal-header">
-        <div>
-          <span class="pill-badge" id="modal-plan-badge">Team Pro</span>
-          <h3 id="modal-title" style="margin: 0.25rem 0 0 0; color: #f8fafc;">Setup PyCheck Gatekeeper</h3>
-        </div>
-        <button type="button" class="modal-close" onclick="closeCheckoutModal()">&times;</button>
-      </div>
-
-      <div class="modal-body" id="modal-step-form">
-        <!-- Billing Cycle Selector -->
-        <div class="billing-cycle-toggle" id="cycle-toggle-wrapper">
-          <button type="button" class="cycle-btn active" id="cycle-monthly" onclick="setBillingCycle('monthly')">Monthly ($79/seat)</button>
-          <button type="button" class="cycle-btn" id="cycle-annual" onclick="setBillingCycle('annual')">Annual (Save 20% &bull; $63/seat)</button>
-        </div>
-
-        <form id="checkout-form" onsubmit="handleCheckoutSubmit(event)">
-          <div class="form-group">
-            <label>Work Email (for license key &amp; receipts)</label>
-            <input type="email" id="checkout-email" class="form-input" placeholder="quant@hedgefund.com" required>
-          </div>
-
-          <div class="form-group">
-            <label>GitHub or GitLab Organization / Repo</label>
-            <input type="text" id="checkout-org" class="form-input" placeholder="e.g. citadel, two-sigma, my-trading-org" required>
-          </div>
-
-          <div class="form-group" id="seats-group">
-            <label>Number of Quant / ML Seats</label>
-            <div class="seat-stepper">
-              <button type="button" onclick="adjustSeats(-1)">&minus;</button>
-              <input type="number" id="checkout-seats" value="5" min="1" max="100" onchange="updatePriceCalculation()">
-              <button type="button" onclick="adjustSeats(1)">&plus;</button>
-              <span id="seat-summary" style="margin-left: 0.75rem; color: #94a3b8; font-size: 0.85rem;">5 seats &times; $79 = $395 / month</span>
-            </div>
-          </div>
-
-          <!-- Payment Method Radios -->
-          <div class="form-group" style="margin-top: 1.25rem;">
-            <label>Choose Payment &amp; Activation Method</label>
-            <div class="payment-options">
-              <label class="pay-option active" id="pay-stripe-label">
-                <input type="radio" name="payment_mode" value="stripe" checked onchange="setPaymentMode('stripe')">
-                <div>
-                  <strong>Credit Card / Apple Pay / Google Pay (Stripe Checkout)</strong>
-                  <div style="font-size: 0.8rem; color: #94a3b8;">Instant activation with 14-day risk-free trial. Powered by Stripe.</div>
-                </div>
-              </label>
-
-              <label class="pay-option" id="pay-trial-label">
-                <input type="radio" name="payment_mode" value="instant_trial" onchange="setPaymentMode('instant_trial')">
-                <div>
-                  <strong>Instant 14-Day Free Trial (No Card Required)</strong>
-                  <div style="font-size: 0.8rem; color: #94a3b8;">Instantly provisions a trial license key and GitHub PR webhook secret.</div>
-                </div>
-              </label>
-
-              <label class="pay-option" id="pay-wire-label">
-                <input type="radio" name="payment_mode" value="wire" onchange="setPaymentMode('wire')">
-                <div>
-                  <strong>Corporate Wire / ACH / Net-30 Invoicing</strong>
-                  <div style="font-size: 0.8rem; color: #94a3b8;">For institutional hedge funds requiring vendor procurement &amp; POs.</div>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- Total Due Box -->
-          <div class="checkout-total-box">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <span style="color: #94a3b8; font-size: 0.82rem;">Due Today (14-Day Free Trial):</span>
-                <div style="color: #38bdf8; font-size: 1.25rem; font-weight: bold;" id="checkout-due-now">$0.00</div>
-              </div>
-              <div style="text-align: right;">
-                <span style="color: #94a3b8; font-size: 0.82rem;" id="checkout-recur-label">Then Recurring:</span>
-                <div style="color: #f8fafc; font-size: 1.1rem; font-weight: bold;" id="checkout-recurring-amount">$395 / month</div>
-              </div>
-            </div>
-          </div>
-
-          <button type="submit" class="btn btn-primary" id="checkout-submit-btn" style="width: 100%; margin-top: 1.25rem; padding: 0.85rem; font-size: 1rem; cursor: pointer; border: none;">
-            Proceed to Stripe Checkout &rarr;
-          </button>
-        </form>
-      </div>
-
-      <!-- Success Screen (Instant Provisioning) -->
-      <div class="modal-body" id="modal-step-success" style="display: none; text-align: center; padding: 2rem 1.5rem;">
-        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🛡️</div>
-        <h3 style="color: #4ade80; margin: 0 0 0.5rem 0;" id="success-headline">License Provisioned &amp; Active!</h3>
-        <p style="color: #94a3b8; font-size: 0.88rem;" id="success-subtext">Your organization has been configured with unlimited PR gatekeeping.</p>
-
-        <div class="terminal-box" style="text-align: left; margin: 1.25rem 0; word-break: break-all;">
-          <span style="color: #64748b;"># 1. Your Cryptographic License Key:</span><br>
-          <span style="color: #38bdf8; font-weight: bold;" id="issued-license-key">PYCHECK-PRO-7A9B-842C-1E3F</span><br><br>
-          <span style="color: #64748b;"># 2. Activate Local CLI:</span><br>
-          <span style="color: #4ade80;">$</span> pycheck --activate <span id="issued-cli-key">PYCHECK-PRO-...</span><br><br>
-          <span style="color: #64748b;"># 3. GitHub PR Webhook URL:</span><br>
-          <span style="color: #cbd5e1;">https://api.neuron-lab.org/webhook/github</span>
-        </div>
-
-        <a id="success-hub-btn" href="success.html" class="btn btn-primary" style="display: block; text-align: center; margin-bottom: 0.75rem; text-decoration: none; font-weight: 700;">Open Complete Onboarding &amp; Setup Hub &rarr;</a>
-        <button type="button" onclick="closeCheckoutModal()" class="btn btn-ghost" style="width: 100%; cursor: pointer;">Done &bull; Return to PyCheck</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // ══════════════════════════════════════════════════
-    // PyCheck Cloud Interactive Checkout Logic
-    // ══════════════════════════════════════════════════
-    
-    // =========================================================================
-    // STRIPE CHECKOUT / PAYMENT GATEWAY CONFIGURATION (PLACEHOLDER)
-    // -------------------------------------------------------------------------
-    // Step 1: Create a Stripe account at https://dashboard.stripe.com
-    // Step 2: Go to "Payment Links" -> Create a recurring subscription product:
-    //         - Name: "PyCheck Team Pro"
-    //         - Price: $79.00 / seat / month (with 14-day free trial enabled)
-    // Step 3: Paste your live Stripe Payment Link below:
-    // =========================================================================
-    let STRIPE_PAYMENT_LINK = "https://buy.stripe.com/PLACEHOLDER_SETUP_STRIPE_FIRST";
-    
-    let currentPlan = 'pro';
-    let currentCycle = 'monthly';
-    let currentSeats = 5;
-    let currentPaymentMode = 'stripe';
-
-    function openCheckoutModal(plan) {
-      currentPlan = plan;
-      const modal = document.getElementById('checkout-modal');
-      const badge = document.getElementById('modal-plan-badge');
-      const title = document.getElementById('modal-title');
-      const seatsGroup = document.getElementById('seats-group');
-      const cycleWrapper = document.getElementById('cycle-toggle-wrapper');
-
-      document.getElementById('modal-step-form').style.display = 'block';
-      document.getElementById('modal-step-success').style.display = 'none';
-
-      if (plan === 'enterprise') {
-        badge.textContent = 'Institutional Enterprise';
-        title.textContent = 'Deploy PyCheck Enterprise VPC';
-        seatsGroup.style.display = 'none';
-        cycleWrapper.style.display = 'none';
-        setPaymentMode('wire');
-      } else {
-        badge.textContent = 'Team Pro';
-        title.textContent = 'Setup PyCheck Gatekeeper';
-        seatsGroup.style.display = 'block';
-        cycleWrapper.style.display = 'grid';
-        setPaymentMode('stripe');
-      }
-
-      updatePriceCalculation();
-      modal.style.display = 'flex';
-    }
-
-    function closeCheckoutModal() {
-      document.getElementById('checkout-modal').style.display = 'none';
-    }
-
-    function setBillingCycle(cycle) {
-      currentCycle = cycle;
-      document.getElementById('cycle-monthly').classList.toggle('active', cycle === 'monthly');
-      document.getElementById('cycle-annual').classList.toggle('active', cycle === 'annual');
-      updatePriceCalculation();
-    }
-
-    function adjustSeats(delta) {
-      const input = document.getElementById('checkout-seats');
-      let val = parseInt(input.value || '1', 10) + delta;
-      if (val < 1) val = 1;
-      if (val > 100) val = 100;
-      input.value = val;
-      currentSeats = val;
-      updatePriceCalculation();
-    }
-
-    function setPaymentMode(mode) {
-      currentPaymentMode = mode;
-      document.getElementById('pay-stripe-label').classList.toggle('active', mode === 'stripe');
-      document.getElementById('pay-trial-label').classList.toggle('active', mode === 'instant_trial');
-      document.getElementById('pay-wire-label').classList.toggle('active', mode === 'wire');
-
-      const submitBtn = document.getElementById('checkout-submit-btn');
-      if (mode === 'stripe') {
-        submitBtn.innerHTML = 'Proceed to Stripe Checkout &rarr;';
-      } else if (mode === 'instant_trial') {
-        submitBtn.innerHTML = 'Activate 14-Day Free Trial Instantly &rarr;';
-      } else {
-        submitBtn.innerHTML = 'Generate Pro-Forma Invoice (Net-30) &rarr;';
-      }
-    }
-
-    function updatePriceCalculation() {
-      const input = document.getElementById('checkout-seats');
-      currentSeats = parseInt(input.value || '1', 10);
-      if (currentPlan === 'enterprise') {
-        document.getElementById('checkout-due-now').textContent = '$0.00 due now';
-        document.getElementById('checkout-recur-label').textContent = 'Annual Contract:';
-        document.getElementById('checkout-recurring-amount').textContent = '$45,000 / year';
-        return;
-      }
-
-      const rate = (currentCycle === 'annual') ? 63 : 79;
-      const total = currentSeats * rate;
-      const summaryText = `${currentSeats} seat${currentSeats > 1 ? 's' : ''} × $${rate} = $${total.toLocaleString()} / month` + (currentCycle === 'annual' ? ' (billed annually)' : '');
-      document.getElementById('seat-summary').textContent = summaryText;
-
-      document.getElementById('checkout-due-now').textContent = '$0.00 (14-day free trial)';
-      document.getElementById('checkout-recur-label').textContent = currentCycle === 'annual' ? 'Then Billed Annually:' : 'Then Monthly:';
-      document.getElementById('checkout-recurring-amount').textContent = currentCycle === 'annual' ? `$${(total * 12).toLocaleString()} / yr` : `$${total.toLocaleString()} / mo`;
-    }
-
-    function handleCheckoutSubmit(e) {
-      e.preventDefault();
-      const email = document.getElementById('checkout-email').value;
-      const org = document.getElementById('checkout-org').value;
-
-      if (currentPaymentMode === 'stripe') {
-        // If live Stripe link is configured (not placeholder)
-        if (STRIPE_PAYMENT_LINK && !STRIPE_PAYMENT_LINK.includes("PLACEHOLDER") && !STRIPE_PAYMENT_LINK.includes("test_pycheck")) {
-          const redirectUrl = `${STRIPE_PAYMENT_LINK}?prefilled_email=${encodeURIComponent(email)}&client_reference_id=${encodeURIComponent(org)}&quantity=${currentSeats}`;
-          window.location.href = redirectUrl;
-          return;
-        }
-      }
-
-      // Instant activation / Mock checkout mode
-      const randHex = Math.random().toString(16).substring(2, 6).toUpperCase() + '-' + Math.random().toString(16).substring(2, 6).toUpperCase();
-      const prefix = currentPlan === 'enterprise' ? 'PYCHECK-ENT-' : 'PYCHECK-PRO-';
-      const licenseKey = prefix + randHex + '-' + Math.random().toString(16).substring(2, 6).toUpperCase();
-
-      document.getElementById('modal-step-form').style.display = 'none';
-      document.getElementById('modal-step-success').style.display = 'block';
-
-      if (currentPaymentMode === 'wire') {
-        document.getElementById('success-headline').textContent = 'Invoice & License Order Generated!';
-        document.getElementById('success-subtext').textContent = `Pro-Forma Invoice sent to ${email}. Dedicated VPC activation key generated:`;
-      } else if (currentPaymentMode === 'instant_trial') {
-        document.getElementById('success-headline').textContent = '14-Day Free Trial Active!';
-        document.getElementById('success-subtext').textContent = `Organization '${org}' provisioned with 32-rule gatekeeper.`;
-      } else {
-        document.getElementById('success-headline').textContent = 'Stripe Sandbox & Trial Provisioned!';
-        document.getElementById('success-subtext').textContent = `Stripe Payment Link is in placeholder onboarding mode. Full trial access provisioned for ${email}:`;
-      }
-
-      document.getElementById('issued-license-key').textContent = licenseKey;
-      document.getElementById('issued-cli-key').textContent = licenseKey;
-
-      const hubBtn = document.getElementById('success-hub-btn');
-      if (hubBtn) {
-        hubBtn.href = `success.html?key=${encodeURIComponent(licenseKey)}&org=${encodeURIComponent(org || 'Your Quantitative Team')}&plan=${encodeURIComponent(currentPlan)}&seats=${encodeURIComponent(currentSeats)}`;
-      }
-    }
-
-    // Close on backdrop click
-    document.getElementById('checkout-modal').addEventListener('click', function(e) {
-      if (e.target === this) {
-        closeCheckoutModal();
-      }
-    });
-  </script>
+  </footer>
 </body>
 </html>
