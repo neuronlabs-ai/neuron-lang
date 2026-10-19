@@ -8,7 +8,7 @@
 
 ## Abstract
 
-We describe NEURON, a general-purpose, statically typed, and natively differentiable systems programming language. Rather than treating safety as an external runtime library or restricting computation to a narrow domain-specific language (DSL), NEURON embeds physical and mathematical dimensions—temporal filtrations ($\mathcal{F}_t$), causal intervention modes (Pearl's $do$-calculus), second-order differential curvature (Hessians and Hessian-vector products), and measurement uncertainty—directly into its core type system and operational semantics. The language introduces four foundational type constructors — `Temporal[T, direction/offset]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — alongside first-class higher-order automatic differentiation primitives (`grad`, `hessian`). We present the typing rules for each constructor, formalize the core operational calculus ($\lambda_{\text{neuron}}$) with proofs of Progress, Preservation, and Temporal Non-Interference, and describe the full Rust implementation (165 passing workspace tests, 95 PyCheck verification tests, a six-pass IR optimizer, Cranelift native JIT compilation, CUDA NVRTC kernel compilation, and an official VS Code LSP extension). We evaluate the language across worked numerical and algorithmic benchmarks, demonstrating compile-time rejection of silent data leaks, exact 1-step second-order Newton-Raphson optimization, and zero compiler crashes across 100,000 iterations of endurance testing.
+We describe NEURON, a general-purpose, statically typed, and natively differentiable systems programming language. Rather than treating safety as an external runtime library or restricting computation to a narrow domain-specific language (DSL), NEURON embeds physical and mathematical dimensions—temporal filtrations ($\mathcal{F}_t$), causal intervention modes (Pearl's $do$-calculus), second-order differential curvature (Hessians and Hessian-vector products), and measurement uncertainty—directly into its core type system and operational semantics. The language introduces four foundational type constructors — `Temporal[T, direction/offset]`, `Causal[T, mode]`, `Uncertain[T]`, and `Effect[E₁, ...]` — alongside first-class higher-order automatic differentiation primitives (`grad`, `hessian`). We present the typing rules for each constructor, formalize the core operational calculus ($\lambda_{\text{neuron}}$) with proofs of Progress, Preservation, and Temporal Non-Interference, and describe the full Rust implementation (170 passing workspace tests, 97 PyCheck verification tests, 267 total passing tests, 15 standard library modules, a six-pass IR optimizer, Cranelift native JIT compilation, CUDA NVRTC kernel compilation, and an official VS Code LSP extension). We evaluate the language across worked numerical and algorithmic benchmarks, demonstrating compile-time rejection of silent data leaks, exact 1-step second-order Newton-Raphson optimization, and zero compiler crashes across 100,000 iterations of endurance testing.
 
 ---
 
@@ -48,11 +48,11 @@ We state our claims and their boundaries explicitly:
 
 1. **Physical and Mathematical Type Calculus**: Typing rules for four core constructors (`Temporal`, `Causal`, `Uncertain`, `Effect`), formalizing temporal upper-bound horizons and causal mode isolation (§3).
 2. **Second-Order Curvature Engine**: First-class language support for higher-order derivatives (`grad(grad(...))`), exact Hessian matrices (`hessian(loss, wrt=x)`), and $\mathcal{O}(N)$ Hessian-Vector Products (HvP) without quadratic memory overhead (§4.3).
-3. **Full Rust Implementation**: A complete multi-target compiler toolchain with 165 passing workspace tests, Cranelift native JIT compilation, and 8 standard library modules (§4).
+3. **Full Rust Implementation**: A complete multi-target compiler toolchain with 170 passing workspace tests, Cranelift native JIT compilation, and 15 standard library modules (§4).
 4. **Structural Causal Model Engine**: First-class do-calculus and counterfactual abduction-action-prediction semantics (§4.4).
 5. **Verifiable Machine Unlearning**: First-class `forget()` primitive implementing Fisher Information Noise Scrubbing with verifiable `ForgetCertificate` audit outputs (§4.5).
 6. **Six-Pass IR Optimizer**: Constant folding, algebraic simplification, CSE, dead code elimination, LICM, and tensor operator fusion (§4.7).
-7. **The PyCheck Diagnostic Layer**: A standalone AST data provenance engine (32 rules, zero dependencies, v1.0.1 on PyPI) bridging existing Python pipelines to NEURON's invariants (§4.8).
+7. **The PyCheck Diagnostic Layer**: A standalone AST data provenance engine (32 rules, zero dependencies, v1.0.2 on PyPI) bridging existing Python pipelines to NEURON's invariants (§4.8).
 8. **IDE Tooling**: Language Server Protocol (LSP) and official VS Code extension providing real-time compile diagnostics (§4.9).
 
 ## 2. Language Overview
@@ -229,7 +229,7 @@ Any arbitrary mutations, data arrivals, or noise occurring in the future ($t' > 
 
 ## 4. Implementation
 
-NEURON is implemented as a compiler in Rust, comprising approximately 29,000 lines of source code across 149 files, with 118 passing tests and 8 standard library modules. The compiler (`neuron-compiler`) contains 19,139 lines of Rust across 50 source files, covering the full pipeline from lexical analysis through optimization and code generation.
+NEURON is implemented as a compiler in Rust, comprising over 30,000 lines of source code across workspace crates, with 170 passing tests (267 total ecosystem tests) and 15 standard library modules (2,830 lines of NEURON source). The compiler (`neuron-compiler`) and runtime (`neuron-runtime`) cover the full pipeline from lexical analysis through optimization and code generation.
 
 ### 4.1 Compiler Pipeline
 
@@ -660,7 +660,7 @@ These are deliberate design boundaries. The type system enforces *structural* co
 
 ## 8. Conclusion
 
-We have described NEURON, a general-purpose, statically typed, and natively differentiable systems programming language that embeds temporal filtrations ($\mathcal{F}_t$), causal intervention modes, second-order differential curvature, and measurement uncertainty directly into its core type system and operational semantics. We presented the typing rules, showed worked examples with verified compiler output, and reported results from automated testing (165 Rust workspace tests, 95 PyCheck verification tests, 100,000 iterations, 1,000 fuzz inputs, and native parity checks). The implementation is available as open source at [neuron-lab.org](https://neuron-lab.org).
+We have described NEURON, a general-purpose, statically typed, and natively differentiable systems programming language that embeds temporal filtrations ($\mathcal{F}_t$), causal intervention modes, second-order differential curvature, and measurement uncertainty directly into its core type system and operational semantics. We presented the typing rules, showed worked examples with verified compiler output, and reported results from automated testing (170 Rust workspace tests, 97 PyCheck verification tests, 267 total passing tests, 100,000 iterations, 1,000 fuzz inputs, and native parity checks). The implementation is available as open source at [neuron-lab.org](https://neuron-lab.org).
 
 ---
 

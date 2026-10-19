@@ -17,7 +17,7 @@ We present **NEURON**, a general-purpose, statically typed, and natively differe
 3. **Second-Order Curvature Engine:** First-class language primitives for higher-order derivatives (`grad(grad(...))`), exact Hessian matrices (`hessian(loss, wrt=x)`), and $\mathcal{O}(N)$ Hessian-Vector Products (HvP) without quadratic memory explosion, enabling exact 1-step Newton-Raphson optimization.
 4. **Uncertainty Propagation:** First-class distribution types (`Uncertain[T]`) that track confidence intervals and error bounds through arithmetic operations.
 5. **Verifiable Machine Unlearning:** A first-class `forget()` primitive with gradient ascent, Fisher information scrubbing, and task negation, producing cryptographically verifiable audit certificates (`ForgetCertificate`) to satisfy regulatory unlearning mandates (e.g., GDPR Article 17, copyright erasure).
-6. **A Sovereign Multi-Target Compiler Toolchain:** Implemented in pure Rust (165 passing workspace tests, 95 PyCheck tests, 260 total passing tests) comprising an AST type checker, a 6-pass IR optimization pipeline, Cranelift native JIT compilation, CUDA NVRTC kernel compilation, Triton codegen, ahead-of-time (AOT) binary generation (`neuronc aot`), and in-browser WebAssembly execution.
+6. **A Sovereign Multi-Target Compiler Toolchain:** Implemented in pure Rust (170 passing workspace tests, 97 PyCheck tests, 267 total passing tests, 15 standard library modules) comprising an AST type checker, a 6-pass IR optimization pipeline, Cranelift native JIT compilation, CUDA NVRTC kernel compilation, Triton codegen, ahead-of-time (AOT) binary generation (`neuronc aot`), and in-browser WebAssembly execution.
 7. **The Dual-Defense Ecosystem (PyCheck):** Paired with PyCheck (published on PyPI as `pycheck-neuron`), an AST data provenance engine that brings NEURON's temporal filtration rules and data partition lineage tracking to legacy Python ML pipelines.
 
 This paper provides an architectural and formal overview of NEURON, its core calculus $\lambda_{\text{neuron}}$, its compiler and optimizer pipeline, its runtime execution engines, and its empirical evaluation across automated test suites, fuzzing, and endurance benchmarks.
@@ -285,9 +285,9 @@ NEURON compiles a unified IR representation into five distinct execution targets
 
 NEURON's implementation is validated through a comprehensive multi-tier verification suite:
 
-- **165 Rust Workspace Tests (100% Pass Rate):** Covering lexing, parsing, type checking, IR lowering, optimization passes, second-order autograd (Hessians, HvP, Newton-Raphson), VM execution, Cranelift JIT compilation, and PyTorch transpilation.
-- **95 PyCheck Test Assertions (100% Pass Rate):** Covering all 32 AST static analysis rules, data partition lineage, cross-fold leakage detection (`F001`, `F002`), and temporal lead/lag diagnostics.
-- **260 Total Automated Tests:** Validating end-to-end compiler correctness and ecosystem safety.
+- **170 Rust Workspace Tests (100% Pass Rate):** Covering lexing, parsing, type checking, IR lowering, optimization passes, second-order autograd (Hessians, HvP, Newton-Raphson), VM execution, Cranelift JIT compilation, and PyTorch transpilation.
+- **97 PyCheck Test Assertions (100% Pass Rate):** Covering all 32 AST static analysis rules, data partition lineage, cross-fold leakage detection (`F001`, `F002`), cryptographic audit certificates, and temporal lead/lag diagnostics.
+- **267 Total Automated Tests:** Validating end-to-end compiler correctness and ecosystem safety across the NEURON and PyCheck toolchains.
 - **66 Adversarial Attack Tests:** Specifically targeting edge cases in temporal lookahead, type erasure attacks, causal mode mixing, and unlearning boundary conditions.
 - **Fuzz Testing:** Over 1,000 fuzz-generated invalid AST structures evaluated with zero compiler panics or unhandled segmentation faults.
 - **Endurance Testing:** 100,000 continuous training iterations on deep neural networks with zero memory leaks, numerical divergences, or NaN artifacts.
