@@ -7,7 +7,7 @@
 //  Continuous Distributions
 // ─────────────────────────────────────────────
 
-fn gaussian(mean: Tensor[D], std: Tensor[D]) -> Uncertain[Tensor[D]] [Effect[Rand]]:
+fn gaussian(mean: Tensor[D], std: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Gaussian (Normal) distribution: N(mean, std^2)
   // PDF: f(x) = (1/sqrt(2*pi*sigma^2)) * exp(-(x-mu)^2 / (2*sigma^2))
   // Sample via reparameterization: z = mean + std * eps, eps ~ N(0,1)
@@ -15,7 +15,7 @@ fn gaussian(mean: Tensor[D], std: Tensor[D]) -> Uncertain[Tensor[D]] [Effect[Ran
   let sample_val = mean + std * eps
   return sample_val
 
-fn uniform(low: Tensor[D], high: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn uniform(low: Tensor[D], high: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Uniform distribution: U(low, high)
   // PDF: f(x) = 1/(high-low) for low <= x <= high
   // Sample: x = low + (high - low) * u, u ~ U(0,1)
@@ -23,7 +23,7 @@ fn uniform(low: Tensor[D], high: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
   let range_val = high - low
   return low + range_val * u
 
-fn bernoulli(p: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn bernoulli(p: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Bernoulli distribution: P(X=1) = p, P(X=0) = 1-p
   // Sample: x = 1 if u < p, else 0, where u ~ U(0,1)
   // Differentiable via straight-through estimator
@@ -32,7 +32,7 @@ fn bernoulli(p: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
   let logit = (u - p) * 100.0
   return sigmoid(logit)
 
-fn categorical(logits: Tensor[B, K]) -> Random[Tensor[B]] [Effect[Rand]]:
+fn categorical(logits: Tensor[B, K]) -> Tensor[B] [Effect[Rand]]:
   // Categorical distribution from logits
   // P(X=k) = softmax(logits)[k]
   // Sample via Gumbel-Softmax for differentiability:
@@ -43,7 +43,7 @@ fn categorical(logits: Tensor[B, K]) -> Random[Tensor[B]] [Effect[Rand]]:
   let perturbed = (logits + gumbel_noise) * (1.0 / temperature)
   return softmax(perturbed)
 
-fn exponential(rate: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn exponential(rate: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Exponential distribution: Exp(rate)
   // PDF: f(x) = rate * exp(-rate * x) for x >= 0
   // Sample via inverse CDF: x = -ln(u) / rate, u ~ U(0,1)
@@ -51,7 +51,7 @@ fn exponential(rate: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
   let log_u = u  // Proxy for -ln(u)
   return log_u * (1.0 / rate)
 
-fn beta_distribution(alpha: Tensor[D], beta_param: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn beta_distribution(alpha: Tensor[D], beta_param: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Beta distribution: Beta(alpha, beta)
   // PDF: f(x) = x^(a-1) * (1-x)^(b-1) / B(a,b)
   // Approximation: sample via Kumaraswamy distribution (differentiable proxy)
@@ -62,7 +62,7 @@ fn beta_distribution(alpha: Tensor[D], beta_param: Tensor[D]) -> Random[Tensor[D
   let sample_val = u * inv_beta
   return sigmoid(sample_val)
 
-fn dirichlet(alpha: Tensor[K]) -> Random[Tensor[K]] [Effect[Rand]]:
+fn dirichlet(alpha: Tensor[K]) -> Tensor[K] [Effect[Rand]]:
   // Dirichlet distribution: Dir(alpha)
   // Sample by: gamma_k ~ Gamma(alpha_k, 1), then normalize
   // x_k = gamma_k / sum(gamma_k)
@@ -72,7 +72,7 @@ fn dirichlet(alpha: Tensor[K]) -> Random[Tensor[K]] [Effect[Rand]]:
   let normalized = gamma_pos * (1.0 / sum_gamma)
   return normalized
 
-fn poisson(rate: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn poisson(rate: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Poisson distribution: Pois(rate)
   // PMF: P(X=k) = rate^k * exp(-rate) / k!
   // Continuous relaxation for differentiability
@@ -80,7 +80,7 @@ fn poisson(rate: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
   let sample_val = rate * u
   return sample_val
 
-fn laplace(loc: Tensor[D], scale: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn laplace(loc: Tensor[D], scale: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Laplace distribution: Laplace(loc, scale)
   // PDF: f(x) = (1/2b) * exp(-|x-loc|/b)
   // Sample: x = loc - scale * sign(u) * ln(1 - 2|u|), u ~ U(-0.5, 0.5)
@@ -88,7 +88,7 @@ fn laplace(loc: Tensor[D], scale: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]
   let sign_u = tanh(u * 100.0)
   return loc + scale * sign_u
 
-fn log_normal(mean: Tensor[D], std: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand]]:
+fn log_normal(mean: Tensor[D], std: Tensor[D]) -> Tensor[D] [Effect[Rand]]:
   // Log-Normal distribution: ln(X) ~ N(mean, std^2)
   // Sample: x = exp(mean + std * eps), eps ~ N(0,1)
   let eps = randn(1, D)
@@ -101,7 +101,7 @@ fn log_normal(mean: Tensor[D], std: Tensor[D]) -> Random[Tensor[D]] [Effect[Rand
 //  Mixture Models
 // ─────────────────────────────────────────────
 
-fn mixture_of_gaussians(means: Tensor[K, D], stds: Tensor[K, D], weights: Tensor[K]) -> Uncertain[Tensor[D]] [Effect[Rand]]:
+fn mixture_of_gaussians(means: Tensor[K, D], stds: Tensor[K, D], weights: Tensor[K]) -> Tensor[D] [Effect[Rand]]:
   // Gaussian Mixture Model: p(x) = sum_k w_k * N(x; mu_k, sigma_k^2)
   // Sample:
   //   1. Select component k with probability w_k (via Gumbel-Softmax)

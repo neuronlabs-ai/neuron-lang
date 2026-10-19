@@ -469,6 +469,14 @@ impl SymbolTable {
         global.define("is_wieferich", NType::Fn_(vec![int.clone()], Box::new(bool_type.clone()), None));
         global.define("wieferich_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
 
+        // Causal Built-in Operations
+        global.define("causal_discover", NType::Fn_(vec![any.clone(), any.clone(), float.clone()], Box::new(any.clone()), None));
+        global.define("causal_observe", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("causal_intervene", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("causal_counterfactual", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("identify", NType::Fn_(vec![any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
+        global.define("causal_effect", NType::Fn_(vec![any.clone(), any.clone(), any.clone()], Box::new(float.clone()), None));
+
         // Data Loading & I/O
         global.define("read_csv", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));
         global.define("load_csv", NType::Fn_(vec![NType::Base("String".into())], Box::new(tensor.clone()), None));

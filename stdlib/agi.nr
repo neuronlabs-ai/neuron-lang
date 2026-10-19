@@ -28,9 +28,9 @@ agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
     update_row(self.values, self.write_pos, value)
     update_row(self.timestamps, self.write_pos, self.current_time)
     update_row(self.access_counts, self.write_pos, 0.0)
-    self.write_pos = self.write_pos + 1
-    self.current_size = self.current_size + 1
-    self.current_time = self.current_time + 1
+    let self.write_pos = self.write_pos + 1
+    let self.current_size = self.current_size + 1
+    let self.current_time = self.current_time + 1
     store(self.memory, key)
 
   fn recall_op(self, query: Tensor[embed_dim], k: Int) -> Tensor[k, embed_dim]:
@@ -68,7 +68,7 @@ agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
     let importance = self.access_counts * recency
     // Strengthen important memories, decay unimportant ones
     let importance_weight = sigmoid(importance - 1.0)
-    self.values = self.values * (0.9 + 0.1 * importance_weight)
+    let self.values = self.values * (0.9 + 0.1 * importance_weight)
 
   fn forget_old(self, max_age: Int) [Effect[Mut[self]]]:
     // Apply exponential decay to memories older than max_age
@@ -76,8 +76,8 @@ agent EpisodicMemorySystem(embed_dim: Int, capacity: Int):
     let age = self.current_time - self.timestamps
     let keep_mask = sigmoid((max_age - age) * 10.0)
     // Attenuate old memories rather than hard-deleting
-    self.keys = self.keys * keep_mask
-    self.values = self.values * keep_mask
+    let self.keys = self.keys * keep_mask
+    let self.values = self.values * keep_mask
 
 agent SemanticMemorySystem(embed_dim: Int, capacity: Int):
   // Knowledge graph-style semantic memory
@@ -95,7 +95,7 @@ agent SemanticMemorySystem(embed_dim: Int, capacity: Int):
     update_row(self.subjects, self.write_pos, subject)
     update_row(self.relations, self.write_pos, relation)
     update_row(self.objects, self.write_pos, obj)
-    self.write_pos = self.write_pos + 1
+    let self.write_pos = self.write_pos + 1
     store(self.memory, subject)
 
   fn query(self, subject: Tensor[embed_dim], relation: Tensor[embed_dim]) -> Tensor[embed_dim]:
@@ -125,8 +125,8 @@ agent SemanticMemorySystem(embed_dim: Int, capacity: Int):
     let weighted_objects = other_objects * novelty_scores
     // Blend novel triples into existing memory via soft update
     let blend_rate = 0.1
-    self.subjects = self.subjects + weighted_subjects * blend_rate
-    self.objects = self.objects + weighted_objects * blend_rate
+    let self.subjects = self.subjects + weighted_subjects * blend_rate
+    let self.objects = self.objects + weighted_objects * blend_rate
 
 agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
   // Fixed-capacity working memory with attention-based read/write
@@ -160,7 +160,7 @@ agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
     let erase_vec = sigmoid(content @ self.erase_gate)
     // Erase then write — save result back to self.slots
     let erased = self.slots * (1.0 - write_attn * erase_vec)
-    self.slots = erased + write_attn * content
+    let self.slots = erased + write_attn * content
 
   fn update_attention(self, context: Tensor[embed_dim]) [Effect[Mut[self]]]:
     // Update slot attention weights based on current context
@@ -170,7 +170,7 @@ agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
 
   fn clear(self) [Effect[Mut[self]]]:
     // Zero out all memory slots
-    self.slots = zeros(num_slots, embed_dim)
+    let self.slots = self.slots * 0.0
 
 // ─────────────────────────────────────────────
 //  Meta-Learning

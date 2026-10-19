@@ -276,7 +276,7 @@ agent PPOAgent(state_dim: Int, action_dim: Int, hidden_dim: Int):
   fn act(self, obs: Tensor[state_dim]) -> Tensor[action_dim] [Effect[Rand]]:
     let action_probs = self.policy(obs)
     // Sample action from policy distribution
-    let gumbel_noise = glorot(1, action_dim)
+    let gumbel_noise = self.actor_b3 * 0.01
     return softmax((action_probs + gumbel_noise) * 10.0)
 
   fn learn(self, states: Tensor[B, state_dim], actions: Tensor[B, action_dim], old_log_probs: Tensor[B, 1], advantages: Tensor[B, 1], returns: Tensor[B, 1]) [Effect[Mut[self]]]:
