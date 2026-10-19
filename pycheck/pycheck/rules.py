@@ -544,14 +544,14 @@ class T017_TargetLaundering(Rule):
     def check_node(self, node, ctx):
         target_col_names = {'target', 'success', 'outcome', 'label', 'labels', 'y',
                             'profit', 'pnl', 'win', 'return', 'returns', 'future_price'}
-        train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train')
+        train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train', 'fit', 'fit_', '_fit', 'trn')
         test_markers = ('_test', 'test_', 'x_test', 'y_test', 'x_val', 'y_val', '_val', 'val_', '_eval', 'eval_', 'holdout', 'validation')
         
         # 1. Detect target encoding / aggregation: df.groupby(...)['target'].transform('mean')
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in ('TargetEncoder', 'CatBoostEncoder'):
                 return [Diagnostic(
-                    node.lineno, node.col_offset, self.severity, self.code,
+                    node.lineno, node.col_offset, "info", self.code,
                     f"{node.func.id}() calculates target statistics across groups; ensure it is fit ONLY on training data",
                     "Fit target encoders strictly on X_train, y_train after temporal splitting")]
             
