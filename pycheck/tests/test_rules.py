@@ -17,6 +17,7 @@ from pycheck.rules import (
     T007_BackfillLeak, T008_NonCausalInterpolate, T009_CenteredRolling,
     T010_FitBeforeSplit, T011_ScalerBeforeSplit, T012_KFoldTimeSeries,
     T013_ResampleBeforeSplit, T014_DiffNegative, T015_GroupbyShiftLeak,
+    T018_InSampleTargetEncoding,
     C001_CorrelationCausation, C002_TargetInFeatures, C003_PostTreatmentVariable,
     C004_SelectionOnOutcome, C005_SurvivorshipBias, C006_PHacking,
     C007_CorrWithoutForDecisions,
@@ -226,6 +227,34 @@ class TestT015:
         _check(T015_GroupbyShiftLeak(), "df['x'] = df['close'].shift(1)", expect_hit=False)
 
 
+class TestT018:
+    def test_fires_on_groupby_transform_mean(self):
+        _check(T018_InSampleTargetEncoding(), "train['enc'] = train.groupby('category')['target'].transform('mean')", expect_hit=True)
+
+    def test_fires_on_groupby_transform_median(self):
+        _check(T018_InSampleTargetEncoding(), "df['enc'] = df.groupby('sector')['pnl'].transform('median')", expect_hit=True)
+
+    def test_fires_on_target_encoder_cv_none(self):
+        _check(T018_InSampleTargetEncoding(), "enc = TargetEncoder(cv=None)", expect_hit=True)
+
+    def test_fires_on_map_groupby_mean(self):
+        _check(T018_InSampleTargetEncoding(), "train['enc'] = train['cat'].map(train.groupby('cat')['target'].mean())", expect_hit=True)
+
+    def test_silent_on_non_target_groupby_transform(self):
+        _check(T018_InSampleTargetEncoding(), "train['vol_mean'] = train.groupby('category')['volume'].transform('mean')", expect_hit=False)
+
+    def test_silent_on_target_encoder_with_cv(self):
+        _check(T018_InSampleTargetEncoding(), "enc = TargetEncoder(cv=5)", expect_hit=False)
+
+    def test_silent_on_valid_test_mapping(self):
+        # Mapping train target statistics onto test set is valid inference
+        _check(T018_InSampleTargetEncoding(), "test['enc'] = test['cat'].map(train.groupby('cat')['target'].mean())", expect_hit=False)
+
+    def test_silent_on_valid_oof_val_mapping(self):
+        # Mapping fit fold statistics onto val fold in OOF cross-validation is safe
+        _check(T018_InSampleTargetEncoding(), "val['enc'] = val['cat'].map(fit.groupby('cat')['target'].mean())", expect_hit=False)
+
+
 # ═══════════════════════════════════════════════════════
 #  CAUSAL CONFUSION RULES
 # ═══════════════════════════════════════════════════════
@@ -410,7 +439,7 @@ model.fit(X, c)
 
 class TestIntegration:
     def test_rule_count(self):
-        assert len(ALL_RULES) == 32, f"Expected exactly 32 rules, got {len(ALL_RULES)}"
+        assert len(ALL_RULES) == 33, f"Expected exactly 33 rules, got {len(ALL_RULES)}"
 
     def test_all_rules_have_code(self):
         for rule in ALL_RULES:

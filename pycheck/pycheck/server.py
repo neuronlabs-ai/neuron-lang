@@ -70,7 +70,7 @@ class PyCheckGatewayHandler(BaseHTTPRequestHandler):
                 "service": "PyCheck Gateway",
                 "status": "healthy",
                 "version": "1.0.1",
-                "rules_active": 32,
+                "rules_active": 33,
                 "sovereign_target": "https://neuron-lab.org"
             })
         else:

@@ -4,6 +4,17 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.3] — 2026-10-19
+
+### Added
+- **Rule `T018` (`insample_target_encoding`)**:
+  - Detects in-sample self-target leakage where a training sample's own label influences its encoded feature (e.g. `train.groupby('category')['target'].transform('mean')`).
+  - Detects `TargetEncoder(cv=None)` which disables out-of-fold cross-validation.
+  - Distinguishes unsafe in-sample self-target encoding from legitimate Out-of-Fold (OOF) K-Fold cross-validation loops (`val['category'].map(fit.groupby(...)['target'].mean())`) and safe holdout/test inference mappings (`test['category'].map(train.groupby(...)['target'].mean())`).
+  - Expands PyCheck suite to **33 rules** with 105 passing automated tests.
+
+---
+
 ## [1.0.2] — 2026-10-17
 
 ### Changed

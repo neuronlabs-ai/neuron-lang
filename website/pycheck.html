@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="style.css">
   
   <meta property="og:title" content="PyCheck — Python ML Safety Analyzer &amp; CI/CD Gatekeeper">
-  <meta property="og:description" content="32 rules. Zero dependencies. Blocks the silent lookahead bugs that cost millions in backtesting before PRs reach production.">
+  <meta property="og:description" content="33 rules. Zero dependencies. Blocks the silent lookahead bugs that cost millions in backtesting before PRs reach production.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="https://neuronlabs-ai.github.io/neuron-lang/neuron_github_logo.png">
   <meta name="twitter:card" content="summary_large_image">
@@ -231,7 +231,7 @@
           <li>
             <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="nav-btn nav-btn-primary">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
-              GitHub (v1.0.2)
+              GitHub (v1.0.3)
             </a>
           </li>
         </ul>
@@ -247,7 +247,7 @@
         <span>100% Free &amp; Open Source (MIT) &bull; Free CI/CD Gatekeeper</span>
       </div>
       <h1>PyCheck<br><span class="gradient-text">Automated ML Safety &amp; Gatekeeping</span></h1>
-      <p class="hero-lead">32 quantitative rules. Zero dependencies. Blocks the silent temporal lookahead leaks, causal confounding, and cross-fold data contamination that cost hedge funds millions in backtesting.</p>
+      <p class="hero-lead">33 quantitative rules. Zero dependencies. Blocks the silent temporal lookahead leaks, causal confounding, and cross-fold data contamination that cost hedge funds millions in backtesting.</p>
 
       <div class="terminal-box" style="max-width: 680px; margin: 1.75rem auto; text-align: left;">
         <span style="color: #64748b;"># 1. Install CLI from PyPI</span><br>
@@ -257,7 +257,7 @@
       </div>
 
       <div style="margin-top: 1.5rem; display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap;">
-        <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-primary">Install Free CLI (v1.0.2) &rarr;</a>
+        <a href="https://github.com/neuronlabs-ai/pycheck" target="_blank" class="btn btn-primary">Install Free CLI (v1.0.3) &rarr;</a>
         <a href="success.html" class="btn btn-ghost" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">Connect CI/CD Gatekeeper &rarr;</a>
       </div>
     </div>
@@ -323,11 +323,11 @@
           <div><span style="color: #64748b;">Certificate ID:</span><br><code>CERT-POC-49AC8F3AE07DAAC9</code></div>
           <div><span style="color: #64748b;">Target Commit SHA:</span><br><code>be94d834d2846350072d5...</code></div>
           <div><span style="color: #64748b;">Audit Status:</span><br><strong style="color: #4ade80;">CERTIFIED_ZERO_LEAKAGE</strong></div>
-          <div><span style="color: #64748b;">Rules Checked:</span><br><strong>32 Invariant Rules (100% Clean)</strong></div>
+          <div><span style="color: #64748b;">Rules Checked:</span><br><strong>33 Invariant Rules (100% Clean)</strong></div>
         </div>
 
         <div style="background: rgba(0, 0, 0, 0.4); padding: 1rem 1.25rem; border-radius: 8px; font-size: 0.85rem; border: 1px solid rgba(255, 255, 255, 0.05);">
-          <div style="margin-bottom: 0.4rem;">✓ <strong>Temporal Lookahead Invariant (T001–T017):</strong> PASSED &mdash; 0 negative indices, no future interpolation.</div>
+          <div style="margin-bottom: 0.4rem;">✓ <strong>Temporal Lookahead Invariant (T001–T018):</strong> PASSED &mdash; 0 negative indices, no future interpolation, 0 self-target leaks.</div>
           <div style="margin-bottom: 0.4rem;">✓ <strong>Cross-Fold Lineage Invariant (F001–F002):</strong> PASSED &mdash; 0 cross-fold leakage via concatenation or aliasing.</div>
           <div style="margin-bottom: 0.4rem;">✓ <strong>Causal Mode Isolation (C001–C007):</strong> PASSED &mdash; Zero correlation conflated with interventional treatment.</div>
           <div>✓ <strong>Uncertainty Dispersion Bounds (U001–U006):</strong> PASSED &mdash; Out-of-sample uncertainty guards verified.</div>
@@ -357,7 +357,7 @@
             <div class="pricing-price" style="font-size: 1.8rem; color: #4ade80;">Free Forever <span>(MIT)</span></div>
             <ul class="pricing-features">
               <li>Open-source CLI (<code>pip install pycheck-neuron</code>)</li>
-              <li>32 Static AST rules for Python &amp; Jupyter</li>
+              <li>33 Static AST rules for Python &amp; Jupyter</li>
               <li>VS Code real-time linting extension</li>
               <li>Proof-of-Causality™ audit generator (<code>--audit</code>)</li>
               <li>GitLab Code Quality JSON format (<code>--gitlab</code>)</li>
@@ -418,7 +418,7 @@
 
       <div class="terminal-box" style="margin: 2rem 0;">
         <span style="color: #64748b;"># THE DUAL-DEFENSE CONTINUUM</span><br><br>
-        <span style="color: #38bdf8;">[Step 1: PyCheck Inspection]</span> &rarr; Catches 32 silent leaks in existing Python pipelines in seconds.<br>
+        <span style="color: #38bdf8;">[Step 1: PyCheck Inspection]</span> &rarr; Catches 33 silent leaks in existing Python pipelines in seconds.<br>
         <span style="color: #fbbf24;">[Step 2: CI/CD Gatekeeping]</span>   &rarr; Blocks contaminated PRs from reaching production backtests.<br>
         <span style="color: #a78bfa;">[Step 3: NEURON Upgrade]</span>     &rarr; Compile-time mathematical proof. Zero runtime assertions. 2.08x faster native binaries.
       </div>
