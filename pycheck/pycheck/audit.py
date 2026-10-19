@@ -85,7 +85,7 @@ def generate_proof_of_causality_certificate(
 
     cert_payload = {
         "standard": "Proof-of-Causality v1.0",
-        "issuer": "PyCheck Cloud by Neuron Labs",
+        "issuer": "PyCheck by Neuron Labs",
         "target_path": os.path.abspath(target_path),
         "git_commit": git_meta["commit"],
         "git_branch": git_meta["branch"],
@@ -130,7 +130,7 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
     lines = [
         "+======================================================================+",
         "|            PROOF-OF-CAUSALITY(TM) AUDIT CERTIFICATE                  |",
-        "|            PyCheck Cloud - Institutional Quant Safety                |",
+        "|            PyCheck - Institutional Quant Safety                      |",
         "+======================================================================+",
         f"  Certificate ID:       {cert['certificate_id']}",
         f"  Audit Status:         {status_symbol}",

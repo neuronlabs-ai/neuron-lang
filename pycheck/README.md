@@ -246,9 +246,9 @@ The `pycheck-vscode` extension gives you **real-time red/yellow squiggles** as y
 
 ---
 
-## PyCheck Cloud & Enterprise SaaS
+## Automated CI/CD Gatekeeping & Invariant Verification
 
-For institutional hedge funds, algorithmic trading desks, and enterprise ML engineering teams, **PyCheck Cloud** provides continuous compliance and automated gatekeeping:
+For quant teams, machine learning desks, and algorithmic trading funds, **PyCheck** provides continuous compliance and automated gatekeeping:
 
 * **Automated PR / MR Gatekeeping**: GitHub App & GitLab integration that automatically blocks pull requests containing temporal leaks, lookahead joins, or cross-fold contamination before they reach production.
 * **Proof-of-Causality Audit Certificates**: Cryptographically verifiable backtest audit reports (PDF & JSON) certifying that quantitative strategies and feature pipelines are provably free of temporal lookahead bias for LP allocators and risk committees.
