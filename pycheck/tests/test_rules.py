@@ -85,8 +85,17 @@ class TestT001:
 
 
 class TestT002:
-    def test_fires_on_train_test_split(self):
-        _check(T002_TrainTestSplit(), "X_train, X_test = train_test_split(X, y)", expect_hit=True)
+    def test_fires_on_timeseries_train_test_split(self):
+        code = "df['close'] = [1, 2]\nX_train, X_test = train_test_split(df, y)"
+        _check(T002_TrainTestSplit(), code, expect_hit=True)
+
+    def test_silent_on_shuffle_false(self):
+        code = "df['close'] = [1, 2]\nX_train, X_test = train_test_split(df, y, shuffle=False)"
+        _check(T002_TrainTestSplit(), code, expect_hit=False)
+
+    def test_silent_on_clean_tabular_split(self):
+        code = "X_train, X_test = train_test_split(X, y)"
+        _check(T002_TrainTestSplit(), code, expect_hit=False)
 
     def test_silent_on_manual_split(self):
         _check(T002_TrainTestSplit(), "train = data[:100]; test = data[100:]", expect_hit=False)

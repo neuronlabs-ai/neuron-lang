@@ -127,11 +127,35 @@ class T002_TrainTestSplit(Rule):
         if name == 'train_test_split':
             ctx.has_train_test_split = True
             ctx.split_line = node.lineno
+
+            # 1. Explicit shuffle=False is a safe chronological sequential split
+            for kw in node.keywords:
+                if kw.arg == 'shuffle':
+                    if isinstance(kw.value, ast.Constant) and (kw.value.value is False or kw.value.value == 0):
+                        return []
+
+            # 2. Only flag when time-series indicators exist in the data/script
+            if not self._has_temporal_context(ctx):
+                return []
+
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 "train_test_split() shuffles time-series data, leaking future into training",
-                "Use a temporal split: train = data[:split_idx], test = data[split_idx:]")]
+                "Use a temporal split: train = data[:split_idx], test = data[split_idx:], or set shuffle=False")]
         return []
+
+    def _has_temporal_context(self, ctx):
+        if not ctx or not ctx.source_lines:
+            return False
+        source_lower = "\n".join(ctx.source_lines).lower()
+        temporal_markers = (
+            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
+            'price', 'prices', 'return', 'returns', 'pnl', 'tick', 'bar',
+            'date', 'datetime', 'timestamp', 'time_series', 'timeseries',
+            'rolling', 'expanding', 'shift', 'pct_change', 'diff',
+            'resample', 'timeseriessplit', 'merge_asof'
+        )
+        return any(marker in source_lower for marker in temporal_markers)
 
     def _get_call_name(self, node):
         if isinstance(node.func, ast.Name):

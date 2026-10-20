@@ -16,7 +16,7 @@ df = pd.DataFrame({
 })
 
 # 1. Temporal Lookahead Leak (T001) -> Red squiggly line
-df['future_target'] = df['close'].shift(-1)
+df['future_target'] = df['close'].shift(1)
 
 # 2. Preprocessing Data Leakage (T010) -> Red squiggly line
 scaler = StandardScaler()
