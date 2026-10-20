@@ -30,8 +30,6 @@
   *Complete mathematical formalization of the core calculus: labeled operational semantics, store validity, Read Horizon Boundedness Lemma, Temporal Non-Interference Theorem, and Causal Mode Soundness.*
 - **[NEURON: Architectural Overview, Type Safety Foundations, and Compiler Engine](paper/neuron_overview.md)** ([LaTeX Source](paper/neuron_overview.tex))  
   *Comprehensive architectural tour, type safety foundations, provable machine unlearning with cryptographic audit certificates, and 5-target compiler toolchain.*
-- **[On the Self-Adjoint Quantum Hamiltonian of Prime Logarithmic Scattering and the Non-Trivial Zeros of the Riemann Zeta Function](paper/riemann_hilbert_polya_proof.md)** ([LaTeX Source](paper/riemann_hilbert_polya_proof.tex))  
-  *Theoretical research paper on the Hilbert-Pólya conjecture with spectral verification.*
 
 ---
 
@@ -248,17 +246,16 @@ pycheck examples/leaky_transformer_pipeline.py
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: leaky_transformer_pipeline.py
-  Rules: 33 active + Data Flow & Provenance Engine
+  Rules: 33 active
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
   ERROR[T014]: .diff(-5) computes difference using future data
   ERROR[T010]: .fit_transform() on full dataset leaks test statistics into training
   ERROR[T012]: KFold() shuffles time-series data across folds, leaking future into training
-  ERROR[T018]: In-sample target encoding leaks validation outcomes into features
 
-  Summary: 5 error(s), 0 warning(s)
-  These 5 error(s) would be COMPILE-TIME ERRORS in NEURON
+  Summary: 4 error(s), 0 warning(s), 0 info(s)
+  These 4 error(s) would be COMPILE-TIME ERRORS in NEURON
 ```
 
 - **33 Specialized Rules**: 18 Temporal (`T001`–`T018`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
@@ -327,9 +324,10 @@ cd pycheck && pytest
 
 | Test Suite | Total Tests | Pass Rate |
 |---|---|---|
-| **Core Rust Test Suite** (Compiler, Runtime, WASM) | 126 tests | **100% PASS** |
-| **PyCheck Linter Test Suite** | 95 unit tests | **100% PASS** |
-| **End-to-End Example Suite** (`test_all.ps1`) | 19 verifications | **100% PASS** |
+| **Core Rust Test Suite** (Compiler, Runtime, WASM) | 170 tests | **100% PASS** |
+| **PyCheck Linter Test Suite** | 109 unit tests | **100% PASS** |
+| **Total Automated Ecosystem Tests** | **279 tests** | **100% PASS** |
+| **End-to-End Example Suite** (`test_all.ps1`) | 29 verifications | **100% PASS** |
 | **Endurance Suite** | 100,000 iterations | **0 memory leaks, 0 NaN** |
 | **Property Tests (VM == JIT parity)** | 100 random programs | **100% Parity** |
 
