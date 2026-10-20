@@ -32,6 +32,9 @@ from pycheck.analyzer import analyze_file
 def _check(rule, code, expect_hit=True, in_loop=False, loop_var=None):
     """Helper: parse code, walk AST, check if rule fires."""
     tree = ast.parse(code)
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent
     ctx = AnalysisContext(code.split('\n'), "<test>")
     ctx.in_loop = in_loop
     ctx.loop_var = loop_var
@@ -285,6 +288,11 @@ class TestC002:
 
     def test_silent_on_clean_features(self):
         _check(C002_TargetInFeatures(), "X = df[['sma', 'volume', 'rsi']]", expect_hit=False)
+
+    def test_silent_on_exploratory_display(self):
+        _check(C002_TargetInFeatures(), "df[['close', 'target']].head()", expect_hit=False)
+        _check(C002_TargetInFeatures(), "print(df[['close', 'target']])", expect_hit=False)
+        _check(C002_TargetInFeatures(), "df[['close', 'target']].plot()", expect_hit=False)
 
 
 class TestC003:

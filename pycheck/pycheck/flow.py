@@ -355,7 +355,9 @@ class TaintTracker:
             if isinstance(node.func, ast.Attribute):
                 method = node.func.attr
                 sinks = {'fit', 'fit_transform', 'fit_predict', 'train',
-                         'partial_fit', 'predict', 'score'}
+                         'partial_fit', 'predict', 'score',
+                         'cross_validate', 'cross_val_score', 'cross_val_predict',
+                         'GridSearchCV', 'RandomizedSearchCV'}
                 
                 if method in sinks:
                     # Check positional arguments for future taint (F001)
@@ -377,7 +379,9 @@ class TaintTracker:
                                 "Ensure training/prediction data is free of future information"))
 
                 # Check F002: Data contamination & test partitions in training sinks
-                training_sinks = {'fit', 'fit_transform', 'fit_predict', 'train', 'partial_fit'}
+                training_sinks = {'fit', 'fit_transform', 'fit_predict', 'train', 'partial_fit',
+                                  'cross_validate', 'cross_val_score', 'cross_val_predict',
+                                  'GridSearchCV', 'RandomizedSearchCV'}
                 if method in training_sinks:
                     obj_name = self._get_obj_name(node.func.value)
                     safe_objects = {'fig', 'figure', 'ax', 'axes', 'plt', 'layout',

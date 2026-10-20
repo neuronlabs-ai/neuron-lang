@@ -774,6 +774,19 @@ class C002_TargetInFeatures(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Subscript):
             return []
+
+        # Sink-Gating: If used in safe exploratory / display methods, do not flag as feature leakage
+        parent = getattr(node, 'parent', None)
+        if parent is not None:
+            if isinstance(parent, ast.Attribute) and parent.attr in (
+                'head', 'tail', 'plot', 'describe', 'info', 'hist', 'boxplot',
+                'shape', 'dtypes', 'columns', 'index'
+            ):
+                return []
+            if isinstance(parent, ast.Call):
+                if isinstance(parent.func, ast.Name) and parent.func.id in ('print', 'display'):
+                    return []
+
         train_markers = ('_train', 'train_', 'x_train', 'y_train', 'x_tr', 'y_tr', '_trn', 'trn_', 'train')
         caller_name = ""
         if isinstance(node.value, ast.Name):

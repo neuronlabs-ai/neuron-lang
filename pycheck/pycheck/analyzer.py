@@ -133,6 +133,10 @@ def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     
     source_lines = source.split('\n')
     tree = ast.parse(source, filename=filepath)
+    # Link parent references across the AST for sink-gated rule analysis
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent
     
     # Phase 1: Data flow taint & provenance analysis
     tracker = TaintTracker()
