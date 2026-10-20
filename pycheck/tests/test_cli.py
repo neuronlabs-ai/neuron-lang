@@ -33,7 +33,7 @@ def test_cli_list():
 def test_cli_gitlab_format():
     test_code = """
 import pandas as pd
-df['target'] = df['close'].shift(-1)
+df['future_signal'] = df['close'].shift(-1)
 """
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(test_code)
@@ -89,7 +89,7 @@ def test_cli_inline_suppression():
     test_code = """
 import pandas as pd
 # 1. Single rule suppression with reason
-df['target'] = df['close'].shift(-1)  # pycheck: ignore[T001] reason: intentional exploratory probe
+df['future_signal'] = df['close'].shift(-1)  # pycheck: ignore[T001] reason: intentional exploratory probe
 
 # 2. Multi-rule suppression
 # pycheck: ignore[C001, C002]

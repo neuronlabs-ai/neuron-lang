@@ -64,6 +64,32 @@ class T001_ShiftNegative(Rule):
     severity = "error"
     category = "TemporalLeak"
 
+    # Target/label variable names where shift(-1) is intentional (creating the prediction target)
+    _TARGET_ASSIGNMENT_NAMES = {
+        'label', 'labels', 'target', 'targets', 'y', 'y_true', 'y_train', 'y_test',
+        'next_tok', 'next_token', 'next_word', 'next_char',
+    }
+
+    def _is_target_construction(self, node):
+        """Check if this shift(-1) is assigned to a target/label variable (intentional future target, not a feature leak)."""
+        parent = getattr(node, 'parent', None)
+        if parent is None:
+            return False
+        # Direct: label = df['close'].shift(-1)
+        assign = parent
+        if isinstance(parent, ast.BinOp):
+            assign = getattr(parent, 'parent', None)
+        if isinstance(assign, ast.Assign):
+            for tgt in assign.targets:
+                if isinstance(tgt, ast.Name) and tgt.id.lower() in self._TARGET_ASSIGNMENT_NAMES:
+                    return True
+                # df['target'] = ..., df['label'] = ..., df['next_tok'] = ...
+                if isinstance(tgt, ast.Subscript) and isinstance(tgt.slice, ast.Constant):
+                    col = str(tgt.slice.value).lower()
+                    if col in self._TARGET_ASSIGNMENT_NAMES or col.startswith('next_') or col.startswith('future_target'):
+                        return True
+        return False
+
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
@@ -82,6 +108,9 @@ class T001_ShiftNegative(Rule):
         for arg in node.args:
             val = self._get_negative_value(arg, ctx)
             if val is not None and val > 0:
+                # Suppress if this is intentional target/label construction
+                if self._is_target_construction(node):
+                    return []
                 results.append(Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
                     f".shift(-{val}) accesses data {val} rows INTO THE FUTURE",
@@ -92,6 +121,8 @@ class T001_ShiftNegative(Rule):
             if kw.arg == 'periods':
                 val = self._get_negative_value(kw.value, ctx)
                 if val is not None and val > 0:
+                    if self._is_target_construction(node):
+                        return []
                     results.append(Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         f".shift(periods=-{val}) accesses data {val} rows INTO THE FUTURE",
@@ -120,6 +151,14 @@ class T002_TrainTestSplit(Rule):
     severity = "error"
     category = "TemporalLeak"
 
+    # Variable names that indicate iid (non-temporal) data, where random splits are safe
+    _IID_DATA_NAMES = {
+        'images', 'image', 'imgs', 'img', 'photos', 'pixels',
+        'iris', 'iris_x', 'iris_y', 'iris_data', 'mnist', 'cifar',
+        'texts', 'text', 'documents', 'docs', 'sentences',
+        'features', 'samples', 'labels', 'categories',
+    }
+
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
@@ -134,7 +173,12 @@ class T002_TrainTestSplit(Rule):
                     if isinstance(kw.value, ast.Constant) and (kw.value.value is False or kw.value.value == 0):
                         return []
 
-            # 2. Only flag when time-series indicators exist in the data/script
+            # 2. If the arguments are clearly iid data names, suppress
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id.lower() in self._IID_DATA_NAMES:
+                    return []
+
+            # 3. Only flag when time-series indicators exist in the data/script
             if not self._has_temporal_context(ctx):
                 return []
 
@@ -192,11 +236,41 @@ class T004_ExpandingBeforeSplit(Rule):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'expanding':
+            # Check if result is made causal via .shift(1) or .shift(n>0) downstream
+            # Pattern: df['close'].expanding().mean().shift(1)
+            # The expanding() call is the grandchild of the .mean() call which is grandchild of .shift(1)
+            if self._has_causal_shift_downstream(node):
+                return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 ".expanding() computed on full dataset may include future data",
                 "Compute expanding statistics AFTER splitting into train/test sets")]
         return []
+
+    def _has_causal_shift_downstream(self, node):
+        """Walk up the AST to see if .expanding()...agg().shift(positive) makes it causal."""
+        current = node
+        for _ in range(5):  # walk up max 5 levels
+            parent = getattr(current, 'parent', None)
+            if parent is None:
+                return False
+            # If parent is a .shift() call with positive arg, this is causal
+            if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute) and parent.func.attr == 'shift':
+                for arg in parent.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value > 0:
+                        return True
+                # No args means shift(1) default? No, default is 1 but shift() with no args = shift(1) which IS causal
+                if not parent.args and not any(kw.arg == 'periods' for kw in parent.keywords):
+                    return True
+            # Keep walking up through method chains (.expanding().mean() etc.)
+            if isinstance(parent, ast.Attribute):
+                current = parent
+                continue
+            if isinstance(parent, ast.Call):
+                current = parent
+                continue
+            break
+        return False
 
 
 class T005_PctChangeNegative(Rule):
@@ -222,6 +296,29 @@ class T005_PctChangeNegative(Rule):
                     node.lineno, node.col_offset, self.severity, self.code,
                     f"pct_change({int(arg.value)}) accesses future data",
                     "Use positive periods to look backwards in time")]
+        # Also check keyword arg: pct_change(periods=-1)
+        for kw in node.keywords:
+            if kw.arg == 'periods':
+                if isinstance(kw.value, ast.UnaryOp) and isinstance(kw.value.op, ast.USub):
+                    if isinstance(kw.value.operand, ast.Constant):
+                        val = kw.value.operand.value
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"pct_change(periods=-{val}) accesses future data",
+                            "Use positive periods to look backwards in time")]
+                if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, (int, float)) and kw.value.value < 0:
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        f"pct_change(periods={int(kw.value.value)}) accesses future data",
+                        "Use positive periods to look backwards in time")]
+                # Resolve variable reference
+                if isinstance(kw.value, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
+                    val = ctx.constants.get(kw.value.id)
+                    if val is not None and isinstance(val, (int, float)) and val < 0:
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"pct_change(periods={int(val)}) accesses future data",
+                            "Use positive periods to look backwards in time")]
         return []
 
 
@@ -417,6 +514,21 @@ class T011_ScalerBeforeSplit(Rule):
                         'MaxAbsScaler', 'Normalizer', 'QuantileTransformer',
                         'PowerTransformer'}
         if isinstance(node.func, ast.Name) and node.func.id in scaler_names:
+            # Suppress when used inside sklearn Pipeline/make_pipeline (the pipeline handles fit/transform correctly in CV)
+            parent = getattr(node, 'parent', None)
+            if parent is not None:
+                # Direct tuple element inside Pipeline steps list
+                if isinstance(parent, ast.Tuple):
+                    grandparent = getattr(parent, 'parent', None)
+                    if grandparent is not None and isinstance(grandparent, ast.List):
+                        ggp = getattr(grandparent, 'parent', None)
+                        if ggp is not None and isinstance(ggp, ast.Call):
+                            if isinstance(ggp.func, ast.Name) and ggp.func.id in ('Pipeline', 'make_pipeline'):
+                                return []
+                # make_pipeline(StandardScaler(), Ridge()) — direct arg
+                if isinstance(parent, ast.Call):
+                    if isinstance(parent.func, ast.Name) and parent.func.id in ('Pipeline', 'make_pipeline'):
+                        return []
             return [Diagnostic(
                 node.lineno, node.col_offset, "info", self.code,
                 f"{node.func.id}() — ensure this is fit ONLY on training data",
@@ -440,11 +552,27 @@ class T012_KFoldTimeSeries(Rule):
         elif isinstance(node.func, ast.Attribute):
             name = node.func.attr
         if name in kfold_names:
+            # Only flag when temporal/financial context markers exist in the script
+            if not self._has_temporal_context(ctx):
+                return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 f"{name}() shuffles time-series data across folds, leaking future into training",
                 "Use TimeSeriesSplit() for temporal cross-validation")]
         return []
+
+    def _has_temporal_context(self, ctx):
+        if not ctx or not ctx.source_lines:
+            return False
+        source_lower = "\n".join(ctx.source_lines).lower()
+        temporal_markers = (
+            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
+            'price', 'prices', 'return', 'returns', 'pnl', 'tick', 'bar',
+            'date', 'datetime', 'timestamp', 'time_series', 'timeseries',
+            '.rolling', '.expanding', '.shift', 'pct_change', '.diff',
+            'resample', 'timeseriessplit', 'merge_asof'
+        )
+        return any(marker in source_lower for marker in temporal_markers)
 
 
 class T013_ResampleBeforeSplit(Rule):
@@ -758,6 +886,22 @@ class C001_CorrelationCausation(Rule):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'corr':
+            # Sink-gate: suppress for exploratory display (print, .head(), .plot(), etc.)
+            parent = getattr(node, 'parent', None)
+            if parent is not None:
+                # print(df.corr()) or display(df.corr())
+                if isinstance(parent, ast.Call):
+                    if isinstance(parent.func, ast.Name) and parent.func.id in ('print', 'display', 'logging'):
+                        return []
+                # df.corr().head(), df.corr().to_string(), etc.
+                if isinstance(parent, ast.Attribute) and parent.attr in (
+                    'head', 'tail', 'to_string', 'to_html', 'style', 'plot',
+                    'describe', 'info', 'shape', 'values', 'round'
+                ):
+                    return []
+                # Standalone expression (not assigned, not passed to model)
+                if isinstance(parent, ast.Expr):
+                    return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 ".corr() measures correlation, not causation — do not use for treatment/trading decisions",

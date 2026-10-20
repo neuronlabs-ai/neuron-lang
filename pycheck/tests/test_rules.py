@@ -200,14 +200,18 @@ class TestT011:
 
 
 class TestT012:
-    def test_fires_on_kfold(self):
-        _check(T012_KFoldTimeSeries(), "cv = KFold(n_splits=5)", expect_hit=True)
+    def test_fires_on_kfold_with_temporal_context(self):
+        # T012 now requires temporal context markers
+        _check(T012_KFoldTimeSeries(), "df['close'] = prices\ncv = KFold(n_splits=5)", expect_hit=True)
 
-    def test_fires_on_stratified_kfold(self):
-        _check(T012_KFoldTimeSeries(), "cv = StratifiedKFold(n_splits=5)", expect_hit=True)
+    def test_fires_on_stratified_kfold_with_temporal_context(self):
+        _check(T012_KFoldTimeSeries(), "df['close'] = prices\ncv = StratifiedKFold(n_splits=5)", expect_hit=True)
 
     def test_silent_on_timeseries_split(self):
         _check(T012_KFoldTimeSeries(), "cv = TimeSeriesSplit(n_splits=5)", expect_hit=False)
+
+    def test_silent_on_iid_data(self):
+        _check(T012_KFoldTimeSeries(), "cv = KFold(n_splits=5, shuffle=True)", expect_hit=False)
 
 
 class TestT013:
@@ -697,3 +701,120 @@ scaler.fit_transform(X_train)
 
 
 
+
+# ═══════════════════════════════════════════════════════════════
+#  STRESS TEST REGRESSION TESTS
+#  From adversarial stress test: 7 false-positive fixes + 1 missed leak fix
+# ═══════════════════════════════════════════════════════════════
+
+class TestStressFalsePositives:
+    """Tests for false positives identified in the adversarial stress test."""
+
+    # C6: print(df.corr()) should be silent — EDA display
+    def test_c001_silent_on_printed_corr(self):
+        _check(C001_CorrelationCausation(), "print(df.corr())", expect_hit=False)
+
+    # C6 variant: standalone expression
+    def test_c001_silent_on_standalone_corr(self):
+        _check(C001_CorrelationCausation(), "df.corr()", expect_hit=False)
+
+    # C6: should still fire when assigned to a variable used for decisions
+    def test_c001_fires_on_assigned_corr(self):
+        _check(C001_CorrelationCausation(), "c = df['a'].corr()", expect_hit=True)
+
+    # C7: KFold on iid data (no temporal markers) should be silent
+    def test_t012_silent_on_iid_data(self):
+        code = "cv = KFold(n_splits=5, shuffle=True, random_state=0)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(T012_KFoldTimeSeries().check_node(node, ctx))
+        assert len(hits) == 0, f"T012 should not fire on non-temporal data, got: {hits}"
+
+    # C7: KFold should still fire when temporal markers are present
+    def test_t012_fires_on_temporal_data(self):
+        code = "df['close'] = prices\ncv = KFold(n_splits=5, shuffle=True)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(T012_KFoldTimeSeries().check_node(node, ctx))
+        assert len(hits) > 0, "T012 should fire on temporal data"
+
+    # C8: train_test_split on iid images should be silent
+    def test_t002_silent_on_iid_images(self):
+        code = "imgs_tr, imgs_te, lab_tr, lab_te = train_test_split(images, labels, test_size=0.2, random_state=0)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(T002_TrainTestSplit().check_node(node, ctx))
+        assert len(hits) == 0, f"T002 should not fire on iid image data, got: {hits}"
+
+    # C9: StandardScaler inside Pipeline should be silent
+    def test_t011_silent_inside_pipeline(self):
+        code = "pipe = Pipeline([('s', StandardScaler()), ('m', Ridge())])"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(T011_ScalerBeforeSplit().check_node(node, ctx))
+        assert len(hits) == 0, f"T011 should not fire inside Pipeline, got: {hits}"
+
+    # C9: StandardScaler outside Pipeline should still fire
+    def test_t011_fires_outside_pipeline(self):
+        _check(T011_ScalerBeforeSplit(), "scaler = StandardScaler()", expect_hit=True)
+
+    # C10: label = df['close'].shift(-1) is target construction, should be silent
+    def test_t001_silent_on_label_construction(self):
+        _check(T001_ShiftNegative(), "label = df['close'].shift(-1)", expect_hit=False)
+
+    # C11: next_tok = tokens.shift(-1) is NLP next-token target, should be silent
+    def test_t001_silent_on_next_token_target(self):
+        _check(T001_ShiftNegative(), "next_tok = tokens.shift(-1)", expect_hit=False)
+
+    # C10/C11: shift(-1) on a feature column should still fire
+    def test_t001_fires_on_feature_shift(self):
+        _check(T001_ShiftNegative(), "df['future_signal'] = df['close'].shift(-1)", expect_hit=True)
+
+    # C12: expanding().mean().shift(1) is causal-safe, should be silent
+    def test_t004_silent_on_expanding_with_causal_shift(self):
+        code = "df['m'] = df['close'].expanding().mean().shift(1)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(T004_ExpandingBeforeSplit().check_node(node, ctx))
+        assert len(hits) == 0, f"T004 should not fire when expanding() result has causal .shift(1), got: {hits}"
+
+    # Expanding without shift should still fire
+    def test_t004_fires_on_bare_expanding(self):
+        _check(T004_ExpandingBeforeSplit(), "df['m'] = df['close'].expanding().mean()", expect_hit=True)
+
+
+class TestStressMissedLeaks:
+    """Tests for missed leaks identified in the adversarial stress test."""
+
+    # B12: pct_change(periods=-1) keyword arg
+    def test_t005_fires_on_keyword_periods(self):
+        _check(T005_PctChangeNegative(), "df['r'] = df['close'].pct_change(periods=-1)", expect_hit=True)
+
+    # Positive periods should still be silent
+    def test_t005_silent_on_positive_keyword(self):
+        _check(T005_PctChangeNegative(), "df['r'] = df['close'].pct_change(periods=5)", expect_hit=False)
