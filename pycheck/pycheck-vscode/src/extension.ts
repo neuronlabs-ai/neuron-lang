@@ -82,34 +82,45 @@ function analyzeDocument(document: vscode.TextDocument) {
     const showInfo = config.get<boolean>('showInfo', false);
     const filePath = document.uri.fsPath;
 
-    // Find pycheck module — look relative to the extension or use installed version
     const args = ['-m', 'pycheck', filePath, '--json'];
     if (showInfo) {
         args.push('--info');
     }
 
-    const options: cp.ExecOptions = {
+    const options: cp.ExecFileOptions = {
         timeout: 10000,
         maxBuffer: 1024 * 1024,
     };
 
-    cp.exec(`${pythonPath} ${args.join(' ')}`, options, (error, stdout, stderr) => {
+    cp.execFile(pythonPath, args, options, (error, stdout, stderr) => {
         const diagnostics: vscode.Diagnostic[] = [];
         const output = String(stdout);
 
         if (output.trim()) {
             try {
-                const results: PyCheckDiagnostic[] = JSON.parse(output.trim());
-                
+                const parsed = JSON.parse(output.trim());
+                let results: PyCheckDiagnostic[] = [];
+                if (Array.isArray(parsed)) {
+                    results = parsed;
+                } else if (typeof parsed === 'object' && parsed !== null) {
+                    const dict = parsed as Record<string, PyCheckDiagnostic[]>;
+                    if (Array.isArray(dict[filePath])) {
+                        results = dict[filePath];
+                    } else {
+                        results = Object.values(dict).flat();
+                    }
+                }
+
                 for (const result of results) {
                     const line = Math.max(0, result.line - 1);
                     const col = Math.max(0, result.col);
-                    
-                    // Get the full line to create a proper range
+
+                    if (line >= document.lineCount) continue;
                     const docLine = document.lineAt(line);
+                    const endCol = Math.max(col + 1, docLine.range.end.character);
                     const range = new vscode.Range(
                         new vscode.Position(line, col),
-                        new vscode.Position(line, docLine.range.end.character)
+                        new vscode.Position(line, endCol)
                     );
 
                     let severity: vscode.DiagnosticSeverity;
