@@ -248,20 +248,22 @@ pycheck examples/leaky_transformer_pipeline.py
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: leaky_transformer_pipeline.py
-  Rules: 32 active + Data Flow & Provenance Engine
+  Rules: 33 active + Data Flow & Provenance Engine
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
   ERROR[T014]: .diff(-5) computes difference using future data
   ERROR[T010]: .fit_transform() on full dataset leaks test statistics into training
   ERROR[T012]: KFold() shuffles time-series data across folds, leaking future into training
+  ERROR[T018]: In-sample target encoding leaks validation outcomes into features
 
-  Summary: 4 error(s), 0 warning(s)
-  These 4 error(s) would be COMPILE-TIME ERRORS in NEURON
+  Summary: 5 error(s), 0 warning(s)
+  These 5 error(s) would be COMPILE-TIME ERRORS in NEURON
 ```
 
-- **32 Specialized Rules**: 17 Temporal (`T001`–`T017`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
-- **AST Data Provenance & Flow Engine (`F001`, `F002`)**: Tracks partition lineage across splits, aliases, and concatenation (`X_train = pd.concat([X_train, X_test])`), detecting cross-fold leakage into training sinks.
+- **33 Specialized Rules**: 18 Temporal (`T001`–`T018`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
+- **AST Data Provenance & Flow Engine (`F001`, `F002`)**: Tracks partition lineage across splits, aliases, and concatenation (`X_train = pd.concat([X_train, X_test])`), detecting cross-fold leakage into training and cross-validation sinks.
+- **Enterprise Inline Suppression**: Team-grade comment suppression (`# pycheck: ignore[RULE_ID] reason: ...`) and AST sink-gated exploratory EDA protection.
 - **VS Code Extension**: Real-time inline red/yellow squiggles on temporal leaks as you write Python.
 
 ---

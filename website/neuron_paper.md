@@ -377,7 +377,7 @@ NEURON employs a multi-pass IR optimization pipeline running in a fixed-point lo
 
 Recognizing that large production codebases cannot be rewritten into a new language overnight, we developed **PyCheck** (published on PyPI as `pycheck-neuron`), a standalone AST-level diagnostic static analyzer and partition provenance engine. PyCheck bridges existing Python/Jupyter codebases to NEURON's invariants:
 - **AST Data Provenance**: Tracks data partition lineage across `pd.concat`, reassignments, aliases, and helper functions to detect cross-fold leakage (`F001`, `F002`) without relying on variable naming heuristics.
-- **32 Specialized Rules**: Detects negative lookahead leads (`T001`), centered rolling windows (`T009`), premature scaling (`T010`), and un-split target laundering (`T017`).
+- **33 Specialized Rules**: Detects negative lookahead leads (`T001`), centered rolling windows (`T009`), premature scaling (`T010`), and un-split target laundering (`T017`, `T018`).
 - **Turnkey CI/CD PR Gatekeeping**: Directly generates GitLab Code Quality JSON and GitHub Actions annotations to block leaky pull requests before merging.
 
 ### 4.9 Language Server Protocol (LSP) & IDE Tooling

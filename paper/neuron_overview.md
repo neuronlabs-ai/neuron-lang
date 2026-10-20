@@ -277,7 +277,7 @@ NEURON compiles a unified IR representation into five distinct execution targets
 - **Interactive REPL (`neuronc repl`):** Live evaluation terminal with type inspection (`:type`), code loading (`:load`), and explanation (`:explain`).
 - **Desktop IDE (`desktop/`):** Standalone browser-based IDE powered by client-side WebAssembly.
 - **Language Server Protocol (`neuronc lsp`):** Standard LSP implementation providing real-time diagnostics, hover types, and autocompletion in VS Code.
-- **PyCheck Linter (`pycheck`):** Standalone Python static analyzer (`pycheck-neuron` on PyPI) with a 32-rule security registry and a 2-pass AST data-flow and partition provenance tracking engine (`F001`, `F002`) that detects temporal leaks, non-causal joins (`merge_asof`), target laundering (`T017`), and causal errors in legacy Python/PyTorch code.
+- **PyCheck Linter (`pycheck`):** Standalone Python static analyzer (`pycheck-neuron` on PyPI) with a 33-rule security registry and a 2-pass AST data-flow and partition provenance tracking engine (`F001`, `F002`) that detects temporal leaks, non-causal joins (`merge_asof`), target laundering and in-sample target encoding (`T017`, `T018`), and causal errors in legacy Python/PyTorch code.
 
 ---
 
@@ -286,8 +286,8 @@ NEURON compiles a unified IR representation into five distinct execution targets
 NEURON's implementation is validated through a comprehensive multi-tier verification suite:
 
 - **170 Rust Workspace Tests (100% Pass Rate):** Covering lexing, parsing, type checking, IR lowering, optimization passes, second-order autograd (Hessians, HvP, Newton-Raphson), VM execution, Cranelift JIT compilation, and PyTorch transpilation.
-- **97 PyCheck Test Assertions (100% Pass Rate):** Covering all 32 AST static analysis rules, data partition lineage, cross-fold leakage detection (`F001`, `F002`), cryptographic audit certificates, and temporal lead/lag diagnostics.
-- **267 Total Automated Tests:** Validating end-to-end compiler correctness and ecosystem safety across the NEURON and PyCheck toolchains.
+- **109 PyCheck Unit Tests (100% Pass Rate):** Covering all 33 AST static analysis rules, inline suppressions, data partition lineage, cross-fold leakage detection (`F001`, `F002`), cryptographic audit certificates, and temporal lead/lag diagnostics.
+- **279 Total Automated Tests:** Validating end-to-end compiler correctness and ecosystem safety across the NEURON and PyCheck toolchains.
 - **66 Adversarial Attack Tests:** Specifically targeting edge cases in temporal lookahead, type erasure attacks, causal mode mixing, and unlearning boundary conditions.
 - **Fuzz Testing:** Over 1,000 fuzz-generated invalid AST structures evaluated with zero compiler panics or unhandled segmentation faults.
 - **Endurance Testing:** 100,000 continuous training iterations on deep neural networks with zero memory leaks, numerical divergences, or NaN artifacts.
