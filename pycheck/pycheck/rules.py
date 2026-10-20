@@ -1,5 +1,5 @@
 """
-PyCheck Rule Registry — 40+ ML Safety Rules
+PyCheck Rule Registry — 34 ML Safety Rules
 Each rule is a self-contained checker with code, severity, and AST visitor logic.
 """
 
@@ -102,7 +102,13 @@ class T001_ShiftNegative(Rule):
                             len(node.func.args) >= 2 and
                             isinstance(node.func.args[1], ast.Constant) and
                             node.func.args[1].value == 'shift')
-        if not (is_shift or is_getattr_shift):
+        # B10 fix: bound-method alias - sh = df['close'].shift; sh(-1)
+        is_alias_shift = False
+        if isinstance(node.func, ast.Name) and ctx is not None and hasattr(ctx, 'assignments'):
+            assigned = ctx.assignments.get(node.func.id)
+            if isinstance(assigned, ast.Attribute) and assigned.attr == 'shift':
+                is_alias_shift = True
+        if not (is_shift or is_getattr_shift or is_alias_shift):
             return []
         results = []
         for arg in node.args:
@@ -872,6 +878,50 @@ class T018_InSampleTargetEncoding(Rule):
         return []
 
 
+class T019_NpRollNegative(Rule):
+    code = "T019"
+    name = "np_roll_future"
+    severity = "error"
+    category = "TemporalLeak"
+
+    def check_node(self, node, ctx):
+        if not isinstance(node, ast.Call):
+            return []
+        # Detect np.roll(arr, -N) or numpy.roll(arr, -N)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'roll':
+            obj = node.func.value
+            if isinstance(obj, ast.Name) and obj.id in ('np', 'numpy'):
+                if len(node.args) >= 2:
+                    val = self._get_negative_value(node.args[1], ctx)
+                    if val is not None and val > 0:
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"np.roll(array, -{val}) rotates data {val} positions from the FUTURE (no NaN boundary)",
+                            f"Use pd.Series.shift({val}) which inserts NaN at boundaries, or slice manually")]
+                # Also check keyword: shift=... (numpy uses 'shift' param)
+                for kw in node.keywords:
+                    if kw.arg == 'shift':
+                        val = self._get_negative_value(kw.value, ctx)
+                        if val is not None and val > 0:
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                f"np.roll(shift=-{val}) rotates data {val} positions from the FUTURE (no NaN boundary)",
+                                f"Use pd.Series.shift({val}) which inserts NaN at boundaries")]
+        return []
+
+    def _get_negative_value(self, arg, ctx=None):
+        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+            if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
+                return abs(arg.operand.value)
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
+            return abs(arg.value)
+        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
+            val = ctx.constants.get(arg.id)
+            if val is not None and isinstance(val, (int, float)) and val < 0:
+                return abs(val)
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════
 #  CAUSAL CONFUSION RULES (C001–C010)
 # ═══════════════════════════════════════════════════════════════
@@ -1268,6 +1318,7 @@ ALL_RULES: List[Rule] = [
     T016_MergeAsofDirection(),
     T017_TargetLaundering(),
     T018_InSampleTargetEncoding(),
+    T019_NpRollNegative(),
     # Causal Confusion
     C001_CorrelationCausation(),
     C002_TargetInFeatures(),

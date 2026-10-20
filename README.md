@@ -246,7 +246,7 @@ pycheck examples/leaky_transformer_pipeline.py
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: leaky_transformer_pipeline.py
-  Rules: 33 active
+  Rules: 34 active
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
@@ -258,7 +258,7 @@ pycheck examples/leaky_transformer_pipeline.py
   These 4 error(s) would be COMPILE-TIME ERRORS in NEURON
 ```
 
-- **33 Specialized Rules**: 18 Temporal (`T001`–`T018`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
+- **34 Specialized Rules**: 19 Temporal (`T001`–`T019`), 7 Causal (`C001`–`C007`), 6 Uncertainty (`U001`–`U006`), 2 Data Quality (`D002`–`D003`).
 - **AST Data Provenance & Flow Engine (`F001`, `F002`)**: Tracks partition lineage across splits, aliases, and concatenation (`X_train = pd.concat([X_train, X_test])`), detecting cross-fold leakage into training and cross-validation sinks.
 - **Enterprise Inline Suppression**: Team-grade comment suppression (`# pycheck: ignore[RULE_ID] reason: ...`) and AST sink-gated exploratory EDA protection.
 - **VS Code Extension**: Real-time inline red/yellow squiggles on temporal leaks as you write Python.
@@ -325,8 +325,8 @@ cd pycheck && pytest
 | Test Suite | Total Tests | Pass Rate |
 |---|---|---|
 | **Core Rust Test Suite** (Compiler, Runtime, WASM) | 170 tests | **100% PASS** |
-| **PyCheck Linter Test Suite** | 109 unit tests | **100% PASS** |
-| **Total Automated Ecosystem Tests** | **279 tests** | **100% PASS** |
+| **PyCheck Linter Test Suite** | 131 unit tests | **100% PASS** |
+| **Total Automated Ecosystem Tests** | **301 tests** | **100% PASS** |
 | **End-to-End Example Suite** (`test_all.ps1`) | 29 verifications | **100% PASS** |
 | **Endurance Suite** | 100,000 iterations | **0 memory leaks, 0 NaN** |
 | **Property Tests (VM == JIT parity)** | 100 random programs | **100% Parity** |

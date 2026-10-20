@@ -1,6 +1,6 @@
 # PyCheck — ML Safety Analyzer
 
-**33 rules. Zero dependencies. Catches the bugs that cost millions.**
+**34 rules. Zero dependencies. Catches the bugs that cost millions.**
 
 PyCheck is a static AST analyzer that detects **temporal lookahead bias**, **causal confusion**, and **unguarded uncertainty** in Python ML and trading scripts — before you run a single line of code.
 
@@ -30,7 +30,7 @@ PyCheck catches all three before execution:
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: strategy.py
-  Rules: 33 active + Data Flow & Provenance Engine
+  Rules: 34 active + Data Flow & Provenance Engine
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
@@ -62,11 +62,11 @@ PyCheck catches all three before execution:
 
 ## What It Catches
 
-### Temporal Leak Rules (18 rules — `T001`–`T018`)
+### Temporal Leak Rules (19 rules — `T001`–`T019`)
 
 | Rule | What It Catches | Severity |
 |------|----------------|----------|
-| `T001` | `.shift(-1)` — accessing future data | **Error** |
+| `T001` | `.shift(-1)` — accessing future data (including bound-method aliases like `sh = df.shift; sh(-1)`) | **Error** |
 | `T002` | `train_test_split()` on time-series data without chronological ordering | **Error** |
 | `T003` | `.rolling()` computed before the train/test split | Warning |
 | `T004` | `.expanding()` computed before split | Warning |
@@ -84,6 +84,7 @@ PyCheck catches all three before execution:
 | `T016` | `pd.merge_asof()` with `direction='nearest'` or `'forward'` | **Error** |
 | `T017` | Target laundering & un-split target encoding (`regime_success_rate`) | **Error** |
 | `T018` | In-sample target encoding via `.transform()` or un-split group means | **Error** |
+| `T019` | `np.roll(arr, -k)` — negative shift rotates future data into present position | **Error** |
 
 ### Causal Confusion Rules (7 rules — `C001`–`C007`)
 
@@ -151,7 +152,7 @@ pycheck script.py              # Errors + warnings (default)
 pycheck script.py --info       # Include info-level diagnostics
 pycheck script.py --quiet      # Errors only
 pycheck script.py --json       # JSON output — pipe into CI/CD
-pycheck --list                 # List all 33 rules
+pycheck --list                 # List all 34 rules
 pycheck --help
 ```
 

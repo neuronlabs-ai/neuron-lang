@@ -17,7 +17,7 @@ from pycheck.rules import (
     T007_BackfillLeak, T008_NonCausalInterpolate, T009_CenteredRolling,
     T010_FitBeforeSplit, T011_ScalerBeforeSplit, T012_KFoldTimeSeries,
     T013_ResampleBeforeSplit, T014_DiffNegative, T015_GroupbyShiftLeak,
-    T018_InSampleTargetEncoding,
+    T018_InSampleTargetEncoding, T019_NpRollNegative,
     C001_CorrelationCausation, C002_TargetInFeatures, C003_PostTreatmentVariable,
     C004_SelectionOnOutcome, C005_SurvivorshipBias, C006_PHacking,
     C007_CorrWithoutForDecisions,
@@ -460,7 +460,7 @@ model.fit(X, c)
 
 class TestIntegration:
     def test_rule_count(self):
-        assert len(ALL_RULES) == 33, f"Expected exactly 33 rules, got {len(ALL_RULES)}"
+        assert len(ALL_RULES) == 34, f"Expected exactly 34 rules, got {len(ALL_RULES)}"
 
     def test_all_rules_have_code(self):
         for rule in ALL_RULES:
@@ -818,3 +818,65 @@ class TestStressMissedLeaks:
     # Positive periods should still be silent
     def test_t005_silent_on_positive_keyword(self):
         _check(T005_PctChangeNegative(), "df['r'] = df['close'].pct_change(periods=5)", expect_hit=False)
+
+class TestBoundMethodAlias:
+    """B10: bound-method alias sh = df.shift; sh(-1)"""
+
+    def test_t001_fires_on_bound_method_alias(self):
+        code = "sh = df['close'].shift\ndf['future_signal'] = sh(-1)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        # Simulate the analyzer's visit_Assign to populate ctx.assignments
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        ctx.assignments[target.id] = node.value
+                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, (int, float)):
+                            ctx.constants[target.id] = node.value.value
+                        elif isinstance(node.value, ast.UnaryOp) and isinstance(node.value.op, ast.USub):
+                            if isinstance(node.value.operand, ast.Constant):
+                                ctx.constants[target.id] = -node.value.operand.value
+        hits = []
+        rule = T001_ShiftNegative()
+        for node in ast.walk(tree):
+            hits.extend(rule.check_node(node, ctx))
+        assert len(hits) > 0, "T001 should fire on bound-method alias sh(-1)"
+        assert hits[0].code == "T001"
+
+    def test_t001_silent_on_bound_method_positive(self):
+        code = "sh = df['close'].shift\ndf['lag'] = sh(1)"
+        tree = ast.parse(code)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                child.parent = parent
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        ctx.assignments[target.id] = node.value
+        hits = []
+        rule = T001_ShiftNegative()
+        for node in ast.walk(tree):
+            hits.extend(rule.check_node(node, ctx))
+        assert len(hits) == 0, "T001 should not fire on bound-method alias sh(1)"
+
+
+class TestNpRollNegative:
+    """B4: np.roll(arr, -1) detection"""
+
+    def test_t019_fires_on_np_roll_negative(self):
+        _check(T019_NpRollNegative(), "df['y'] = np.roll(df['close'].values, -1)", expect_hit=True)
+
+    def test_t019_silent_on_np_roll_positive(self):
+        _check(T019_NpRollNegative(), "df['lag'] = np.roll(df['close'].values, 1)", expect_hit=False)
+
+    def test_t019_fires_on_numpy_roll(self):
+        _check(T019_NpRollNegative(), "arr = numpy.roll(data, -5)", expect_hit=True)
+
+    def test_t019_silent_on_non_np_roll(self):
+        _check(T019_NpRollNegative(), "result = deque.roll(-1)", expect_hit=False)

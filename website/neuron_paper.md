@@ -52,7 +52,7 @@ We state our claims and their boundaries explicitly:
 4. **Structural Causal Model Engine**: First-class do-calculus and counterfactual abduction-action-prediction semantics (§4.4).
 5. **Verifiable Machine Unlearning**: First-class `forget()` primitive implementing Fisher Information Noise Scrubbing with verifiable `ForgetCertificate` audit outputs (§4.5).
 6. **Six-Pass IR Optimizer**: Constant folding, algebraic simplification, CSE, dead code elimination, LICM, and tensor operator fusion (§4.7).
-7. **The PyCheck Diagnostic Layer**: A standalone AST data provenance engine (33 rules, zero dependencies, v1.0.3 on PyPI) bridging existing Python pipelines to NEURON's invariants (§4.8).
+7. **The PyCheck Diagnostic Layer**: A standalone AST data provenance engine (34 rules, zero dependencies, v1.0.3 on PyPI) bridging existing Python pipelines to NEURON's invariants (§4.8).
 8. **IDE Tooling**: Language Server Protocol (LSP) and official VS Code extension providing real-time compile diagnostics (§4.9).
 
 ## 2. Language Overview
@@ -229,7 +229,7 @@ Any arbitrary mutations, data arrivals, or noise occurring in the future ($t' > 
 
 ## 4. Implementation
 
-NEURON is implemented as a compiler in Rust, comprising over 30,000 lines of source code across workspace crates, with 170 passing workspace tests (279 total ecosystem tests including 109 PyCheck tests) and 16 standard library modules (3,049 lines of NEURON source). The compiler (`neuron-compiler`) and runtime (`neuron-runtime`) cover the full pipeline from lexical analysis through optimization and code generation.
+NEURON is implemented as a compiler in Rust, comprising over 30,000 lines of source code across workspace crates, with 170 passing workspace tests (279 total ecosystem tests including 131 PyCheck tests) and 16 standard library modules (3,049 lines of NEURON source). The compiler (`neuron-compiler`) and runtime (`neuron-runtime`) cover the full pipeline from lexical analysis through optimization and code generation.
 
 ### 4.1 Compiler Pipeline
 
