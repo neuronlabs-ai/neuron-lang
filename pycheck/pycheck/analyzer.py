@@ -80,6 +80,31 @@ class PyCheckAnalyzer(ast.NodeVisitor):
         self.ctx.in_loop = old_in_loop
 
 
+
+def parse_suppressions(source_lines: List[str]) -> dict:
+    """
+    Parse inline and line-above suppression comments:
+    # pycheck: ignore[T001, C002] reason: ...
+    # pycheck: ignore
+    # noqa: T001
+    """
+    import re
+    suppressions = {}
+    pattern = re.compile(
+        r'#\s*(?:pycheck:\s*ignore(?:\[([a-zA-Z0-9,\s]+)\])?|noqa(?::\s*([a-zA-Z0-9,\s]+))?)',
+        re.IGNORECASE
+    )
+    for lineno, line in enumerate(source_lines, start=1):
+        match = pattern.search(line)
+        if match:
+            rules_str = match.group(1) or match.group(2)
+            codes = {c.strip().upper() for c in rules_str.split(',') if c.strip()} if rules_str else {'ALL'}
+            suppressions.setdefault(lineno, set()).update(codes)
+            # If the comment is on its own standalone line, also apply to the next code line
+            if line.strip().startswith('#') and lineno + 1 <= len(source_lines):
+                suppressions.setdefault(lineno + 1, set()).update(codes)
+    return suppressions
+
 def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     """
     Analyze a Python (.py) or Jupyter notebook (.ipynb) file for ML safety issues.
@@ -124,14 +149,18 @@ def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     # Combine and deduplicate
     all_diagnostics = analyzer.diagnostics + flow_diagnostics
     
-    # Deduplicate by (line, code)
+    suppressed_map = parse_suppressions(source_lines)
+
+    # Deduplicate and filter suppressed diagnostics
     seen = set()
     unique = []
     for d in all_diagnostics:
         key = (d.line, d.code)
         if key not in seen:
             seen.add(key)
-            unique.append(d)
+            line_suppressed = suppressed_map.get(d.line, set())
+            if 'ALL' not in line_suppressed and d.code not in line_suppressed:
+                unique.append(d)
     
     # Sort by line number
     unique.sort(key=lambda d: (d.line, d.col))

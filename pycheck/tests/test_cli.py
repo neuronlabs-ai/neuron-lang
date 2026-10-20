@@ -83,3 +83,31 @@ df['roll'] = df['price'].rolling(10).mean()
             os.remove(f_name)
         if os.path.exists(out_file):
             os.remove(out_file)
+
+
+def test_cli_inline_suppression():
+    test_code = """
+import pandas as pd
+# 1. Single rule suppression with reason
+df['target'] = df['close'].shift(-1)  # pycheck: ignore[T001] reason: intentional exploratory probe
+
+# 2. Multi-rule suppression
+# pycheck: ignore[C001, C002]
+corr = df[['close', 'target']].corr()
+
+# 3. Line above suppression
+# pycheck: ignore[T010]
+X_scaled = scaler.fit_transform(X)
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(test_code)
+        f_name = f.name
+
+    try:
+        res = run_cli(f_name, "--json")
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert len(data.get(f_name, [])) == 0
+    finally:
+        if os.path.exists(f_name):
+            os.remove(f_name)
