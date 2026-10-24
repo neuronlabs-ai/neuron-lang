@@ -4,6 +4,27 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.5] — 2026-10-24
+
+### Fixed
+- **Headline Demo & Target Column Precision (T001)**: Restricted target suppression strictly to standalone label variable assignments (`isinstance(tgt, ast.Name)`), ensuring dataframe target column shifts (`df['target'] = df['close'].shift(-1)`, `df['y'] = ...`) are never suppressed. Restores exact match with README headline demo.
+- **Taint Flow on Columns & Containers (F001)**: Enhanced `TaintTracker` with container propagation (`pd.concat`, `np.concatenate`, `vstack`, `hstack`, `merge`, `append`, `join`) and column subscript tracking (`df['feat'] = label; model.fit(df[['feat']], y)`), ensuring full-feature taint detection across all data structures.
+- **Strict Temporal Context over Name Heuristics (T002)**: Removed blind variable name bypass (`iris`, `images`) in favor of strict temporal context analysis. Temporal files using non-standard variable names are now reliably audited for time-series leaks.
+- **Full-Sample Preprocessing Statistics Before Split (T010)**:
+  - Detects manual full-sample z-score standardization `(df['x'] - df['x'].mean()) / df['x'].std()` prior to train/test split.
+  - Detects `.fillna()` with full-sample mean, median, or standard deviation (`df.fillna(df.mean())`).
+  - Detects full-sample percentile ranking (`df['x'].rank(pct=True)`).
+- **Adversarial Lookahead Patterns**:
+  - `T001`: Added reverse-slice cumulative sum lookahead (`df['ret'][::-1].cumsum()[::-1]`) and manual 1-step lookahead leads via numpy slicing (`np.append(arr[1:], np.nan)`).
+  - `T007`: Added reverse-slice forward-fill detection (`df.iloc[::-1]['price'].ffill()`).
+- **Proof-of-Causality Audit Integrity**:
+  - Synchronized audit checklist to all 34 rules (`T001`–`T019`).
+  - Added granular breakdown for warnings vs critical errors to ensure accurate verification status.
+  - Exposed programmatic `analyze_code(source: str)` API.
+- **Test Suite**: Expanded test suite to 142 unit tests (100% pass rate). 23/25 adversarial stress leaks caught (92%), and 13/13 clean isolated cases pass with 0 false positives.
+
+---
+
 ## [1.0.3] — 2026-10-19
 
 ### Added

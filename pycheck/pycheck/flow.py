@@ -237,6 +237,16 @@ class TaintTracker:
         Determine if an expression produces tainted data.
         Returns the taint reason string, or None if clean.
         """
+        if node is None:
+            return None
+
+        # Container propagation: [features, target] or (features, target)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            for elt in node.elts:
+                t = self._expr_taint(elt)
+                if t:
+                    return t
+
         if isinstance(node, ast.Call):
             return self._call_taint(node)
         
@@ -244,6 +254,10 @@ class TaintTracker:
             # Propagation: if RHS is a tainted variable, the assignment is tainted
             if node.id in self.tainted_vars:
                 return f"derived from tainted variable '{node.id}' ({self.tainted_vars[node.id].reason})"
+            # Check if this variable contains future-tainted columns (e.g. features['next'] = next_tok)
+            col_taints = [v.reason for k, v in self.tainted_vars.items() if k.startswith(f"{node.id}.")]
+            if col_taints:
+                return f"'{node.id}' contains future-tainted column ({col_taints[0]})"
         
         if isinstance(node, ast.BinOp):
             # Binary operations propagate taint from either operand
@@ -256,13 +270,22 @@ class TaintTracker:
             val_taint = self._expr_taint(node.value)
             if val_taint:
                 return val_taint
+            obj_name = self._get_var_name(node.value)
+            # Check if accessing a tracked tainted column: df['feat'] or df[['feat']]
+            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                col = node.slice.value
+                if obj_name and f"{obj_name}.{col}" in self.tainted_vars:
+                    return f"column '{col}' is tainted: {self.tainted_vars[f'{obj_name}.{col}'].reason}"
+            if isinstance(node.slice, (ast.List, ast.Tuple)):
+                for elt in node.slice.elts:
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                        col = elt.value
+                        if obj_name and f"{obj_name}.{col}" in self.tainted_vars:
+                            return f"column '{col}' is tainted: {self.tainted_vars[f'{obj_name}.{col}'].reason}"
             # Check if indexing a tainted column name
             if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
                 col_lower = node.slice.value.lower()
                 # Only flag column names that unambiguously refer to future data.
-                # 'target' and 'label' are intentionally excluded — they are standard
-                # ML label column names and produce false positives when accessed on a
-                # correctly split train/test dataset.
                 future_cols = {'future_price', 'future_return', 'next_close', 'next_price',
                                'next_day', 'tomorrow', 'price_change_next_day', 'future_avg_price'}
                 if any(f in col_lower for f in future_cols):
@@ -275,6 +298,13 @@ class TaintTracker:
     
     def _call_taint(self, node: ast.Call) -> Optional[str]:
         """Check if a function call produces tainted output."""
+        call_name = self._get_call_name(node)
+        if call_name in ('concat', 'concatenate', 'vstack', 'hstack', 'append', 'merge', 'join'):
+            for arg in node.args:
+                arg_t = self._expr_taint(arg)
+                if arg_t:
+                    return f"{call_name}() incorporates {arg_t}"
+
         if isinstance(node.func, ast.Attribute):
             method = node.func.attr
             

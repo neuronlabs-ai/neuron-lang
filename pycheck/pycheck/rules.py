@@ -81,13 +81,10 @@ class T001_ShiftNegative(Rule):
             assign = getattr(parent, 'parent', None)
         if isinstance(assign, ast.Assign):
             for tgt in assign.targets:
+                # ONLY suppress standalone target variable assignment (e.g. label = shift(-1), next_tok = shift(-1)),
+                # NEVER suppress dataframe columns like df['y'] or df['target'] (headline demo & feature leak).
                 if isinstance(tgt, ast.Name) and tgt.id.lower() in self._TARGET_ASSIGNMENT_NAMES:
                     return True
-                # df['target'] = ..., df['label'] = ..., df['next_tok'] = ...
-                if isinstance(tgt, ast.Subscript) and isinstance(tgt.slice, ast.Constant):
-                    col = str(tgt.slice.value).lower()
-                    if col in self._TARGET_ASSIGNMENT_NAMES or col.startswith('next_') or col.startswith('future_target'):
-                        return True
         return False
 
     def check_node(self, node, ctx):
@@ -108,6 +105,27 @@ class T001_ShiftNegative(Rule):
             assigned = ctx.assignments.get(node.func.id)
             if isinstance(assigned, ast.Attribute) and assigned.attr == 'shift':
                 is_alias_shift = True
+        # B5: reverse-slice cumsum — df['ret'][::-1].cumsum()[::-1]
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'cumsum':
+            for child in ast.walk(node.func.value):
+                if isinstance(child, ast.Slice) and isinstance(child.step, ast.UnaryOp) and isinstance(child.step.op, ast.USub):
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        ".cumsum() on reversed slice [::-1] computes cumulative future sum (lookahead bias)",
+                        "Compute cumulative statistics in chronological order")]
+
+        # B11: manual lead via np.append(arr[1:], np.nan)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'append':
+            if len(node.args) >= 2:
+                arg0, arg1 = node.args[0], node.args[1]
+                if isinstance(arg0, ast.Subscript) and isinstance(arg0.slice, ast.Slice):
+                    if isinstance(arg0.slice.lower, ast.Constant) and isinstance(arg0.slice.lower.value, int) and arg0.slice.lower.value > 0 and arg0.slice.upper is None:
+                        if (isinstance(arg1, ast.Attribute) and arg1.attr in ('nan', 'NaN')) or (isinstance(arg1, ast.Constant) and arg1.value is None):
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                f"Manual lead via np.append(arr[{arg0.slice.lower.value}:], nan) accesses future values",
+                                "Use backward lag features .shift(1)")]
+
         if not (is_shift or is_getattr_shift or is_alias_shift):
             return []
         results = []
@@ -179,12 +197,8 @@ class T002_TrainTestSplit(Rule):
                     if isinstance(kw.value, ast.Constant) and (kw.value.value is False or kw.value.value == 0):
                         return []
 
-            # 2. If the arguments are clearly iid data names, suppress
-            for arg in node.args:
-                if isinstance(arg, ast.Name) and arg.id.lower() in self._IID_DATA_NAMES:
-                    return []
-
-            # 3. Only flag when time-series indicators exist in the data/script
+            # Only flag when time-series indicators exist in the data/script
+            # (Claude fix: no blind name-bypass — if file has temporal markers, even 'iris' or 'images' is checked)
             if not self._has_temporal_context(ctx):
                 return []
 
@@ -371,7 +385,16 @@ class T007_BackfillLeak(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        if isinstance(node.func, ast.Attribute) and node.func.attr in ('fillna', 'bfill', 'backfill'):
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('fillna', 'bfill', 'backfill', 'ffill'):
+            # B14: ffill on reversed frame is equivalent to bfill
+            if node.func.attr == 'ffill':
+                for child in ast.walk(node.func.value):
+                    if isinstance(child, ast.Slice) and isinstance(child.step, ast.UnaryOp) and isinstance(child.step.op, ast.USub):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            ".ffill() on reversed slice [::-1] is equivalent to .bfill() and fills with FUTURE data",
+                            "Use forward fill on chronological data")]
+
             if node.func.attr in ('bfill', 'backfill'):
                 return [Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
@@ -465,6 +488,38 @@ class T010_FitBeforeSplit(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
+        # B7: fillna with full-sample mean/median before split
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'fillna':
+            for arg in node.args:
+                if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr in ('mean', 'median', 'std'):
+                    if not self._is_train_data(arg.func.value, ctx):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f".fillna({arg.func.attr}()) computes full-sample statistic on full dataset before train/test split",
+                            "Compute mean/median only on training split, then use it to fillna on both train and test")]
+
+        # B6: manual z-score normalization on un-split dataset
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('std', 'var'):
+            parent = getattr(node, 'parent', None)
+            if parent is not None and isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div):
+                if not self._is_train_data(node.func.value, ctx):
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        "Manual full-sample z-score (.std() / .mean()) computed on un-split dataset leaks test statistics",
+                        "Compute mean and std only on training partition (e.g. X_train.std()), then standardize test partition")]
+
+        # Full-sample rank normalization before split (lookahead)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'rank':
+            val = node.func.value
+            is_windowed = isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute) and val.func.attr in ('rolling', 'expanding')
+            if not is_windowed and not self._is_train_data(val, ctx):
+                is_pct = any(kw.arg == 'pct' and getattr(kw.value, 'value', None) is True for kw in node.keywords)
+                if is_pct:
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        ".rank(pct=True) computes full-sample percentile rank across un-split dataset (lookahead bias)",
+                        "Compute percentile rank within rolling windows or fit quantiles on training split only")]
+
         if isinstance(node.func, ast.Attribute) and node.func.attr in ('fit', 'fit_transform'):
             # Only flag on objects that look like ML preprocessors/models
             # Skip: fig.fit(), layout.fit(), etc.

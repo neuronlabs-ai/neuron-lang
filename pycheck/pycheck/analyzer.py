@@ -105,32 +105,11 @@ def parse_suppressions(source_lines: List[str]) -> dict:
                 suppressions.setdefault(lineno + 1, set()).update(codes)
     return suppressions
 
-def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
+def analyze_code(source: str, filepath: str = "<string>") -> Tuple[List[dict], List[str]]:
     """
-    Analyze a Python (.py) or Jupyter notebook (.ipynb) file for ML safety issues.
+    Analyze Python source code for ML safety issues.
     Returns (diagnostics_list, source_lines).
     """
-    if filepath.endswith('.ipynb'):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            nb = json.load(f)
-        code_lines = []
-        for cell in nb.get('cells', []):
-            if cell.get('cell_type') == 'code':
-                raw = cell.get('source', [])
-                if isinstance(raw, str):
-                    raw = raw.splitlines(True)
-                for line in raw:
-                    s_line = line.strip()
-                    if s_line.startswith('%') or s_line.startswith('!'):
-                        code_lines.append(f"# {line}")
-                    else:
-                        code_lines.append(line)
-                code_lines.append('\n')
-        source = "".join(code_lines)
-    else:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            source = f.read()
-    
     source_lines = source.split('\n')
     tree = ast.parse(source, filename=filepath)
     # Link parent references across the AST for sink-gated rule analysis
@@ -170,6 +149,35 @@ def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
     unique.sort(key=lambda d: (d.line, d.col))
     
     return [d.to_dict() for d in unique], source_lines
+
+
+def analyze_file(filepath: str) -> Tuple[List[dict], List[str]]:
+    """
+    Analyze a Python (.py) or Jupyter notebook (.ipynb) file for ML safety issues.
+    Returns (diagnostics_list, source_lines).
+    """
+    if filepath.endswith('.ipynb'):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            nb = json.load(f)
+        code_lines = []
+        for cell in nb.get('cells', []):
+            if cell.get('cell_type') == 'code':
+                raw = cell.get('source', [])
+                if isinstance(raw, str):
+                    raw = raw.splitlines(True)
+                for line in raw:
+                    s_line = line.strip()
+                    if s_line.startswith('%') or s_line.startswith('!'):
+                        code_lines.append(f"# {line}")
+                    else:
+                        code_lines.append(line)
+                code_lines.append('\n')
+        source = "".join(code_lines)
+    else:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            source = f.read()
+    
+    return analyze_code(source, filepath=filepath)
 
 
 def format_output(filepath: str, diagnostics: List[dict], source_lines: List[str],

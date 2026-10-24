@@ -880,3 +880,79 @@ class TestNpRollNegative:
 
     def test_t019_silent_on_non_np_roll(self):
         _check(T019_NpRollNegative(), "result = deque.roll(-1)", expect_hit=False)
+
+
+class TestV105RegressionsAndEnhancements:
+    """Regression and enhancement tests for v1.0.5 fixes."""
+
+    def test_headline_target_assignment_triggers_t001(self):
+        """README headline example: df['target'] = df['close'].shift(-1) MUST trigger T001."""
+        _check(T001_ShiftNegative(), "df['target'] = df['close'].shift(-1)", expect_hit=True)
+
+    def test_df_y_shift_negative_triggers_t001(self):
+        """df['y'] = df['close'].shift(-1) MUST trigger T001."""
+        _check(T001_ShiftNegative(), "df['y'] = df['close'].shift(-1)", expect_hit=True)
+
+    def test_reverse_cumsum_triggers_t001(self):
+        """df['ret'][::-1].cumsum()[::-1] computes future cumulative sum."""
+        _check(T001_ShiftNegative(), "future_sum = df['ret'][::-1].cumsum()[::-1]", expect_hit=True)
+
+    def test_manual_lead_numpy_slice_triggers_t001(self):
+        """np.append(arr[1:], np.nan) creates a manual 1-step lookahead lead."""
+        _check(T001_ShiftNegative(), "lead = np.append(arr[1:], np.nan)", expect_hit=True)
+
+    def test_reversed_ffill_triggers_t007(self):
+        """ffill on reversed slice is equivalent to bfill (lookahead)."""
+        _check(T007_BackfillLeak(), "df['filled'] = df.iloc[::-1]['price'].ffill()", expect_hit=True)
+
+    def test_manual_zscore_triggers_t010(self):
+        """Manual z-score (df['x'] - df['x'].mean()) / df['x'].std() on un-split dataset."""
+        _check(T010_FitBeforeSplit(), "df['norm'] = (df['x'] - df['x'].mean()) / df['x'].std()", expect_hit=True)
+
+    def test_fillna_mean_triggers_t010(self):
+        """df.fillna(df.mean()) computes full-sample mean before split."""
+        _check(T010_FitBeforeSplit(), "df = df.fillna(df.mean())", expect_hit=True)
+
+    def test_rank_pct_triggers_t010(self):
+        """df['x'].rank(pct=True) computes full-sample percentile rank across un-split data."""
+        _check(T010_FitBeforeSplit(), "df['r'] = df['x'].rank(pct=True)", expect_hit=True)
+
+    def test_flow_label_into_feature_triggers_f001(self):
+        """df['feat'] = label; model.fit(df[['feat']], y) taints feature space."""
+        code = """
+label = df['close'].shift(-1)
+df['feat'] = label
+model.fit(df[['feat']], y)
+"""
+        tree = ast.parse(code)
+        tracker = TaintTracker()
+        diags = tracker.analyze(tree, code.split('\n'))
+        assert any(d.code == 'F001' for d in diags), "F001 must fire when tainted column flows into fit"
+
+    def test_flow_concat_target_triggers_f001(self):
+        """target = df.shift(-1); X_all = pd.concat([X, target]); model.fit(X_all, y) taints fit."""
+        code = """
+target = df['close'].shift(-1)
+X_all = pd.concat([X, target])
+model.fit(X_all, y)
+"""
+        tree = ast.parse(code)
+        tracker = TaintTracker()
+        diags = tracker.analyze(tree, code.split('\n'))
+        assert any(d.code == 'F001' for d in diags), "F001 must fire when pd.concat propagates taint into fit"
+
+    def test_t002_flags_temporal_context_even_with_iris_name(self):
+        """T002 should flag random split if temporal context exists, regardless of variable name."""
+        code = """
+import pandas as pd
+from sklearn.model_selection import train_test_split
+iris = pd.read_csv('daily_prices.csv', parse_dates=['date'])
+X_train, X_test, y_train, y_test = train_test_split(iris[['feat']], iris['target'])
+"""
+        tree = ast.parse(code)
+        ctx = AnalysisContext(code.split('\n'), "<test>")
+        rule = T002_TrainTestSplit()
+        hits = []
+        for node in ast.walk(tree):
+            hits.extend(rule.check_node(node, ctx))
+        assert len(hits) > 0, "T002 must fire on temporal dataset even if named iris"
