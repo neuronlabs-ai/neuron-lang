@@ -273,7 +273,9 @@ def generate_proof_of_causality_certificate(
     raw_serialized = json.dumps(cert_payload, sort_keys=True).encode("utf-8")
     cert_id = f"CERT-POC-{hashlib.sha256(raw_serialized).hexdigest()[:16].upper()}"
     cert_payload["certificate_id"] = cert_id
-    cert_payload["sha256_digital_seal"] = hashlib.sha256(raw_serialized).hexdigest()
+    seal_hash = hashlib.sha256(raw_serialized).hexdigest()
+    cert_payload["sha256_digital_seal"] = seal_hash
+    cert_payload["sha256_audit_digest"] = seal_hash
 
     return cert_payload
 
@@ -308,10 +310,10 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
 
     lines = [
         "+======================================================================+",
-        "|            PROOF-OF-CAUSALITY(TM) AUDIT CERTIFICATE                  |",
-        "|            PyCheck - Institutional Quant Safety                      |",
+        "|            PROOF-OF-CAUSALITY(TM) AUDIT REPORT                       |",
+        "|            PyCheck - Leakage & Causality Scanner                     |",
         "+======================================================================+",
-        f"  Certificate ID:       {cert['certificate_id']}",
+        f"  Report ID:            {cert['certificate_id']}",
         f"  Audit Status:         {status_symbol}",
         f"  Timestamp (UTC):      {cert['timestamp_utc']}",
         f"  Git Commit SHA:       {cert['git_commit']}",
@@ -325,9 +327,9 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
         f"    * Causal Mode Confounding (C001-C007):      {cat_status if cert['invariants_verified']['causal_intervention_isolated'] else 'FAILED'}",
         f"    * Uncertainty Bounds Guard (U001-U006):    {cat_status if cert['invariants_verified']['uncertainty_guards_present'] else 'FAILED'}",
         "+----------------------------------------------------------------------+",
-        f"  SHA-256 Digital Seal: {cert['sha256_digital_seal']}",
+        f"  SHA-256 Audit Digest: {cert['sha256_digital_seal']}",
         "  Issued by:            Neuron Labs - https://neuron-lab.org/pycheck",
-        "  Next-Gen Sovereign:   NEURON Compile-Time Language (https://neuron-lab.org)",
+        "  Compile-Time Guard:   NEURON Language (https://neuron-lab.org)",
         "+======================================================================+"
     ]
     if cert.get("unscanned_local_imports"):

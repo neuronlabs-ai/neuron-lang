@@ -351,6 +351,13 @@ class TestU001:
     def test_silent_on_predict_proba(self):
         _check(U001_PredictNoUncertainty(), "y = model.predict_proba(X)", expect_hit=False)
 
+    def test_silent_when_uncertainty_handled_in_file(self):
+        code = """
+y = model.predict(X)
+proba = model.predict_proba(X)
+"""
+        _check(U001_PredictNoUncertainty(), code, expect_hit=False)
+
 
 class TestU002:
     def test_fires_on_prediction_threshold(self):

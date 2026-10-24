@@ -4,6 +4,16 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.8] — 2026-10-24
+
+### Changed
+- **Uncertainty Rule Demotion (U001)**:
+  - Downgraded `U001_PredictNoUncertainty` from `severity = "warning"` to `severity = "info"`. Standard inference pipelines with `model.predict()` no longer emit noisy warnings in default runs or CI unless `--info` is explicitly enabled.
+  - Added uncertainty context awareness: files computing prediction intervals, conformal predictions, `predict_proba()`, or standard deviations downstream automatically exempt `.predict()` calls.
+- **Institutional Audit Report Terminology**:
+  - Replaced `"SHA-256 Digital Seal"` with `"SHA-256 Audit Digest"` to accurately reflect cryptographic integrity checksums rather than asymmetric digital signatures.
+  - Updated header from `"PROOF-OF-CAUSALITY(TM) AUDIT CERTIFICATE"` to `"PROOF-OF-CAUSALITY(TM) AUDIT REPORT"`, reinforcing `pycheck`'s positioning as an institutional leakage & causality scanner.
+
 ## [1.0.7] — 2026-10-24
 
 ### Fixed

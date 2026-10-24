@@ -1537,13 +1537,27 @@ class C007_CorrWithoutForDecisions(Rule):
 class U001_PredictNoUncertainty(Rule):
     code = "U001"
     name = "predict_no_uncertainty"
-    severity = "warning"
+    severity = "info"
     category = "UncertaintyIgnored"
+
+    def _has_uncertainty_handling(self, ctx) -> bool:
+        """Check if uncertainty handling exists in the file (predict_proba, intervals, conformal, bootstrap)."""
+        if ctx is None or not getattr(ctx, 'source_lines', None):
+            return False
+        src_text = "\n".join(ctx.source_lines).lower()
+        uncertainty_markers = (
+            'predict_proba', 'predict_std', 'predict_interval', 'conformal',
+            'confidence_interval', 'prediction_interval', 'quantile', 'std',
+            'scipy.stats', 'bootstrap', 'mapie', 'uncertainty'
+        )
+        return any(m in src_text for m in uncertainty_markers)
 
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'predict':
+            if self._has_uncertainty_handling(ctx):
+                return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 "model.predict() returns point estimates without confidence scores",
