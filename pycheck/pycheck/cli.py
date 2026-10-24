@@ -18,6 +18,7 @@ def main():
         print("  --json               Output diagnostics as JSON")
         print("  --gitlab             Output diagnostics in GitLab Code Quality JSON format")
         print("  --audit, -a          Generate a verifiable Proof-of-Causality Audit Certificate")
+        print("                       Exit codes: 0 = verified pass, 1 = leakage detected, 3 = unverifiable (dynamic code or unscanned imports)")
         print("  -o, --output <file>  Write JSON / GitLab report directly to specified file")
         print("  --info               Include info-level diagnostics")
         print("  --quiet              Only show errors (no warnings)")
@@ -157,7 +158,8 @@ def main():
             total_files=len(files_to_scan),
             total_errors=total_errors,
             total_warnings=total_warnings,
-            diagnostics_by_file=all_json_results
+            diagnostics_by_file=all_json_results,
+            scanned_file_paths=files_to_scan
         )
         if output_file:
             if output_file.endswith('.json'):
@@ -206,7 +208,14 @@ def main():
                 print("  --> PyCheck Documentation & CI/CD: https://github.com/neuronlabs-ai/pycheck")
             print("=================================================================\n")
 
-    if total_errors > 0:
+    if is_audit:
+        if cert["audit_status"] == "AUDIT_FAILED_LEAKAGE_DETECTED" or total_errors > 0:
+            sys.exit(1)
+        elif cert["audit_status"].startswith("AUDIT_UNVERIFIABLE"):
+            sys.exit(3)
+        else:
+            sys.exit(0)
+    elif total_errors > 0:
         sys.exit(1)
 
 

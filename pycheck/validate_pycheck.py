@@ -8,6 +8,7 @@ breaking on ordinary safe code?
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,8 +20,8 @@ PKG_ROOT = REPO_ROOT
 
 def run_pycheck(file_path: Path):
     cmd = [sys.executable, "-m", "pycheck.cli", str(file_path), "--json"]
-    env = dict(__import__("os").environ)
-    env["PYTHONPATH"] = str(PKG_ROOT) + (__import__("os").pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PKG_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     res = subprocess.run(cmd, cwd=str(PKG_ROOT), env=env, capture_output=True, text=True)
     payload = {}
     if res.stdout.strip():
@@ -56,8 +57,10 @@ X_scaled = scaler.fit_transform(X)
         },
         "kfold_time_shuffle": {
             "code": '''
+import pandas as pd
 from sklearn.model_selection import KFold
 
+df = pd.read_csv("prices.csv", parse_dates=["date"])
 cv = KFold(n_splits=5, shuffle=True)
 ''',
             "expect": {"T012"},

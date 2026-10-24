@@ -123,6 +123,7 @@ def analyze_code(source: str, filepath: str = "<string>") -> Tuple[List[dict], L
     
     # Phase 2: Rule-based AST analysis (with provenance populated in ctx)
     analyzer = PyCheckAnalyzer(source_lines, filepath)
+    analyzer.ctx.tree = tree
     analyzer.ctx.tainted_vars = {k: v.reason for k, v in tracker.tainted_vars.items()}
     analyzer.ctx.train_vars = tracker.train_vars
     analyzer.ctx.test_vars = tracker.test_vars

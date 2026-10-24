@@ -26,7 +26,7 @@ from pycheck.rules import (
     D002_SilentExceptionSwallow, D003_MagicNumbers,
 )
 from pycheck.flow import TaintTracker
-from pycheck.analyzer import analyze_file
+from pycheck.analyzer import analyze_file, analyze_code
 
 
 def _check(rule, code, expect_hit=True, in_loop=False, loop_var=None):
@@ -956,3 +956,163 @@ X_train, X_test, y_train, y_test = train_test_split(iris[['feat']], iris['target
         for node in ast.walk(tree):
             hits.extend(rule.check_node(node, ctx))
         assert len(hits) > 0, "T002 must fire on temporal dataset even if named iris"
+
+
+class TestExemptionRegressions:
+    """Regression tests verifying that new exemptions do not mask genuine leaks."""
+
+    def test_forward_looking_groupby_shifted_flagged(self):
+        """A forward-looking window (groupby on already future-shifted column) must be flagged."""
+        code = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3], 'date': [1,1,2]})
+df['f_shifted'] = df['close'].shift(-1)
+df['grouped'] = df.groupby('date')['f_shifted'].rank(pct=True)
+model.fit(df[['grouped']], df['close'])
+"""
+        diags, _ = analyze_code(code, "test.py")
+        codes = {d['code'] for d in diags}
+        assert codes & {'T001', 'F001'}, f"Expected T001 or F001, got {codes}"
+
+    def test_rolling_center_true_zscore_flagged(self):
+        """rolling(..., center=True) inside a z-score must be flagged."""
+        code = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3,4,5]})
+z = (df['close'] - df['close'].rolling(5, center=True).mean()) / df['close'].rolling(5, center=True).std()
+"""
+        diags, _ = analyze_code(code, "test.py")
+        codes = {d['code'] for d in diags}
+        assert codes & {'T003', 'T009', 'T010'}, f"Expected lookahead alert, got {codes}"
+
+    def test_expanding_mean_shift_negative_flagged(self):
+        """expanding().mean().shift(-1) inside a normalization must be flagged."""
+        code = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3,4,5]})
+z = (df['close'] - df['close'].expanding().mean().shift(-1)) / df['close'].std()
+"""
+        diags, _ = analyze_code(code, "test.py")
+        codes = {d['code'] for d in diags}
+        assert codes & {'T001', 'T004', 'T010', 'F001'}, f"Expected leak alert, got {codes}"
+
+    def test_y_exemption_clean_and_tainted_x_flagged(self):
+        """fit(X, y=label) is clean, while fit(label, y) and fit(label, label) are flagged."""
+        code_clean = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3,4,5]})
+label = df['close'].shift(-1)
+model.fit(df[['close']], y=label)
+"""
+        diags_clean, _ = analyze_code(code_clean, "clean.py")
+        f001_clean = [d for d in diags_clean if d['code'] == 'F001']
+        assert not f001_clean, f"fit(X, y=label) should be clean from F001, got {f001_clean}"
+
+        code_x_taint = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3,4,5]})
+label = df['close'].shift(-1)
+model.fit(label, y)
+"""
+        diags_x, _ = analyze_code(code_x_taint, "x_taint.py")
+        assert any(d['code'] == 'F001' for d in diags_x), "fit(label, y) must flag F001"
+
+        code_both = """
+import pandas as pd
+df = pd.DataFrame({'close': [1,2,3,4,5]})
+label = df['close'].shift(-1)
+model.fit(label, label)
+"""
+        diags_both, _ = analyze_code(code_both, "both.py")
+        assert any(d['code'] == 'F001' for d in diags_both), "fit(label, label) must flag F001"
+
+
+
+class TestHardenedExemptionsAndSiblings:
+    """Tests for hardened exemption boundaries (cross-sectional groupby, drop methods, qcut/percentile)."""
+
+    def test_groupby_symbol_full_history_is_flagged(self):
+        """df.groupby('symbol') normalizes per-asset across full time history (lookahead bias)."""
+        code = """
+import pandas as pd
+df = pd.DataFrame({'symbol': ['AAPL', 'AAPL', 'MSFT'], 'x': [1.0, 2.0, 3.0]})
+df['norm'] = df.groupby('symbol')['x'].transform(lambda s: (s - s.mean()) / s.std())
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert any(d['code'] == 'T010' for d in diags), "T010 must flag full-sample per-asset normalization"
+
+    def test_groupby_date_cross_sectional_is_clean(self):
+        """df.groupby('date') or ['date', 'sector'] is cross-sectional across assets at single timestamp."""
+        code1 = """
+import pandas as pd
+df = pd.DataFrame({'date': ['2020-01-01', '2020-01-01'], 'sector': ['Tech', 'Tech'], 'ret': [0.01, 0.02]})
+df['rank1'] = df.groupby('date')['ret'].rank(pct=True)
+df['rank2'] = df.groupby(['date', 'sector'])['ret'].rank(pct=True)
+df['rank3'] = df.groupby('ts')['ret'].rank(pct=True)
+df['rank4'] = df.groupby('datetime')['ret'].rank(pct=True)
+"""
+        diags1, _ = analyze_code(code1, "test.py")
+        assert not [d for d in diags1 if d['code'] == 'T010'], f"Cross-sectional groupbys must be clean, got {diags1}"
+
+    def test_target_dropped_via_pop_del_columns_clean(self):
+        """X = df.copy(); target dropped via pop(), del, or drop(columns=var) is clean."""
+        code_pop = """
+X = df.copy()
+X.pop('target')
+model.fit(X, df['target'])
+"""
+        diags_pop, _ = analyze_code(code_pop, "test.py")
+        assert not [d for d in diags_pop if d['code'] == 'C002'], "pop('target') must remove target"
+
+        code_del = """
+X = df.copy()
+del X['target']
+model.fit(X, df['target'])
+"""
+        diags_del, _ = analyze_code(code_del, "test.py")
+        assert not [d for d in diags_del if d['code'] == 'C002'], "del X['target'] must remove target"
+
+        code_var = """
+target_col = 'target'
+X = df.copy()
+X.drop(columns=[target_col], inplace=True)
+model.fit(X, df['target'])
+"""
+        diags_var, _ = analyze_code(code_var, "test.py")
+        assert not [d for d in diags_var if d['code'] == 'C002'], "drop(columns=[target_col]) must remove target"
+
+        code_subset = """
+X = df.copy()
+X = X[['feat1', 'feat2']]
+model.fit(X, df['target'])
+"""
+        diags_subset, _ = analyze_code(code_subset, "test.py")
+        assert not [d for d in diags_subset if d['code'] == 'C002'], "X = X[['feat1', 'feat2']] must remove target"
+
+    def test_target_drop_different_column_still_flagged(self):
+        """X = df.copy(); X.drop(columns=['other']) still leaves target in X and must be flagged."""
+        code_leak = """
+X = df.copy()
+X.drop(columns=['other_col'], inplace=True)
+model.fit(X, df['target'])
+"""
+        diags, _ = analyze_code(code_leak, "test.py")
+        assert any(d['code'] == 'C002' for d in diags), "Dropping other column must leave target flagged"
+
+    def test_quantile_print_clean_and_sibling_leaks_flagged(self):
+        """print(df['x'].quantile(0.5)) is clean; pd.qcut and np.percentile on full sample are flagged."""
+        code_print = "print(df['x'].quantile(0.5))"
+        diags_print, _ = analyze_code(code_print, "test.py")
+        assert not [d for d in diags_print if d['code'] == 'T010'], "print(quantile) must be clean"
+
+        code_qcut = "df['bin'] = pd.qcut(df['x'], 10)"
+        diags_qcut, _ = analyze_code(code_qcut, "test.py")
+        assert any(d['code'] == 'T010' for d in diags_qcut), "pd.qcut on full data must trigger T010"
+
+        code_percentile = "df['clipped'] = df['x'].clip(upper=np.percentile(df['x'], 99))"
+        diags_perc, _ = analyze_code(code_percentile, "test.py")
+        assert any(d['code'] == 'T010' for d in diags_perc), "np.percentile on full data must trigger T010"
+
+        code_train_perc = "df['clipped'] = df['x'].clip(upper=np.percentile(train['x'], 99))"
+        diags_train, _ = analyze_code(code_train_perc, "test.py")
+        assert not [d for d in diags_train if d['code'] == 'T010'], "np.percentile on train data must be clean"

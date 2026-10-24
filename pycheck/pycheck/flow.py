@@ -222,6 +222,30 @@ class TaintTracker:
             if var_name:
                 self.tainted_vars[var_name] = TaintSource(
                     var_name, taint_reason, node.lineno, node.col_offset)
+                # If assigning a tainted variable (e.g. df['feat'] = label) into a non-target column, flag immediately
+                # (Skip if RHS is a direct shift/call already flagged by T-rules to preserve single-rule suppression precision)
+                if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str):
+                    col_name = target.slice.value
+                    target_markers = {'target', 'y', 'label', 'next_close', 'next_price', 'future_return'}
+                    if not any(m in col_name.lower() for m in target_markers):
+                        is_direct_shift_call = isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr in ('shift', 'roll', 'pct_change', 'diff')
+                        if not is_direct_shift_call:
+                            self.diagnostics.append(Diagnostic(
+                                node.lineno, node.col_offset, "error", "F001",
+                                f"Future-tainted variable assigned to feature column '{col_name}': {taint_reason}",
+                                "Do not store future outcomes or labels in feature columns"))
+                elif isinstance(target, ast.Name):
+                    target_markers = {'target', 'y', 'label', 'next_close', 'next_price', 'future_return'}
+                    feature_markers = {'feat', 'feats', 'feature', 'features', 'predictors', 'signals', 'x', 'x_train', 'x_test'}
+                    v_low = var_name.lower()
+                    base_v = v_low.split('_')[0]
+                    if (v_low in feature_markers or base_v in feature_markers) and not any(m in v_low for m in target_markers):
+                        is_direct_shift_call = isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr in ('shift', 'roll', 'pct_change', 'diff')
+                        if not is_direct_shift_call:
+                            self.diagnostics.append(Diagnostic(
+                                node.lineno, node.col_offset, "error", "F001",
+                                f"Future-tainted variable assigned to feature '{var_name}': {taint_reason}",
+                                "Do not use future outcomes or labels to construct feature variables"))
     
     def _check_augassign_taint(self, node: ast.AugAssign):
         """Check if an augmented assignment (+=, etc.) propagates taint."""
@@ -299,11 +323,15 @@ class TaintTracker:
     def _call_taint(self, node: ast.Call) -> Optional[str]:
         """Check if a function call produces tainted output."""
         call_name = self._get_call_name(node)
-        if call_name in ('concat', 'concatenate', 'vstack', 'hstack', 'append', 'merge', 'join'):
+        if call_name in ('concat', 'concatenate', 'vstack', 'hstack', 'append', 'merge', 'join', 'assign'):
             for arg in node.args:
                 arg_t = self._expr_taint(arg)
                 if arg_t:
                     return f"{call_name}() incorporates {arg_t}"
+            for kw in node.keywords:
+                kw_t = self._expr_taint(kw.value)
+                if kw_t:
+                    return f"{call_name}({kw.arg}=...) incorporates {kw_t}"
 
         if isinstance(node.func, ast.Attribute):
             method = node.func.attr
@@ -391,7 +419,20 @@ class TaintTracker:
                 
                 if method in sinks:
                     # Check positional arguments for future taint (F001)
-                    for arg in node.args:
+                    # Exemption: In supervised forecasting, target label (y) is legitimately future-shifted (e.g. y = df['close'].shift(-1)).
+                    # Future taint is strictly forbidden in input features X (arg 0), but permitted in target y (arg 1).
+                    for idx, arg in enumerate(node.args):
+                        # Exemption: In supervised forecasting, the target label (y, label, target) is legitimately future-shifted.
+                        if idx == 1 and method in ('fit', 'fit_predict', 'train', 'partial_fit', 'score'):
+                            arg_name = self._get_var_name(arg)
+                            target_markers = {'y', 'target', 'label', 'labels', 'targets'}
+                            if arg_name and any(m == arg_name.lower() or arg_name.lower().startswith(('y_', 'target_', 'label_')) for m in target_markers):
+                                continue
+                        if idx == 2 and method in ('cross_validate', 'cross_val_score', 'cross_val_predict'):
+                            arg_name = self._get_var_name(arg)
+                            target_markers = {'y', 'target', 'label', 'labels', 'targets'}
+                            if arg_name and any(m == arg_name.lower() or arg_name.lower().startswith(('y_', 'target_', 'label_')) for m in target_markers):
+                                continue
                         arg_taint = self._expr_taint(arg)
                         if arg_taint:
                             self.diagnostics.append(Diagnostic(
@@ -400,9 +441,11 @@ class TaintTracker:
                                 "Ensure training/prediction data is free of future information"))
                     # Check keyword arguments for future taint (F001)
                     for kw in node.keywords:
+                        kw_name = kw.arg if kw.arg else "**kwargs"
+                        if kw_name in ('y', 'target', 'label', 'labels', 'targets') and method in ('fit', 'fit_predict', 'train', 'partial_fit', 'score', 'cross_validate', 'cross_val_score'):
+                            continue
                         kw_taint = self._expr_taint(kw.value)
                         if kw_taint:
-                            kw_name = kw.arg if kw.arg else "**kwargs"
                             self.diagnostics.append(Diagnostic(
                                 node.lineno, node.col_offset, "error", "F001",
                                 f"Tainted data flows into .{method}() via keyword '{kw_name}': {kw_taint}",

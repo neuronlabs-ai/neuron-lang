@@ -202,8 +202,10 @@ Returns structured output for automated pipelines:
 
 ### Exit Codes
 
-- `0` — No errors found
-- `1` — One or more errors found
+- `0` — Verified clean / no errors found
+- `1` — Leakage or safety errors detected
+- `2` — CLI usage syntax error
+- `3` — Unverifiable (opaque dynamic code execution like `eval`/`exec` or unscanned local imports in `--audit` mode)
 
 Clean integration with `make`, `pre-commit`, GitHub Actions, and GitLab CI.
 

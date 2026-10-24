@@ -35,6 +35,71 @@ class Rule:
     def check_node(self, node: ast.AST, context: 'AnalysisContext') -> List[Diagnostic]:
         return []
 
+    def _get_call_name(self, node: ast.AST) -> str:
+        """Extract function/method name from a Call AST node."""
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                return node.func.id
+            if isinstance(node.func, ast.Attribute):
+                return node.func.attr
+        return ""
+
+    def _has_temporal_context(self, ctx: 'AnalysisContext') -> bool:
+        """AST-based temporal context detector immune to substring collisions in comments/words."""
+        if not ctx or not ctx.source_lines:
+            return False
+        tree = getattr(ctx, 'tree', None)
+        if tree is None:
+            try:
+                tree = ast.parse("\n".join(ctx.source_lines))
+                ctx.tree = tree
+            except Exception:
+                return False
+
+        temporal_call_methods = {
+            'rolling', 'expanding', 'shift', 'pct_change', 'diff',
+            'resample', 'merge_asof', 'to_datetime', 'date_range'
+        }
+        temporal_call_names = {'timeseriessplit', 'to_datetime', 'date_range'}
+        temporal_columns = {
+            'date', 'datetime', 'timestamp', 'time', 'day', 'dt',
+            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
+            'adj_close', 'returns', 'ret', 'price', 'prices', 'pnl',
+            'tick', 'bar', 'quotes'
+        }
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr.lower() in temporal_call_methods:
+                    return True
+                if isinstance(node.func, ast.Attribute) and node.func.attr == 'sort_values':
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.lower() in temporal_columns:
+                            return True
+                    for kw in node.keywords:
+                        if kw.arg == 'by' and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str) and kw.value.value.lower() in temporal_columns:
+                            return True
+                if isinstance(node.func, ast.Name) and node.func.id.lower() in temporal_call_names:
+                    return True
+                for kw in node.keywords:
+                    if kw.arg == 'parse_dates':
+                        return True
+            if isinstance(node, ast.Subscript):
+                if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                    if node.slice.value.lower() in temporal_columns:
+                        return True
+                if isinstance(node.slice, (ast.List, ast.Tuple)):
+                    for elt in node.slice.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            if elt.value.lower() in temporal_columns:
+                                return True
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                val_lower = node.value.lower()
+                if any(term in val_lower for term in ('daily_prices', 'stock_prices', 'timeseries', 'time_series', 'ohlcv')):
+                    return True
+
+        return False
+
 
 class AnalysisContext:
     """Shared context for all rules during analysis."""
@@ -208,18 +273,7 @@ class T002_TrainTestSplit(Rule):
                 "Use a temporal split: train = data[:split_idx], test = data[split_idx:], or set shuffle=False")]
         return []
 
-    def _has_temporal_context(self, ctx):
-        if not ctx or not ctx.source_lines:
-            return False
-        source_lower = "\n".join(ctx.source_lines).lower()
-        temporal_markers = (
-            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
-            'price', 'prices', 'return', 'returns', 'pnl', 'tick', 'bar',
-            'date', 'datetime', 'timestamp', 'time_series', 'timeseries',
-            'rolling', 'expanding', 'shift', 'pct_change', 'diff',
-            'resample', 'timeseriessplit', 'merge_asof'
-        )
-        return any(marker in source_lower for marker in temporal_markers)
+
 
     def _get_call_name(self, node):
         if isinstance(node.func, ast.Name):
@@ -349,6 +403,8 @@ class T006_FutureIndexInLoop(Rule):
     category = "TemporalLeak"
 
     def check_node(self, node, ctx):
+        if not ctx or not ctx.in_loop:
+            return []
         if not isinstance(node, ast.Subscript):
             return []
         # Look for .iloc[i + 1] or [i + 1] patterns inside loops
@@ -464,6 +520,75 @@ class T010_FitBeforeSplit(Rule):
     severity = "error"
     category = "TemporalLeak"
 
+    def _is_temporal_groupby(self, call: ast.Call) -> bool:
+        """Check if groupby groups by time/date (cross-sectional at each timestamp) rather than by asset/symbol."""
+        if not call.args:
+            return False
+        first_arg = call.args[0]
+        date_markers = {'date', 'dt', 'time', 'timestamp', 'ts', 'datetime', 'day', 'month', 'year', 'period'}
+
+        def is_date_key(n: ast.AST) -> bool:
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                val = n.value.lower()
+                return any(m == val or m in val.split('_') for m in date_markers)
+            if isinstance(n, ast.Attribute) and n.attr.lower() in ('index', 'date', 'dt'):
+                return True
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and isinstance(n.slice.value, str):
+                val = str(n.slice.value).lower()
+                return any(m == val or m in val.split('_') for m in date_markers)
+            if isinstance(n, ast.Call):
+                name = getattr(n.func, 'id', getattr(n.func, 'attr', ''))
+                if 'grouper' in name.lower():
+                    return True
+            return False
+
+        if isinstance(first_arg, (ast.List, ast.Tuple)):
+            return any(is_date_key(elt) for elt in first_arg.elts)
+        return is_date_key(first_arg)
+
+    def _is_windowed_or_grouped(self, node: ast.AST) -> bool:
+        """Check if an expression involves causal rolling, expanding, or temporal groupby operations (including inside lambdas)."""
+        if node is None:
+            return False
+        # If the window operation is non-causal (e.g. center=True or lookahead shift), do not exempt it
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                if child.func.attr == 'rolling':
+                    if any(kw.arg == 'center' and getattr(kw.value, 'value', None) is True for kw in child.keywords):
+                        return False
+                if child.func.attr == 'shift':
+                    if child.args:
+                        first_arg = child.args[0]
+                        if isinstance(first_arg, ast.UnaryOp) and isinstance(first_arg.op, ast.USub):
+                            return False
+                    for kw in child.keywords:
+                        if kw.arg == 'periods':
+                            if isinstance(kw.value, ast.UnaryOp) and isinstance(kw.value.op, ast.USub):
+                                return False
+
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+                if child.func.attr in ('rolling', 'expanding', 'resample'):
+                    return True
+                if child.func.attr == 'groupby' and self._is_temporal_groupby(child):
+                    return True
+        # Trace upwards to see if inside lambda passed to transform/apply/agg on a groupby/rolling
+        cur = node
+        while cur is not None:
+            parent = getattr(cur, 'parent', None)
+            if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute):
+                if parent.func.attr in ('transform', 'apply', 'agg', 'aggregate'):
+                    for sub in ast.walk(parent.func.value):
+                        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                            if sub.func.attr == 'rolling' and any(kw.arg == 'center' and getattr(kw.value, 'value', None) is True for kw in sub.keywords):
+                                return False
+                            if sub.func.attr in ('rolling', 'expanding', 'resample'):
+                                return True
+                            if sub.func.attr == 'groupby' and self._is_temporal_groupby(sub):
+                                return True
+            cur = parent
+        return False
+
     def _is_train_data(self, node, ctx=None):
         """Recursively check if an AST node represents training data."""
         var_name = self._get_obj_name(node)
@@ -488,37 +613,93 @@ class T010_FitBeforeSplit(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        # B7: fillna with full-sample mean/median before split
+        # Fillna with full-sample mean/median/std before split (exempt rolling/expanding/grouped)
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'fillna':
             for arg in node.args:
                 if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr in ('mean', 'median', 'std'):
-                    if not self._is_train_data(arg.func.value, ctx):
+                    if not self._is_windowed_or_grouped(arg) and not self._is_train_data(arg.func.value, ctx):
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
                             f".fillna({arg.func.attr}()) computes full-sample statistic on full dataset before train/test split",
-                            "Compute mean/median only on training split, then use it to fillna on both train and test")]
+                            "Compute mean/median only on training split, or use rolling windows / ffill()")]
 
-        # B6: manual z-score normalization on un-split dataset
-        if isinstance(node.func, ast.Attribute) and node.func.attr in ('std', 'var'):
-            parent = getattr(node, 'parent', None)
-            if parent is not None and isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div):
-                if not self._is_train_data(node.func.value, ctx):
+        # Manual scaling / normalization on un-split dataset (z-score, min-max, demean)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('std', 'var', 'min', 'max', 'mean'):
+            val = node.func.value
+            if not self._is_windowed_or_grouped(val) and not self._is_train_data(val, ctx):
+                parent = getattr(node, 'parent', None)
+                if parent is not None and isinstance(parent, ast.BinOp):
+                    # Z-score / variance scaling: / std()
+                    if isinstance(parent.op, ast.Div) and node.func.attr in ('std', 'var'):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            "Manual full-sample z-score (.std() / .mean()) computed on un-split dataset leaks test statistics",
+                            "Compute mean and std only on training partition (e.g. X_train.std()), then standardize test partition")]
+                    # Min-Max scaling: / (max - min) or - min()
+                    if node.func.attr in ('min', 'max'):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            "Manual full-sample min-max scaling (.min() / .max()) computed on un-split dataset leaks test extremes",
+                            "Fit MinMaxScaler only on training partition, then transform test partition")]
+                    # Demean: x - x.mean() (when not part of a division by std)
+                    if node.func.attr == 'mean' and isinstance(parent.op, ast.Sub):
+                        grandparent = getattr(parent, 'parent', None)
+                        if not (grandparent is not None and isinstance(grandparent, ast.BinOp) and isinstance(grandparent.op, ast.Div)):
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                "Full-sample demeaning (x - x.mean()) computed on un-split dataset leaks test mean",
+                                "Compute mean only on training partition, then subtract from train and test")]
+
+        # Full-sample quantile clipping / winsorization before split (lookahead)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'quantile':
+            cur = node
+            is_printed = False
+            while cur is not None:
+                p = getattr(cur, 'parent', None)
+                if isinstance(p, ast.Call) and isinstance(p.func, ast.Name) and p.func.id in ('print', 'display'):
+                    is_printed = True
+                    break
+                if isinstance(p, ast.Expr):
+                    is_printed = True
+                    break
+                cur = p
+
+            if not is_printed:
+                val = node.func.value
+                if not self._is_windowed_or_grouped(val) and not self._is_train_data(val, ctx):
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
-                        "Manual full-sample z-score (.std() / .mean()) computed on un-split dataset leaks test statistics",
-                        "Compute mean and std only on training partition (e.g. X_train.std()), then standardize test partition")]
+                        "Full-sample quantile (.quantile()) computed on un-split dataset leaks test statistics",
+                        "Compute quantiles only on training split, then use them to clip/winsorize train and test")]
+
+        # Full-sample quantile binning (pd.qcut()) or percentile calculation (np.percentile())
+        if isinstance(node.func, (ast.Attribute, ast.Name)):
+            c_name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+            if c_name == 'qcut' and node.args:
+                val = node.args[0]
+                if not self._is_train_data(val, ctx):
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        "Full-sample quantile binning (pd.qcut()) on un-split dataset leaks future bin boundaries",
+                        "Compute quantile bins only on training partition, then apply cut points to test data")]
+            if c_name in ('percentile', 'nanpercentile') and node.args:
+                val = node.args[0]
+                if not self._is_train_data(val, ctx):
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        f"Full-sample percentile (np.{c_name}()) computed on un-split dataset leaks test statistics",
+                        "Compute percentiles only on training partition, then use thresholds to clip")]
 
         # Full-sample rank normalization before split (lookahead)
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'rank':
             val = node.func.value
-            is_windowed = isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute) and val.func.attr in ('rolling', 'expanding')
-            if not is_windowed and not self._is_train_data(val, ctx):
+            if not self._is_windowed_or_grouped(val) and not self._is_train_data(val, ctx):
                 is_pct = any(kw.arg == 'pct' and getattr(kw.value, 'value', None) is True for kw in node.keywords)
                 if is_pct:
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         ".rank(pct=True) computes full-sample percentile rank across un-split dataset (lookahead bias)",
-                        "Compute percentile rank within rolling windows or fit quantiles on training split only")]
+                        "Compute percentile rank within rolling windows, group by date, or fit quantiles on training split only")]
 
         if isinstance(node.func, ast.Attribute) and node.func.attr in ('fit', 'fit_transform'):
             # Only flag on objects that look like ML preprocessors/models
@@ -543,6 +724,29 @@ class T010_FitBeforeSplit(Rule):
                 return []
 
             if node.func.attr == 'fit':
+                preprocessor_markers = ('scale', 'scaler', 'pca', 'select', 'encoder', 'pipe', 'pipeline', 'imput', 'trans', 'norm')
+                is_preproc = obj_name and any(m in obj_name.lower() for m in preprocessor_markers)
+                
+                # Preprocessors (PCA, SelectKBest, Scaler) fit on full data before CV/split are definite leaks
+                if is_preproc:
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, self.severity, self.code,
+                        f"Preprocessor '{obj_name}.fit()' on full dataset leaks test statistics",
+                        "Fit preprocessor only on training partition (e.g. inside cross-validation pipeline)")]
+
+                # For final ML models (model.fit), only warn if a train/test split, CV, or test partition exists in file
+                has_split_or_test = False
+                if ctx is not None:
+                    if getattr(ctx, 'has_train_test_split', False) or getattr(ctx, 'split_line', None) is not None:
+                        has_split_or_test = True
+                    if getattr(ctx, 'test_vars', None):
+                        has_split_or_test = True
+                    # Check for CV in source lines
+                    src_text = "\n".join(ctx.source_lines)
+                    if any(cv_marker in src_text for cv_marker in ('cross_val', 'cross_validate', 'KFold', 'TimeSeriesSplit', 'cv=')):
+                        has_split_or_test = True
+                if not has_split_or_test:
+                    return []
                 return [Diagnostic(
                     node.lineno, node.col_offset, "warning", self.code,
                     ".fit() may be called on the full dataset including test data",
@@ -559,6 +763,8 @@ class T010_FitBeforeSplit(Rule):
             return node.id
         if isinstance(node, ast.Attribute):
             return node.attr
+        if isinstance(node, ast.Call):
+            return self._get_call_name(node)
         return None
 
 
@@ -622,18 +828,7 @@ class T012_KFoldTimeSeries(Rule):
                 "Use TimeSeriesSplit() for temporal cross-validation")]
         return []
 
-    def _has_temporal_context(self, ctx):
-        if not ctx or not ctx.source_lines:
-            return False
-        source_lower = "\n".join(ctx.source_lines).lower()
-        temporal_markers = (
-            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
-            'price', 'prices', 'return', 'returns', 'pnl', 'tick', 'bar',
-            'date', 'datetime', 'timestamp', 'time_series', 'timeseries',
-            '.rolling', '.expanding', '.shift', 'pct_change', '.diff',
-            'resample', 'timeseriessplit', 'merge_asof'
-        )
-        return any(marker in source_lower for marker in temporal_markers)
+
 
 
 class T013_ResampleBeforeSplit(Rule):
@@ -1020,7 +1215,98 @@ class C002_TargetInFeatures(Rule):
     severity = "error"
     category = "CausalConfusion"
 
+    def _is_target_removed(self, node: ast.AST, var_name: str, target_col: str) -> bool:
+        """Check if target_col was dropped or removed from var_name via drop, pop, del, or column selection."""
+        cur = node
+        while getattr(cur, 'parent', None) is not None:
+            cur = cur.parent
+        root = cur
+        if root is None:
+            return False
+
+        for n in ast.walk(root):
+            # del X['target'] or del X[col_var]
+            if isinstance(n, ast.Delete):
+                for target in n.targets:
+                    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id == var_name:
+                        if isinstance(target.slice, ast.Constant) and str(target.slice.value) == target_col:
+                            return True
+                        if isinstance(target.slice, ast.Name):
+                            return True
+            # X.pop('target') or X.pop(col_var)
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'pop':
+                if isinstance(n.func.value, ast.Name) and n.func.value.id == var_name:
+                    if n.args:
+                        arg = n.args[0]
+                        if isinstance(arg, ast.Constant) and str(arg.value) == target_col:
+                            return True
+                        if isinstance(arg, ast.Name):
+                            return True
+            # X.drop(...)
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'drop':
+                caller = getattr(n.func, 'value', None)
+                if isinstance(caller, ast.Name) and caller.id == var_name:
+                    def matches_target(arg):
+                        if isinstance(arg, ast.Constant) and str(arg.value) == target_col:
+                            return True
+                        if isinstance(arg, ast.Name):
+                            return True
+                        if isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
+                            return any(matches_target(e) for e in arg.elts)
+                        return False
+                    for a in n.args:
+                        if matches_target(a):
+                            return True
+                    for kw in n.keywords:
+                        if kw.arg in ('columns', 'labels') and matches_target(kw.value):
+                            return True
+            # X = X[['feat1', 'feat2']]
+            elif isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name) and t.id == var_name:
+                        if isinstance(n.value, ast.Subscript):
+                            sl = n.value.slice
+                            if isinstance(sl, (ast.List, ast.Tuple)):
+                                cols = [e.value for e in sl.elts if isinstance(e, ast.Constant)]
+                                if cols and target_col not in cols:
+                                    return True
+        return False
+
     def check_node(self, node, ctx):
+        # 1. Check model.fit(X, df['target']) where X is df or a copy of df
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ('fit', 'fit_predict', 'train'):
+            if len(node.args) >= 2:
+                arg0, arg1 = node.args[0], node.args[1]
+                target_col, target_df = None, None
+                if isinstance(arg1, ast.Subscript):
+                    if isinstance(arg1.value, ast.Name):
+                        target_df = arg1.value.id
+                    if isinstance(arg1.slice, ast.Constant):
+                        target_col = str(arg1.slice.value)
+                if target_df and target_col:
+                    arg0_name = None
+                    if isinstance(arg0, ast.Name):
+                        arg0_name = arg0.id
+                        if arg0_name == target_df:
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                f"Target column '{target_col}' is included in feature input '{arg0_name}' (entire dataframe passed to fit)",
+                                f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
+                        if ctx is not None and hasattr(ctx, 'assignments') and arg0_name in ctx.assignments:
+                            rhs = ctx.assignments[arg0_name]
+                            if isinstance(rhs, ast.Name) and rhs.id == target_df:
+                                if not self._is_target_removed(node, arg0_name, target_col):
+                                    return [Diagnostic(
+                                        node.lineno, node.col_offset, self.severity, self.code,
+                                        f"Target column '{target_col}' is included in feature input '{arg0_name}' (alias of '{target_df}')",
+                                        f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
+                            if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and rhs.func.attr == 'copy':
+                                if isinstance(rhs.func.value, ast.Name) and rhs.func.value.id == target_df:
+                                    if not self._is_target_removed(node, arg0_name, target_col):
+                                        return [Diagnostic(
+                                            node.lineno, node.col_offset, self.severity, self.code,
+                                            f"Target column '{target_col}' is included in feature input '{arg0_name}' (copy of '{target_df}' without dropping target)",
+                                            f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
         if not isinstance(node, ast.Subscript):
             return []
 

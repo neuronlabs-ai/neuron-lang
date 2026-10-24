@@ -4,6 +4,18 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.6] — 2026-10-24
+
+### Added
+- **Target `y` Exemption in Forecasting Sinks (F001)**: In supervised model calls (`fit`, `fit_predict`, `train`, `score`), the target label at position 1 or keyword (`y`, `target`, `label`) is recognized as a valid future forecasting target (e.g. `y = df['close'].shift(-1)`), while remaining strictly forbidden in feature matrices `X` (`fit(label, label)` or `fit(label, y)` are strictly flagged).
+- **Causal Windowed & Cross-Sectional Normalization Exemption (T010)**: Normalizations computed over causal windows or cross-sections (`rolling().mean()/.std()`, `expanding()`, `resample()`, `df.groupby('date')['ret'].rank(pct=True)`), including inside `.transform()` and `.apply()` lambdas, are recognized as causal and exempt from full-sample `T010`. Non-causal windows (`center=True` or future-shifted rollings) remain strictly flagged.
+- **AST-Based Temporal Context Detection (T012, T002)**: Replaced substring text matching with AST syntactic inspection (checking datetime method calls, date column indexing, and `parse_dates` keywords), eliminating false positive time-series classification on iid scripts containing words like `"flower"`, `"allow"`, or `.lower()`.
+- **Full-Sample Scaling & Normalization Leak Detection (T010)**: Added AST pattern matching for un-split full-sample min-max scaling (`(x - min)/(max - min)`), max-scaling (`x / x.max()`), quantile clipping (`.quantile()`), centering (`x - x.mean()`), and normalization inside `.apply(lambda)`.
+- **Derived Feature Taint Detection (F001)**: Added tracking for future-tainted variables assigned to feature variables (e.g. `feats = label.rolling(5).mean()`), catching lookahead feature construction even without a local `.fit()` sink.
+- **Target Column Alias Tracking (C002)**: Detects target columns riding into feature data via `df.copy()` without dropping the target.
+- **Audit Opaque Code Detection**: `--audit` uses AST inspection to catch runtime dynamic code execution (`eval()`, `exec()`), issuing an `[UNVERIFIABLE - DYNAMIC CODE DETECTED]` certificate and non-zero exit code instead of false clean passes.
+- **Exemption Regression Suite**: Added comprehensive regression tests verifying that window exemptions never suppress forward-looking windows, centered rollings, negative shifts in normalizations, or tainted feature inputs.
+
 ## [1.0.5] — 2026-10-24
 
 ### Fixed
