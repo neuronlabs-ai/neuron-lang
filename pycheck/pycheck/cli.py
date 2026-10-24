@@ -93,6 +93,7 @@ def main():
             print(f"No Python (.py) or notebook (.ipynb) files found in {filepath}")
         sys.exit(0)
 
+    syntax_errors = []
     total_errors = 0
     total_warnings = 0
     files_with_issues = 0
@@ -105,7 +106,7 @@ def main():
         except SyntaxError as e:
             if not is_json and (not is_gitlab or output_file):
                 print(f"Syntax error in {f_path}: {e}")
-            total_errors += 1
+            syntax_errors.append((f_path, str(e)))
             continue
         except Exception as e:
             if not is_json and (not is_gitlab or output_file):
@@ -159,7 +160,8 @@ def main():
             total_errors=total_errors,
             total_warnings=total_warnings,
             diagnostics_by_file=all_json_results,
-            scanned_file_paths=files_to_scan
+            scanned_file_paths=files_to_scan,
+            syntax_errors=syntax_errors
         )
         if output_file:
             if output_file.endswith('.json'):
@@ -215,6 +217,8 @@ def main():
             sys.exit(3)
         else:
             sys.exit(0)
+    elif syntax_errors:
+        sys.exit(2)
     elif total_errors > 0:
         sys.exit(1)
 

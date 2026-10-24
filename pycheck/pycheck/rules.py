@@ -289,10 +289,29 @@ class T003_RollingBeforeSplit(Rule):
     severity = "warning"
     category = "TemporalLeak"
 
+    def _is_causal_rolling_zscore(self, node: ast.Call) -> bool:
+        # If center=True is explicitly passed, let T003/T009 flag it
+        for kw in node.keywords:
+            if kw.arg == 'center':
+                if isinstance(kw.value, ast.Constant) and bool(kw.value.value) is True:
+                    return False
+        # If node is part of a causal rolling z-score or standardization operation
+        # Pattern: (x - roll.mean()) / roll.std()
+        p = getattr(node, 'parent', None)
+        while p is not None:
+            if isinstance(p, ast.BinOp) and isinstance(p.op, (ast.Sub, ast.Div)):
+                return True
+            if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+                break
+            p = getattr(p, 'parent', None)
+        return False
+
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'rolling':
+            if self._is_causal_rolling_zscore(node):
+                return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 ".rolling() computed on full dataset may include future data",
@@ -525,7 +544,7 @@ class T010_FitBeforeSplit(Rule):
         if not call.args:
             return False
         first_arg = call.args[0]
-        date_markers = {'date', 'dt', 'time', 'timestamp', 'ts', 'datetime', 'day', 'month', 'year', 'period'}
+        date_markers = {'date', 'dt', 'time', 'timestamp', 'ts', 'datetime', 'period'}
 
         def is_date_key(n: ast.AST) -> bool:
             if isinstance(n, ast.Constant) and isinstance(n.value, str):
@@ -634,7 +653,7 @@ class T010_FitBeforeSplit(Rule):
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
                             "Manual full-sample z-score (.std() / .mean()) computed on un-split dataset leaks test statistics",
-                            "Compute mean and std only on training partition (e.g. X_train.std()), then standardize test partition")]
+                            "Compute statistics only on training partition (e.g. X_train.std()), or use expanding windows / causal cross-sectional adjustment (e.g. groupby(['date', ...]))")]
                     # Min-Max scaling: / (max - min) or - min()
                     if node.func.attr in ('min', 'max'):
                         return [Diagnostic(
@@ -1215,8 +1234,62 @@ class C002_TargetInFeatures(Rule):
     severity = "error"
     category = "CausalConfusion"
 
+    def _get_var_origin(self, root: ast.AST, var_name: str, visited=None) -> str:
+        """Trace variable back to its source dataframe across assignments, copies, and drops."""
+        if visited is None:
+            visited = set()
+        if var_name in visited:
+            return var_name
+        visited.add(var_name)
+
+        for n in ast.walk(root):
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name) and t.id == var_name:
+                        cur = n.value
+                        while isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute):
+                            cur = cur.func.value
+                        if isinstance(cur, ast.Name):
+                            if cur.id != var_name:
+                                parent = self._get_var_origin(root, cur.id, visited)
+                                return parent or cur.id
+        return var_name
+
+    def _call_drops_target(self, call_node: ast.Call, target_col: str, root: Optional[ast.AST] = None) -> bool:
+        """Check if a specific .drop() call drops target_col."""
+        def resolve_name_val(name_id: str) -> Optional[str]:
+            if root is not None:
+                for stmt in ast.walk(root):
+                    if isinstance(stmt, ast.Assign):
+                        for t in stmt.targets:
+                            if isinstance(t, ast.Name) and t.id == name_id:
+                                if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                                    return stmt.value.value
+            return None
+
+        def matches_target(arg):
+            if isinstance(arg, ast.Constant) and str(arg.value) == target_col:
+                return True
+            if isinstance(arg, ast.Name):
+                if arg.id == target_col or 'target' in arg.id.lower() or arg.id in ('y', 'label', 'labels'):
+                    return True
+                val = resolve_name_val(arg.id)
+                if val == target_col:
+                    return True
+            if isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
+                return any(matches_target(e) for e in arg.elts)
+            return False
+
+        for a in call_node.args:
+            if matches_target(a):
+                return True
+        for kw in call_node.keywords:
+            if kw.arg in ('columns', 'labels') and matches_target(kw.value):
+                return True
+        return False
+
     def _is_target_removed(self, node: ast.AST, var_name: str, target_col: str) -> bool:
-        """Check if target_col was dropped or removed from var_name via drop, pop, del, or column selection."""
+        """Check if target_col was dropped or removed from var_name, and not re-added."""
         cur = node
         while getattr(cur, 'parent', None) is not None:
             cur = cur.parent
@@ -1224,43 +1297,40 @@ class C002_TargetInFeatures(Rule):
         if root is None:
             return False
 
+        target_removed = False
+
         for n in ast.walk(root):
-            # del X['target'] or del X[col_var]
-            if isinstance(n, ast.Delete):
+            # 1. Drop calls anywhere on var_name or assigned to var_name
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'drop':
+                caller = getattr(n.func, 'value', None)
+                caller_name = getattr(caller, 'id', None)
+                is_var_drop = (caller_name == var_name)
+                if not is_var_drop:
+                    for stmt in ast.walk(root):
+                        if isinstance(stmt, ast.Assign) and stmt.value == n:
+                            for t in stmt.targets:
+                                if isinstance(t, ast.Name) and t.id == var_name:
+                                    is_var_drop = True
+                if is_var_drop and self._call_drops_target(n, target_col, root):
+                    target_removed = True
+
+            # 2. del X['target'] or del X[target_col]
+            elif isinstance(n, ast.Delete):
                 for target in n.targets:
                     if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id == var_name:
                         if isinstance(target.slice, ast.Constant) and str(target.slice.value) == target_col:
-                            return True
-                        if isinstance(target.slice, ast.Name):
-                            return True
-            # X.pop('target') or X.pop(col_var)
+                            target_removed = True
+                        if isinstance(target.slice, ast.Name) and target.slice.id == target_col:
+                            target_removed = True
+
+            # 3. X.pop('target')
             elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'pop':
-                if isinstance(n.func.value, ast.Name) and n.func.value.id == var_name:
-                    if n.args:
-                        arg = n.args[0]
-                        if isinstance(arg, ast.Constant) and str(arg.value) == target_col:
-                            return True
-                        if isinstance(arg, ast.Name):
-                            return True
-            # X.drop(...)
-            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'drop':
                 caller = getattr(n.func, 'value', None)
                 if isinstance(caller, ast.Name) and caller.id == var_name:
-                    def matches_target(arg):
-                        if isinstance(arg, ast.Constant) and str(arg.value) == target_col:
-                            return True
-                        if isinstance(arg, ast.Name):
-                            return True
-                        if isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
-                            return any(matches_target(e) for e in arg.elts)
-                        return False
-                    for a in n.args:
-                        if matches_target(a):
-                            return True
-                    for kw in n.keywords:
-                        if kw.arg in ('columns', 'labels') and matches_target(kw.value):
-                            return True
-            # X = X[['feat1', 'feat2']]
+                    if n.args and (isinstance(n.args[0], ast.Constant) and str(n.args[0].value) == target_col or isinstance(n.args[0], ast.Name) and n.args[0].id == target_col):
+                        target_removed = True
+
+            # 4. Column selection: X = X[['feat1', 'feat2']] or X = df[['feat1', 'feat2']]
             elif isinstance(n, ast.Assign):
                 for t in n.targets:
                     if isinstance(t, ast.Name) and t.id == var_name:
@@ -1269,11 +1339,26 @@ class C002_TargetInFeatures(Rule):
                             if isinstance(sl, (ast.List, ast.Tuple)):
                                 cols = [e.value for e in sl.elts if isinstance(e, ast.Constant)]
                                 if cols and target_col not in cols:
-                                    return True
-        return False
+                                    target_removed = True
+
+        # Check if target was subsequently re-added via assign(target=...) or X['target'] = ...
+        if target_removed:
+            for n in ast.walk(root):
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'assign':
+                    caller = getattr(n.func, 'value', None)
+                    if isinstance(caller, ast.Name) and caller.id == var_name:
+                        if any(kw.arg == target_col for kw in n.keywords):
+                            return False  # Target re-added!
+                elif isinstance(n, ast.Assign):
+                    for t in n.targets:
+                        if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == var_name:
+                            if isinstance(t.slice, ast.Constant) and str(t.slice.value) == target_col:
+                                return False  # Target re-added!
+
+        return target_removed
 
     def check_node(self, node, ctx):
-        # 1. Check model.fit(X, df['target']) where X is df or a copy of df
+        # 1. Check model.fit(X, df['target']) where X is df or derived from df
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ('fit', 'fit_predict', 'train'):
             if len(node.args) >= 2:
                 arg0, arg1 = node.args[0], node.args[1]
@@ -1287,26 +1372,17 @@ class C002_TargetInFeatures(Rule):
                     arg0_name = None
                     if isinstance(arg0, ast.Name):
                         arg0_name = arg0.id
-                        if arg0_name == target_df:
-                            return [Diagnostic(
-                                node.lineno, node.col_offset, self.severity, self.code,
-                                f"Target column '{target_col}' is included in feature input '{arg0_name}' (entire dataframe passed to fit)",
-                                f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
-                        if ctx is not None and hasattr(ctx, 'assignments') and arg0_name in ctx.assignments:
-                            rhs = ctx.assignments[arg0_name]
-                            if isinstance(rhs, ast.Name) and rhs.id == target_df:
-                                if not self._is_target_removed(node, arg0_name, target_col):
-                                    return [Diagnostic(
-                                        node.lineno, node.col_offset, self.severity, self.code,
-                                        f"Target column '{target_col}' is included in feature input '{arg0_name}' (alias of '{target_df}')",
-                                        f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
-                            if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and rhs.func.attr == 'copy':
-                                if isinstance(rhs.func.value, ast.Name) and rhs.func.value.id == target_df:
-                                    if not self._is_target_removed(node, arg0_name, target_col):
-                                        return [Diagnostic(
-                                            node.lineno, node.col_offset, self.severity, self.code,
-                                            f"Target column '{target_col}' is included in feature input '{arg0_name}' (copy of '{target_df}' without dropping target)",
-                                            f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
+                        cur = node
+                        while getattr(cur, 'parent', None) is not None:
+                            cur = cur.parent
+                        root = cur
+                        origin_df = self._get_var_origin(root, arg0_name)
+                        if origin_df == target_df:
+                            if not self._is_target_removed(node, arg0_name, target_col):
+                                return [Diagnostic(
+                                    node.lineno, node.col_offset, self.severity, self.code,
+                                    f"Target column '{target_col}' is included in feature input '{arg0_name}' (derived from '{target_df}' without dropping target)",
+                                    f"Drop target column before training: {arg0_name}.drop(columns=['{target_col}'])")]
         if not isinstance(node, ast.Subscript):
             return []
 

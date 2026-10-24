@@ -4,6 +4,23 @@ All notable changes to `pycheck-neuron` are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.7] — 2026-10-24
+
+### Fixed
+- **Target In Features Drop Verification (C002)**:
+  - Enhanced dataframe lineage tracking across variable assignments, copies, and intermediate transformations.
+  - Fixed drop leniency: reassigned drops of unrelated columns (e.g. `X = df.drop(columns=['id'])` or `X = df.drop(['id'], axis=1)`) followed by `fit(X, df['target'])` are strictly flagged because the target remains in `X`.
+  - Added support for target removal via `del X['target']`, `del X[target_col]`, `X.pop('target')`, `drop(columns=[target_col])`, and explicit column selection (`X = df[['feat1', 'feat2']]`).
+  - Added evasion prevention: re-adding the target column downstream via `X.assign(target=...)` or `X['target'] = ...` after a prior drop is detected and flagged.
+- **Audit Certificate Syntax Error Handling**:
+  - Syntax errors in audited files are now cleanly classified as `[UNVERIFIABLE - SYNTAX ERROR: invalid Python syntax]` with institutional exit code 3, rather than incorrectly declaring audit failure or leakage detection.
+- **Causal Rolling Window Normalization (T003)**:
+  - Maintained `T003` as a `warning` for bare un-split rolling windows (`df.rolling().mean()`), while exempting causal rolling z-scores / standardizations (`(x - roll.mean()) / roll.std()`).
+  - Preserved `T009` strict error flagging for centered lookahead windows (`center=True`).
+- **Dynamic Code & Calendar Groupby Auditing**:
+  - Added `globals()`, `locals()`, and `vars()` to opaque dynamic construct detection for audit verification gating (exit code 3).
+  - Excluded cyclical calendar keywords (`'month'`, `'day'`, `'year'`) from temporal cross-section markers in `T010`, ensuring multi-year cyclical groupings (`df.groupby('month')`) are properly flagged.
+
 ## [1.0.6] — 2026-10-24
 
 ### Added
@@ -34,17 +51,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added granular breakdown for warnings vs critical errors to ensure accurate verification status.
   - Exposed programmatic `analyze_code(source: str)` API.
 - **Test Suite**: Expanded test suite to 142 unit tests (100% pass rate). 23/25 adversarial stress leaks caught (92%), and 13/13 clean isolated cases pass with 0 false positives.
-
----
-
-## [1.0.3] — 2026-10-19
-
-### Added
-- **Rule `T018` (`insample_target_encoding`)**:
-  - Detects in-sample self-target leakage where a training sample's own label influences its encoded feature (e.g. `train.groupby('category')['target'].transform('mean')`).
-  - Detects `TargetEncoder(cv=None)` which disables out-of-fold cross-validation.
-  - Distinguishes unsafe in-sample self-target encoding from legitimate Out-of-Fold (OOF) K-Fold cross-validation loops (`val['category'].map(fit.groupby(...)['target'].mean())`) and safe holdout/test inference mappings (`test['category'].map(train.groupby(...)['target'].mean())`).
-  - Expands PyCheck suite to **33 rules** with 105 passing automated tests.
 
 ---
 

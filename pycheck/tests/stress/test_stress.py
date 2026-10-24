@@ -212,3 +212,146 @@ def test_exemption_negative_groupby_symbol():
     code = "df['norm'] = df.groupby('symbol')['x'].transform(lambda s: (s - s.mean()) / s.std())\n"
     diags, _ = analyze_code(code, "neg_groupby.py")
     assert any(d['code'] == 'T010' for d in diags)
+
+
+def test_audit_unverifiable_on_syntax_error(tmp_path):
+    f = tmp_path / "syntax_err.py"
+    f.write_text("def broken_code(\n")
+    r = run(str(f), "--audit")
+    assert "AUDIT FAILED" not in r.stdout
+    assert "UNVERIFIABLE - SYNTAX ERROR" in r.stdout
+    assert r.returncode == 3
+
+
+def test_c002_drop_unrelated_column_reassigned_flagged():
+    code1 = "X = df.drop(columns=['id'])\nmodel.fit(X, df['target'])\n"
+    diags1, _ = analyze_code(code1, "test.py")
+    assert any(d['code'] == 'C002' for d in diags1), "X = df.drop(columns=['id']) must trigger C002"
+
+    code2 = "X = df.drop(['id'], axis=1)\nmodel.fit(X, df['target'])\n"
+    diags2, _ = analyze_code(code2, "test.py")
+    assert any(d['code'] == 'C002' for d in diags2), "X = df.drop(['id'], axis=1) must trigger C002"
+
+    code3 = "X = df.copy()\nX = X.drop(columns=['other'])\nmodel.fit(X, df['target'])\n"
+    diags3, _ = analyze_code(code3, "test.py")
+    assert any(d['code'] == 'C002' for d in diags3), "X = X.drop(columns=['other']) must trigger C002"
+
+
+def test_c002_target_dropped_and_readded_with_assign_flagged():
+    code = "X = df.drop(columns=['target'])\nX = X.assign(target=df['target'])\nmodel.fit(X, df['target'])\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert any(d['code'] == 'C002' for d in diags), "Re-adding target with assign must trigger C002"
+
+
+def test_groupby_month_over_all_years_flagged():
+    code = "df['norm'] = df.groupby('month')['x'].transform(lambda s: (s - s.mean()) / s.std())\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert any(d['code'] == 'T010' for d in diags), "groupby('month') across all years must trigger T010"
+
+
+def test_audit_unverifiable_on_globals(tmp_path):
+    f = tmp_path / "globals_case.py"
+    f.write_text("d = globals()\n")
+    r = run(str(f), "--audit")
+    assert "UNVERIFIABLE - DYNAMIC CODE" in r.stdout
+    assert r.returncode == 3
+
+def test_causal_rolling_zscore_is_clean():
+    """Causal rolling z-score (x - roll.mean()) / roll.std() does not trigger T003."""
+    code = "z = (df['x'] - df['x'].rolling(20).mean()) / df['x'].rolling(20).std()\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'T003'], "Causal rolling z-score should not trigger T003"
+
+
+def test_bare_rolling_triggers_t003_warning():
+    """Bare .rolling().mean() triggers T003 as a warning."""
+    code = "df['roll'] = df['price'].rolling(10).mean()\n"
+    diags, _ = analyze_code(code, "test.py")
+    t003_diags = [d for d in diags if d['code'] == 'T003']
+    assert len(t003_diags) == 1
+    assert t003_diags[0]['severity'] == 'warning'
+
+
+def test_c002_reassigned_drop_target_clean():
+    """X = df.drop(columns=['target']) followed by fit(X, df['target']) is clean."""
+    code = "X = df.drop(columns=['target'])\nmodel.fit(X, df['target'])\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'C002'], "Target was dropped, so C002 must not trigger"
+
+
+def test_c002_reassigned_drop_positional_axis1_clean():
+    """X = df.drop(['target'], axis=1) followed by fit(X, df['target']) is clean."""
+    code = "X = df.drop(['target'], axis=1)\nmodel.fit(X, df['target'])\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'C002'], "Target was dropped via axis=1, C002 must not trigger"
+
+def test_c002_unrelated_assign_after_drop_stays_clean():
+    """Drop of target followed by unrelated column assignment like X['ret_z'] = ... stays clean."""
+    code = """
+X = df.drop(columns=['target'])
+X['ret_z'] = df['close'] * 2
+model.fit(X, df['target'])
+"""
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'C002'], "Unrelated column assignment after drop must stay clean"
+
+
+def test_c002_drop_on_different_frame_flagged():
+    """Drop of target on df2 does not remove target from X."""
+    code = """
+df2 = df.copy()
+df2.drop(columns=['target'], inplace=True)
+X = df.copy()
+model.fit(X, df['target'])
+"""
+    diags, _ = analyze_code(code, "test.py")
+    assert any(d['code'] == 'C002' for d in diags), "Drop on df2 must not count as removing target from X"
+
+
+def test_t003_differing_rolling_windows_causal_zscore_clean():
+    """Differing windows with min_periods and closed='both' is causal and clean."""
+    code = "z = (df['x'] - df['x'].rolling(20, min_periods=5).mean()) / df['x'].rolling(60, closed='both').std()\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'T003'], "Differing causal rolling windows must stay clean"
+
+
+def test_t003_center_true_in_either_window_flagged():
+    """center=True in either window of rolling z-score is flagged."""
+    code1 = "z = (df['x'] - df['x'].rolling(20, center=True).mean()) / df['x'].rolling(60).std()\n"
+    diags1, _ = analyze_code(code1, "test1.py")
+    codes1 = {d['code'] for d in diags1}
+    assert codes1 & {'T003', 'T009'}, "center=True in first term must be flagged"
+
+    code2 = "z = (df['x'] - df['x'].rolling(20).mean()) / df['x'].rolling(60, center=True).std()\n"
+    diags2, _ = analyze_code(code2, "test2.py")
+    codes2 = {d['code'] for d in diags2}
+    assert codes2 & {'T003', 'T009'}, "center=True in second term must be flagged"
+
+
+def test_groupby_date_and_month_stays_clean():
+    """groupby(['date', 'month']) has a temporal date key and stays clean."""
+    code = "df['norm'] = df.groupby(['date', 'month'])['x'].transform(lambda s: (s - s.mean()) / s.std())\n"
+    diags, _ = analyze_code(code, "test.py")
+    assert not [d for d in diags if d['code'] == 'T010'], "groupby(['date', 'month']) must stay clean"
+
+
+def test_audit_locals_logging_helper_clean(tmp_path):
+    """locals() and vars() inside logging helpers do not invalidate audit certificate."""
+    f = tmp_path / "logging_helper.py"
+    f.write_text("""
+def log_step(name):
+    print("Executing", name, locals())
+    return vars()
+""")
+    r = run(str(f), "--audit")
+    assert "[VERIFIED PASS]" in r.stdout
+    assert r.returncode == 0
+
+
+def test_audit_locals_subscript_unverifiable(tmp_path):
+    """Dynamic lookup via locals()['var'] makes audit unverifiable."""
+    f = tmp_path / "dyn_lookup.py"
+    f.write_text("x = locals()['feature']\n")
+    r = run(str(f), "--audit")
+    assert "UNVERIFIABLE - DYNAMIC CODE" in r.stdout
+    assert r.returncode == 3

@@ -55,12 +55,39 @@ def get_git_metadata(repo_path: str) -> Dict[str, str]:
 
 def find_opaque_constructs(tree: ast.AST) -> List[str]:
     """Detect dynamic or opaque code execution constructs that evade static analysis."""
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent
+
     reasons = []
     for n in ast.walk(tree):
         if isinstance(n, ast.Call):
             if isinstance(n.func, ast.Name):
                 if n.func.id in ('eval', 'exec', '__import__'):
                     reasons.append(f"{n.func.id}() dynamic call")
+                elif n.func.id == 'globals':
+                    parent = getattr(n, 'parent', None)
+                    is_log = False
+                    if parent is not None and isinstance(parent, ast.Call):
+                        p_func = getattr(parent.func, 'id', getattr(parent.func, 'attr', ''))
+                        if p_func in ('print', 'display', 'debug', 'info', 'warning', 'error', 'repr', 'str'):
+                            is_log = True
+                    if not is_log:
+                        reasons.append("globals() dynamic call")
+                elif n.func.id in ('locals', 'vars'):
+                    # Narrow rule: only flag when result is used dynamically (subscript, call, getattr)
+                    # Harmless logging/repr (logger.info(locals()), print(vars())) stays clean
+                    parent = getattr(n, 'parent', None)
+                    is_opaque_usage = False
+                    if parent is not None:
+                        if isinstance(parent, ast.Subscript) and parent.value == n:
+                            is_opaque_usage = True
+                        elif isinstance(parent, ast.Call) and parent.func == n:
+                            is_opaque_usage = True
+                        elif isinstance(parent, ast.Call) and getattr(parent.func, 'id', '') == 'getattr':
+                            is_opaque_usage = True
+                    if is_opaque_usage:
+                        reasons.append(f"{n.func.id}() dynamic lookup")
                 elif n.func.id == 'getattr':
                     # getattr(obj, name) where name is not a literal string constant
                     if len(n.args) >= 2 and not isinstance(n.args[1], ast.Constant):
@@ -145,7 +172,8 @@ def generate_proof_of_causality_certificate(
     total_errors: int,
     total_warnings: int,
     diagnostics_by_file: Dict[str, List[Dict[str, Any]]],
-    scanned_file_paths: Optional[List[str]] = None
+    scanned_file_paths: Optional[List[str]] = None,
+    syntax_errors: Optional[List[Tuple[str, str]]] = None
 ) -> Dict[str, Any]:
     """Generate a tamper-evident Proof-of-Causality Audit Certificate."""
     git_meta = get_git_metadata(target_path)
@@ -195,7 +223,9 @@ def generate_proof_of_causality_certificate(
 
     unscanned_imports = find_unscanned_local_imports(files_to_check, target_path)
 
-    if not is_clean:
+    if syntax_errors:
+        audit_status = "AUDIT_UNVERIFIABLE_SYNTAX_ERROR"
+    elif not is_clean:
         audit_status = "AUDIT_FAILED_LEAKAGE_DETECTED"
     elif has_opaque_code:
         audit_status = "AUDIT_UNVERIFIABLE_DYNAMIC_CODE"
@@ -258,6 +288,8 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
     elif cert["audit_status"] == "AUDIT_UNVERIFIABLE_UNSCANNED_IMPORTS":
         imports_str = ", ".join(cert.get("unscanned_local_imports", []))
         status_symbol = f"[UNVERIFIABLE - UNSCANNED LOCAL IMPORTS: {imports_str}]"
+    elif cert["audit_status"] == "AUDIT_UNVERIFIABLE_SYNTAX_ERROR":
+        status_symbol = "[UNVERIFIABLE - SYNTAX ERROR: invalid Python syntax]"
     else:
         status_symbol = "[AUDIT FAILED]"
 
