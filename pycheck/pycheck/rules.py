@@ -1,10 +1,10 @@
 """
-PyCheck Rule Registry — 34 ML Safety Rules
+PyCheck Rule Registry — 37 ML Safety Rules
 Each rule is a self-contained checker with code, severity, and AST visitor logic.
 """
 
 import ast
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Set
 
 
@@ -16,12 +16,15 @@ class Diagnostic:
     code: str      # "T001", "C001", etc.
     message: str
     help: Optional[str] = None
+    confidence: Optional[str] = None  # "high" | "medium" | "low"
 
     def to_dict(self):
         d = {"line": self.line, "col": self.col, "severity": self.severity,
              "code": self.code, "message": self.message}
         if self.help:
             d["help"] = self.help
+        if self.confidence:
+            d["confidence"] = self.confidence
         return d
 
 
@@ -44,6 +47,19 @@ class Rule:
                 return node.func.attr
         return ""
 
+    def _get_negative_value(self, arg, ctx=None):
+        """Extract the absolute value from a negative numeric expression."""
+        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+            if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
+                return abs(arg.operand.value)
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
+            return abs(arg.value)
+        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
+            val = ctx.constants.get(arg.id)
+            if val is not None and isinstance(val, (int, float)) and val < 0:
+                return abs(val)
+        return None
+
     def _has_temporal_context(self, ctx: 'AnalysisContext') -> bool:
         """AST-based temporal context detector immune to substring collisions in comments/words."""
         if not ctx or not ctx.source_lines:
@@ -58,14 +74,18 @@ class Rule:
 
         temporal_call_methods = {
             'rolling', 'expanding', 'shift', 'pct_change', 'diff',
-            'resample', 'merge_asof', 'to_datetime', 'date_range'
+            'resample', 'merge_asof', 'to_datetime', 'date_range',
+            'backward_fill', 'rolling_mean', 'rolling_std', 'rolling_median',
+            'rolling_sum', 'rolling_min', 'rolling_max', 'join_asof'
         }
-        temporal_call_names = {'timeseriessplit', 'to_datetime', 'date_range'}
+        temporal_call_names = {'timeseriessplit', 'to_datetime', 'date_range',
+                               'fromisoformat', 'strptime', 'strftime'}
         temporal_columns = {
             'date', 'datetime', 'timestamp', 'time', 'day', 'dt',
             'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
             'adj_close', 'returns', 'ret', 'price', 'prices', 'pnl',
-            'tick', 'bar', 'quotes'
+            'tick', 'bar', 'quotes', 'entry_date', 'exit_date',
+            'trade_date', 'trade_time', 'entry_time', 'exit_time'
         }
 
         for node in ast.walk(tree):
@@ -95,10 +115,93 @@ class Rule:
                                 return True
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 val_lower = node.value.lower()
-                if any(term in val_lower for term in ('daily_prices', 'stock_prices', 'timeseries', 'time_series', 'ohlcv')):
+                if any(term in val_lower for term in ('daily_prices', 'stock_prices', 'timeseries', 'time_series', 'ohlcv', 'entry_date', 'exit_date', 'trade_date', 'trade_time')):
                     return True
+            # Detect datetime.fromisoformat / datetime.strptime calls
+            if isinstance(node, ast.Attribute) and node.attr in ('fromisoformat', 'strptime', 'strftime'):
+                return True
+            # Detect 'from datetime import datetime', 'import datetime', 'import polars'
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.ImportFrom) and node.module and ('datetime' in node.module or 'polars' in node.module):
+                    return True
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if 'datetime' in alias.name or 'polars' in alias.name:
+                            return True
+            # Detect variable names with date/time patterns
+            if isinstance(node, ast.Name) and any(m in node.id.lower() for m in ('_date', 'date_', 'datetime', 'timestamp', 'trade_date', 'entry_date', 'exit_date')):
+                return True
 
         return False
+
+    def _has_external_temporal_context(self, ctx: 'AnalysisContext') -> bool:
+        """Like _has_temporal_context but ignores rolling/shift/expanding/diff/pct_change
+        calls to avoid circular suppression (these ARE the things T003/T004 check)."""
+        if not ctx or not ctx.source_lines:
+            return False
+        tree = getattr(ctx, 'tree', None)
+        if tree is None:
+            try:
+                tree = ast.parse("\n".join(ctx.source_lines))
+            except Exception:
+                return False
+
+        temporal_columns = {
+            'date', 'datetime', 'timestamp', 'time', 'day', 'dt',
+            'close', 'open', 'high', 'low', 'volume', 'vwap', 'ohlc',
+            'adj_close', 'returns', 'ret', 'price', 'prices', 'pnl',
+            'tick', 'bar', 'quotes', 'entry_date', 'exit_date',
+            'trade_date', 'trade_time', 'entry_time', 'exit_time'
+        }
+
+        for node in ast.walk(tree):
+            # sort_values by date column
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr == 'sort_values':
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.lower() in temporal_columns:
+                            return True
+                    for kw in node.keywords:
+                        if kw.arg == 'by' and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str) and kw.value.value.lower() in temporal_columns:
+                            return True
+                if node.func.attr in ('sort', 'sort_index'):
+                    return True
+                if node.func.attr in ('fromisoformat', 'strptime', 'strftime'):
+                    return True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id.lower() in ('timeseriessplit', 'to_datetime', 'date_range', 'sorted'):
+                    return True
+                for kw in node.keywords:
+                    if kw.arg == 'parse_dates':
+                        return True
+            # Column name references
+            if isinstance(node, ast.Subscript):
+                if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                    if node.slice.value.lower() in temporal_columns:
+                        return True
+                if isinstance(node.slice, (ast.List, ast.Tuple)):
+                    for elt in node.slice.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            if elt.value.lower() in temporal_columns:
+                                return True
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                val_lower = node.value.lower()
+                if any(term in val_lower for term in ('daily_prices', 'stock_prices', 'timeseries', 'time_series', 'ohlcv', 'entry_date', 'exit_date', 'trade_date', 'trade_time')):
+                    return True
+            # datetime imports
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.ImportFrom) and node.module and 'datetime' in node.module:
+                    return True
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if 'datetime' in alias.name:
+                            return True
+            # Variable names with date patterns
+            if isinstance(node, ast.Name) and any(m in node.id.lower() for m in ('_date', 'date_', 'datetime', 'timestamp', 'trade_date', 'entry_date', 'exit_date')):
+                return True
+
+        return False
+
 
 
 class AnalysisContext:
@@ -275,14 +378,6 @@ class T002_TrainTestSplit(Rule):
 
 
 
-    def _get_call_name(self, node):
-        if isinstance(node.func, ast.Name):
-            return node.func.id
-        if isinstance(node.func, ast.Attribute):
-            return node.func.attr
-        return ""
-
-
 class T003_RollingBeforeSplit(Rule):
     code = "T003"
     name = "rolling_before_split"
@@ -310,12 +405,21 @@ class T003_RollingBeforeSplit(Rule):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'rolling':
+            # center=True is always a problem (caught by T009, skip here to avoid double-flag)
+            for kw in node.keywords:
+                if kw.arg == 'center' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    return []  # T009 handles this
             if self._is_causal_rolling_zscore(node):
+                return []
+            # In temporal/financial contexts, trailing rolling windows are almost always
+            # causal (backward-looking) indicators — suppress to reduce false positives.
+            if self._has_external_temporal_context(ctx):
                 return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 ".rolling() computed on full dataset may include future data",
-                "Compute rolling statistics AFTER splitting into train/test sets")]
+                "Compute rolling statistics AFTER splitting into train/test sets",
+                confidence="medium")]
         return []
 
 
@@ -329,15 +433,17 @@ class T004_ExpandingBeforeSplit(Rule):
         if not isinstance(node, ast.Call):
             return []
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'expanding':
-            # Check if result is made causal via .shift(1) or .shift(n>0) downstream
-            # Pattern: df['close'].expanding().mean().shift(1)
-            # The expanding() call is the grandchild of the .mean() call which is grandchild of .shift(1)
             if self._has_causal_shift_downstream(node):
+                return []
+            # In temporal/financial contexts, expanding windows are typically
+            # causal cumulative statistics — suppress to reduce false positives.
+            if self._has_external_temporal_context(ctx):
                 return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 ".expanding() computed on full dataset may include future data",
-                "Compute expanding statistics AFTER splitting into train/test sets")]
+                "Compute expanding statistics AFTER splitting into train/test sets",
+                confidence="medium")]
         return []
 
     def _has_causal_shift_downstream(self, node):
@@ -421,28 +527,53 @@ class T006_FutureIndexInLoop(Rule):
     severity = "error"
     category = "TemporalLeak"
 
+    # Column names where [i+1] access is a legitimate next-bar fill in backtesting
+    _NEXT_BAR_FILL_COLUMNS = {
+        'open', 'entry_price', 'open_price', 'next_open', 'fill_price',
+        'entry', 'execution_price', 'exec_price', 'fill',
+    }
+
+    def _get_subscript_column(self, node):
+        """Extract column name from df['col'][i+1] or col_array[i+1] patterns."""
+        if isinstance(node.value, ast.Subscript):
+            sl = node.value.slice
+            if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                return sl.value.lower()
+        if isinstance(node.value, ast.Name):
+            return node.value.id.lower()
+        return None
+
     def check_node(self, node, ctx):
         if not ctx or not ctx.in_loop:
             return []
         if not isinstance(node, ast.Subscript):
             return []
-        # Look for .iloc[i + 1] or [i + 1] patterns inside loops
         if not ctx.in_loop or ctx.loop_var is None:
             return []
         sl = node.slice
         if isinstance(sl, ast.BinOp) and isinstance(sl.op, ast.Add):
             if self._uses_var(sl.left, ctx.loop_var) and isinstance(sl.right, ast.Constant):
                 if isinstance(sl.right.value, int) and sl.right.value > 0:
+                    col = self._get_subscript_column(node)
+                    # Next-bar fill: accessing open[i+1] after signal on bar i is legitimate
+                    if col and any(m in col for m in self._NEXT_BAR_FILL_COLUMNS):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, "info", self.code,
+                            f"Indexing [{ctx.loop_var} + {sl.right.value}] on '{col}' — likely next-bar fill (verify signal uses bar {ctx.loop_var} data only)",
+                            f"Next-bar execution is valid if the trading signal is computed from bar {ctx.loop_var} or earlier",
+                            confidence="low")]
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         f"Indexing [{ctx.loop_var} + {sl.right.value}] inside loop accesses future data",
-                        f"Only use [{ctx.loop_var}] or [{ctx.loop_var} - n] to access current/past data")]
+                        f"Only use [{ctx.loop_var}] or [{ctx.loop_var} - n] to access current/past data",
+                        confidence="high")]
             if self._uses_var(sl.right, ctx.loop_var) and isinstance(sl.left, ast.Constant):
                 if isinstance(sl.left.value, int) and sl.left.value > 0:
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         f"Indexing [{sl.left.value} + {ctx.loop_var}] inside loop may access future data",
-                        f"Verify this does not access future indices")]
+                        f"Verify this does not access future indices",
+                        confidence="medium")]
         return []
 
     def _uses_var(self, node, var_name):
@@ -460,7 +591,7 @@ class T007_BackfillLeak(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        if isinstance(node.func, ast.Attribute) and node.func.attr in ('fillna', 'bfill', 'backfill', 'ffill'):
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('fillna', 'bfill', 'backfill', 'ffill', 'backward_fill', 'fill_null'):
             # B14: ffill on reversed frame is equivalent to bfill
             if node.func.attr == 'ffill':
                 for child in ast.walk(node.func.value):
@@ -470,19 +601,19 @@ class T007_BackfillLeak(Rule):
                             ".ffill() on reversed slice [::-1] is equivalent to .bfill() and fills with FUTURE data",
                             "Use forward fill on chronological data")]
 
-            if node.func.attr in ('bfill', 'backfill'):
+            if node.func.attr in ('bfill', 'backfill', 'backward_fill'):
                 return [Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
                     f".{node.func.attr}() fills missing values with FUTURE data",
-                    "Use .ffill() (forward fill) or .fillna(0) instead")]
-            # Check fillna(method='bfill') or fillna(method='backfill')
+                    "Use forward fill or .fillna(0) / .fill_null(0) instead")]
+            # Check fillna(method='bfill') or fill_null(strategy='backward'/'bfill')
             for kw in node.keywords:
-                if kw.arg == 'method' and isinstance(kw.value, ast.Constant):
-                    if kw.value.value in ('bfill', 'backfill'):
+                if kw.arg in ('method', 'strategy') and isinstance(kw.value, ast.Constant):
+                    if kw.value.value in ('bfill', 'backfill', 'backward'):
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
-                            f".fillna(method='{kw.value.value}') fills missing values with FUTURE data",
-                            "Use .fillna(method='ffill') or .fillna(0) instead")]
+                            f".{node.func.attr}({kw.arg}='{kw.value.value}') fills missing values with FUTURE data",
+                            f"Use forward fill strategy (e.g. {kw.arg}='forward') or constant fill instead")]
         return []
 
 
@@ -523,13 +654,13 @@ class T009_CenteredRolling(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        if isinstance(node.func, ast.Attribute) and node.func.attr == 'rolling':
+        if isinstance(node.func, ast.Attribute) and (node.func.attr == 'rolling' or node.func.attr.startswith('rolling_')):
             for kw in node.keywords:
                 if kw.arg == 'center' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
-                        ".rolling(center=True) uses future data on both sides of the window",
-                        "Use .rolling(center=False) for causal (backward-looking) windows")]
+                        f".{node.func.attr}(center=True) uses future data on both sides of the window",
+                        f"Use causal (backward-looking) windows without center=True")]
         return []
 
 
@@ -686,10 +817,13 @@ class T010_FitBeforeSplit(Rule):
             if not is_printed:
                 val = node.func.value
                 if not self._is_windowed_or_grouped(val) and not self._is_train_data(val, ctx):
+                    if self._is_simulation_output(val, ctx):
+                        return []
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         "Full-sample quantile (.quantile()) computed on un-split dataset leaks test statistics",
-                        "Compute quantiles only on training split, then use them to clip/winsorize train and test")]
+                        "Compute quantiles only on training split, then use them to clip/winsorize train and test",
+                        confidence="medium")]
 
         # Full-sample quantile binning (pd.qcut()) or percentile calculation (np.percentile())
         if isinstance(node.func, (ast.Attribute, ast.Name)):
@@ -700,14 +834,19 @@ class T010_FitBeforeSplit(Rule):
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         "Full-sample quantile binning (pd.qcut()) on un-split dataset leaks future bin boundaries",
-                        "Compute quantile bins only on training partition, then apply cut points to test data")]
+                        "Compute quantile bins only on training partition, then apply cut points to test data",
+                        confidence="high")]
             if c_name in ('percentile', 'nanpercentile') and node.args:
                 val = node.args[0]
                 if not self._is_train_data(val, ctx):
+                    # Suppress for Monte Carlo / bootstrap / simulation output
+                    if self._is_simulation_output(val, ctx):
+                        return []
                     return [Diagnostic(
                         node.lineno, node.col_offset, self.severity, self.code,
                         f"Full-sample percentile (np.{c_name}()) computed on un-split dataset leaks test statistics",
-                        "Compute percentiles only on training partition, then use thresholds to clip")]
+                        "Compute percentiles only on training partition, then use thresholds to clip",
+                        confidence="medium")]
 
         # Full-sample rank normalization before split (lookahead)
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'rank':
@@ -766,16 +905,66 @@ class T010_FitBeforeSplit(Rule):
                         has_split_or_test = True
                 if not has_split_or_test:
                     return []
+                # Final refit after holdout evaluation is legitimate
+                if self._is_final_refit(node, ctx):
+                    return [Diagnostic(
+                        node.lineno, node.col_offset, "info", self.code,
+                        "Full-data .fit() detected after holdout evaluation — ensure holdout metrics are your deployment decision signal",
+                        "This is a common pattern: evaluate on holdout, then retrain on all data for deployment",
+                        confidence="low")]
                 return [Diagnostic(
                     node.lineno, node.col_offset, "warning", self.code,
                     ".fit() may be called on the full dataset including test data",
-                    "Call .fit() only on training data, use .transform() on test data")]
+                    "Call .fit() only on training data, use .transform() on test data",
+                    confidence="medium")]
             else:
                 return [Diagnostic(
                     node.lineno, node.col_offset, self.severity, self.code,
                     ".fit_transform() on full dataset leaks test statistics into training",
                     "Use .fit(X_train).transform(X_train), then .transform(X_test) separately")]
         return []
+
+    def _is_simulation_output(self, node, ctx=None):
+        """Check if a value comes from Monte Carlo simulation, bootstrap, or model predictions."""
+        sim_markers = {'sim', 'sims', 'simulation', 'simulations', 'monte', 'monte_carlo',
+                        'bootstrap', 'boot', 'samples', 'perturbation', 'perturbations',
+                        'boot_probs', 'boot_returns', 'sim_results', 'mc_results',
+                        'resampled', 'noise', 'replications'}
+        pred_markers = {'probs', 'probabilities', 'predictions', 'preds', 'pred_probs',
+                         'boot_probs', 'cv_probs', 'hold_probs', 'pred_returns'}
+        if isinstance(node, ast.Name):
+            name_lower = node.id.lower()
+            if name_lower in sim_markers or any(m in name_lower for m in ('sim_', '_sim', 'boot_', '_boot', 'monte_', 'mc_')):
+                return True
+            if name_lower in pred_markers:
+                return True
+        if isinstance(node, ast.Subscript):
+            return self._is_simulation_output(node.value, ctx)
+        return False
+
+    def _is_final_refit(self, node, ctx):
+        """Check if .fit() on full data follows a holdout evaluation (legitimate final refit).
+        The holdout evaluation must appear BEFORE this .fit() call in the source.
+        Requires actual metric CALLS (not just imports) and holdout variable ASSIGNMENTS."""
+        if ctx is None or not ctx.source_lines:
+            return False
+        fit_line = node.lineno
+        # Only look at source lines BEFORE the .fit() call, excluding import lines
+        preceding_lines = []
+        for line in ctx.source_lines[:fit_line - 1]:
+            stripped = line.strip()
+            if stripped.startswith(('import ', 'from ')):
+                continue
+            preceding_lines.append(line)
+        preceding_src = "\n".join(preceding_lines)
+        # Pattern: holdout variables assigned + metric calls preceding this fit
+        has_holdout_eval = any(m in preceding_src for m in (
+            'holdout', 'hold_out', 'temporal_holdout', 'TEMPORAL_HOLDOUT',
+            'X_hold', 'y_hold', 'X_test', 'y_test'))
+        has_score_or_metric = any(m in preceding_src for m in (
+            'roc_auc_score(', 'accuracy_score(', 'brier_score(', 'mean_absolute_error(',
+            'f1_score(', 'precision_score(', 'recall_score(', '.score(', 'holdout_metrics'))
+        return has_holdout_eval and has_score_or_metric
 
     def _get_obj_name(self, node):
         if isinstance(node, ast.Name):
@@ -841,6 +1030,10 @@ class T012_KFoldTimeSeries(Rule):
             # Only flag when temporal/financial context markers exist in the script
             if not self._has_temporal_context(ctx):
                 return []
+            # Skip if shuffle=True is explicit â T020 handles that case with a more specific message
+            for kw in node.keywords:
+                if kw.arg == 'shuffle' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    return []
             return [Diagnostic(
                 node.lineno, node.col_offset, self.severity, self.code,
                 f"{name}() shuffles time-series data across folds, leaking future into training",
@@ -896,17 +1089,6 @@ class T014_DiffNegative(Rule):
                         f"Use .diff(periods={val}) to compute backward differences"))
         return results
 
-    def _get_negative_value(self, arg, ctx=None):
-        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
-            if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
-                return abs(arg.operand.value)
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
-            return abs(arg.value)
-        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
-            val = ctx.constants.get(arg.id)
-            if val is not None and isinstance(val, (int, float)) and val < 0:
-                return abs(val)
-        return None
 
 
 class T015_GroupbyShiftLeak(Rule):
@@ -941,24 +1123,30 @@ class T016_MergeAsofDirection(Rule):
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Call):
             return []
-        is_merge_asof = False
+        is_asof_join = False
+        is_polars = False
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'merge_asof':
-            is_merge_asof = True
+            is_asof_join = True
         elif isinstance(node.func, ast.Name) and node.func.id == 'merge_asof':
-            is_merge_asof = True
+            is_asof_join = True
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == 'join_asof':
+            is_asof_join = True
+            is_polars = True
         
-        if not is_merge_asof:
+        if not is_asof_join:
             return []
         
         for kw in node.keywords:
-            if kw.arg == 'direction':
+            if kw.arg in ('direction', 'strategy'):
                 if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                     val = kw.value.value.lower()
                     if val in ('nearest', 'forward'):
+                        func_name = "join_asof" if is_polars else "pd.merge_asof"
+                        rec = "strategy='backward'" if is_polars else "direction='backward'"
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
-                            f"pd.merge_asof() with direction='{kw.value.value}' matches future timestamps (lookahead bias)",
-                            "Use direction='backward' for point-in-time causal event joins")]
+                            f"{func_name}() with {kw.arg}='{kw.value.value}' matches future timestamps (lookahead bias)",
+                            f"Use {rec} for point-in-time causal event joins")]
         return []
 
 
@@ -1178,17 +1366,6 @@ class T019_NpRollNegative(Rule):
                                 f"Use pd.Series.shift({val}) which inserts NaN at boundaries")]
         return []
 
-    def _get_negative_value(self, arg, ctx=None):
-        if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
-            if isinstance(arg.operand, ast.Constant) and isinstance(arg.operand.value, (int, float)):
-                return abs(arg.operand.value)
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)) and arg.value < 0:
-            return abs(arg.value)
-        if isinstance(arg, ast.Name) and ctx is not None and hasattr(ctx, 'constants'):
-            val = ctx.constants.get(arg.id)
-            if val is not None and isinstance(val, (int, float)) and val < 0:
-                return abs(val)
-        return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1571,19 +1748,37 @@ class U002_HardcodedThreshold(Rule):
     severity = "warning"
     category = "UncertaintyIgnored"
 
+    # Variable names that indicate model output (thresholds on these are concerning)
+    _MODEL_OUTPUT_NAMES = {'prediction', 'pred', 'probability', 'prob', 'confidence',
+                           'predicted', 'model_score', 'pred_prob', 'win_probability',
+                           'proba', 'class_prob', 'predicted_probability'}
+    # Variable names that indicate rule-based scores (thresholds on these are intentional)
+    _RULE_SCORE_NAMES = {'score', 'signal', 'rating', 'rank', 'level', 'grade',
+                         'trade_score', 'rule_score', 'composite_score'}
+
     def check_node(self, node, ctx):
         if not isinstance(node, ast.Compare):
             return []
-        # Detect: prediction > 0.5, signal > 0.7, etc.
         if isinstance(node.left, ast.Name):
-            pred_names = {'prediction', 'pred', 'signal', 'score', 'probability', 'prob', 'confidence'}
-            if node.left.id.lower() in pred_names:
+            name_lower = node.left.id.lower()
+            # Only flag thresholds on model-probability outputs, not rule-based scores
+            if name_lower in self._MODEL_OUTPUT_NAMES:
                 for comp_val in node.comparators:
                     if isinstance(comp_val, ast.Constant) and isinstance(comp_val.value, (int, float)):
                         return [Diagnostic(
                             node.lineno, node.col_offset, self.severity, self.code,
-                            f"Hardcoded threshold ({comp_val.value}) on '{node.left.id}' ignores prediction uncertainty",
-                            "Use calibrated probability thresholds or dynamic thresholds based on confidence intervals")]
+                            f"Hardcoded threshold ({comp_val.value}) on model output '{node.left.id}' ignores prediction uncertainty",
+                            "Consider using the prediction interval (ci_low/ci_high) or calibrating thresholds out-of-sample",
+                            confidence="medium")]
+            # For rule-based scores, only emit low-confidence info
+            if name_lower in self._RULE_SCORE_NAMES:
+                for comp_val in node.comparators:
+                    if isinstance(comp_val, ast.Constant) and isinstance(comp_val.value, (int, float)):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, "info", self.code,
+                            f"Fixed threshold ({comp_val.value}) on '{node.left.id}' — verify this was validated out-of-sample",
+                            "If this is a deliberate strategy rule, consider documenting the rationale and sensitivity analysis",
+                            confidence="low")]
         return []
 
 
@@ -1674,17 +1869,6 @@ class U006_PredictInLoop(Rule):
 #  DATA QUALITY RULES (D001–D007)
 # ═══════════════════════════════════════════════════════════════
 
-class D001_DropNaBeforeSplit(Rule):
-    code = "D001"
-    name = "dropna_before_split"
-    severity = "warning"
-    category = "DataQuality"
-
-    def check_node(self, node, ctx):
-        # Handled by C005 (survivorship), but with different framing
-        return []
-
-
 class D002_SilentExceptionSwallow(Rule):
     code = "D002"
     name = "silent_exception"
@@ -1725,6 +1909,179 @@ class D003_MagicNumbers(Rule):
         return []
 
 
+
+class T020_ShuffledCVOnSortedData(Rule):
+    """Detect shuffled cross-validation on chronologically sorted data."""
+    code = "T020"
+    name = "shuffled_cv_sorted_data"
+    severity = "error"
+    category = "TemporalLeak"
+
+    def _file_sorts_data(self, ctx):
+        """Check if the file explicitly sorts data chronologically."""
+        if ctx is None or not ctx.source_lines:
+            return False
+        tree = getattr(ctx, 'tree', None)
+        if tree is None:
+            try:
+                tree = ast.parse("\n".join(ctx.source_lines))
+            except Exception:
+                return False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in ('sort', 'sort_values', 'sort_index'):
+                    return True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == 'sorted':
+                    return True
+        return False
+
+    def _has_shuffle_true(self, node):
+        """Check if a KFold/StratifiedKFold call has shuffle=True."""
+        for kw in node.keywords:
+            if kw.arg == 'shuffle':
+                if isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    return True
+        return False
+
+    def check_node(self, node, ctx):
+        if not isinstance(node, ast.Call):
+            return []
+        kfold_names = {'KFold', 'StratifiedKFold', 'RepeatedKFold', 'RepeatedStratifiedKFold'}
+        name = ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name not in kfold_names:
+            return []
+        if not self._has_shuffle_true(node):
+            return []
+        if not self._has_temporal_context(ctx) and not self._file_sorts_data(ctx):
+            return []
+        return [Diagnostic(
+            node.lineno, node.col_offset, self.severity, self.code,
+            f"{name}(shuffle=True) shuffles chronologically sorted data \u2014 validation folds will contain future information",
+            "Use TimeSeriesSplit or a purged walk-forward splitter for temporal data. "
+            "If using CalibratedClassifierCV or cross_val_predict, pass the time-aware splitter as the cv= parameter.",
+            confidence="high")]
+
+
+class T021_CalibratedCVShuffled(Rule):
+    """Detect CalibratedClassifierCV using a shuffled CV splitter on temporal data."""
+    code = "T021"
+    name = "calibrated_cv_shuffled"
+    severity = "warning"
+    category = "TemporalLeak"
+
+    def check_node(self, node, ctx):
+        if not isinstance(node, ast.Call):
+            return []
+        name = ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name != 'CalibratedClassifierCV':
+            return []
+        if not self._has_temporal_context(ctx):
+            return []
+        for kw in node.keywords:
+            if kw.arg == 'cv':
+                if isinstance(kw.value, ast.Call):
+                    cv_name = ""
+                    if isinstance(kw.value.func, ast.Name):
+                        cv_name = kw.value.func.id
+                    elif isinstance(kw.value.func, ast.Attribute):
+                        cv_name = kw.value.func.attr
+                    if cv_name in ('KFold', 'StratifiedKFold', 'RepeatedKFold'):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"CalibratedClassifierCV uses {cv_name} which shuffles temporal data \u2014 calibration will be optimistic",
+                            "Pass a TimeSeriesSplit or purged walk-forward splitter as cv= for honest calibration",
+                            confidence="high")]
+                if isinstance(kw.value, ast.Name) and ctx is not None:
+                    assigned = ctx.assignments.get(kw.value.id)
+                    if isinstance(assigned, ast.Call):
+                        cv_name = ""
+                        if isinstance(assigned.func, ast.Name):
+                            cv_name = assigned.func.id
+                        elif isinstance(assigned.func, ast.Attribute):
+                            cv_name = assigned.func.attr
+                        if cv_name in ('KFold', 'StratifiedKFold', 'RepeatedKFold'):
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                f"CalibratedClassifierCV uses '{kw.value.id}' ({cv_name}) which shuffles temporal data \u2014 calibration will be optimistic",
+                                "Pass a TimeSeriesSplit or purged walk-forward splitter as cv= for honest calibration",
+                                confidence="high")]
+        has_cv_arg = any(kw.arg == 'cv' for kw in node.keywords)
+        if not has_cv_arg:
+            return [Diagnostic(
+                node.lineno, node.col_offset, "info", self.code,
+                "CalibratedClassifierCV uses default CV which shuffles folds \u2014 may be incorrect for temporal data",
+                "Pass cv=TimeSeriesSplit(...) for temporal data",
+                confidence="medium")]
+        return []
+
+
+class T022_CrossValPredictShuffled(Rule):
+    """Detect cross_val_predict using a shuffled CV splitter on temporal data."""
+    code = "T022"
+    name = "cross_val_predict_shuffled"
+    severity = "warning"
+    category = "TemporalLeak"
+
+    def check_node(self, node, ctx):
+        if not isinstance(node, ast.Call):
+            return []
+        name = ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name not in ('cross_val_predict', 'cross_val_score', 'cross_validate'):
+            return []
+        if not self._has_temporal_context(ctx):
+            return []
+        for kw in node.keywords:
+            if kw.arg == 'cv':
+                if isinstance(kw.value, ast.Call):
+                    cv_name = ""
+                    if isinstance(kw.value.func, ast.Name):
+                        cv_name = kw.value.func.id
+                    elif isinstance(kw.value.func, ast.Attribute):
+                        cv_name = kw.value.func.attr
+                    if cv_name in ('KFold', 'StratifiedKFold', 'RepeatedKFold'):
+                        return [Diagnostic(
+                            node.lineno, node.col_offset, self.severity, self.code,
+                            f"{name}() uses {cv_name} which shuffles temporal data \u2014 CV metrics will be optimistic",
+                            "Pass cv=TimeSeriesSplit(...) for honest temporal validation",
+                            confidence="high")]
+                if isinstance(kw.value, ast.Name) and ctx is not None:
+                    assigned = ctx.assignments.get(kw.value.id)
+                    if isinstance(assigned, ast.Call):
+                        cv_name = ""
+                        if isinstance(assigned.func, ast.Name):
+                            cv_name = assigned.func.id
+                        elif isinstance(assigned.func, ast.Attribute):
+                            cv_name = assigned.func.attr
+                        if cv_name in ('KFold', 'StratifiedKFold', 'RepeatedKFold'):
+                            return [Diagnostic(
+                                node.lineno, node.col_offset, self.severity, self.code,
+                                f"{name}() uses '{kw.value.id}' ({cv_name}) which shuffles temporal data \u2014 CV metrics will be optimistic",
+                                "Pass cv=TimeSeriesSplit(...) for honest temporal validation",
+                                confidence="high")]
+        # No cv= keyword: default CV shuffles folds
+        has_cv_arg = any(kw.arg == 'cv' for kw in node.keywords)
+        if not has_cv_arg:
+            return [Diagnostic(
+                node.lineno, node.col_offset, "info", self.code,
+                f"{name}() uses default CV which shuffles folds \u2014 may be incorrect for temporal data",
+                "Pass cv=TimeSeriesSplit(...) for temporal data",
+                confidence="medium")]
+        return []
+
+
 # ═══════════════════════════════════════════════════════════════
 #  RULE REGISTRY
 # ═══════════════════════════════════════════════════════════════
@@ -1750,6 +2107,9 @@ ALL_RULES: List[Rule] = [
     T017_TargetLaundering(),
     T018_InSampleTargetEncoding(),
     T019_NpRollNegative(),
+    T020_ShuffledCVOnSortedData(),
+    T021_CalibratedCVShuffled(),
+    T022_CrossValPredictShuffled(),
     # Causal Confusion
     C001_CorrelationCausation(),
     C002_TargetInFeatures(),

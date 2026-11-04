@@ -1,7 +1,7 @@
 # id: D5
 # kind: leak
 # expect: T012
-# accept: 
+# accept: T020 
 # allow: 
 # xfail: 
 # desc: shuffled KFold in a script whose only temporal markers are rolling/pct_change

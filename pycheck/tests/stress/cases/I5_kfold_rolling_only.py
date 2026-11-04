@@ -1,7 +1,7 @@
 # id: I5_kfold_rolling_only
 # kind: leak
 # expect: T012
-# accept: 
+# accept: T020 
 # allow: 
 # xfail: 
 # desc: only temporal clue is rolling/pct_change

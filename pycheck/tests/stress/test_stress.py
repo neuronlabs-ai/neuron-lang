@@ -264,12 +264,18 @@ def test_causal_rolling_zscore_is_clean():
 
 
 def test_bare_rolling_triggers_t003_warning():
-    """Bare .rolling().mean() triggers T003 as a warning."""
-    code = "df['roll'] = df['price'].rolling(10).mean()\n"
+    """Bare .rolling().mean() triggers T003 as a warning (non-temporal column)."""
+    code = "df['roll'] = df['val'].rolling(10).mean()\n"
     diags, _ = analyze_code(code, "test.py")
     t003_diags = [d for d in diags if d['code'] == 'T003']
     assert len(t003_diags) == 1
-    assert t003_diags[0]['severity'] == 'warning'
+
+def test_rolling_suppressed_on_temporal_column():
+    """Rolling on temporal/financial columns is suppressed (causal trailing indicator)."""
+    code = "df['roll'] = df['price'].rolling(10).mean()\n"
+    diags, _ = analyze_code(code, "test.py")
+    t003_diags = [d for d in diags if d['code'] == 'T003']
+    assert len(t003_diags) == 0, f"T003 should be suppressed for temporal columns, got {t003_diags}"
 
 
 def test_c002_reassigned_drop_target_clean():

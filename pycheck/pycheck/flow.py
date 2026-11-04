@@ -84,7 +84,7 @@ class TaintTracker:
                 yield from self._iter_statements(stmt)
 
     def _extract_constant(self, expr):
-        if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float)):
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float, str)):
             return expr.value
         if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub):
             if isinstance(expr.operand, ast.Constant) and isinstance(expr.operand.value, (int, float)):
@@ -290,30 +290,62 @@ class TaintTracker:
             return left_taint or right_taint
         
         if isinstance(node, ast.Subscript):
-            # Subscript propagates taint from the value being indexed
-            val_taint = self._expr_taint(node.value)
-            if val_taint:
-                return val_taint
             obj_name = self._get_var_name(node.value)
-            # Check if accessing a tracked tainted column: df['feat'] or df[['feat']]
+
+            # --- Column-level dataflow: when accessing specific columns by name,
+            # only propagate taint from THAT column, not from sibling columns.
+            # This prevents df['safe_col'] from being flagged just because
+            # df['tainted_col'] exists. ---
+
+            col = None
             if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
                 col = node.slice.value
+            elif isinstance(node.slice, ast.Name) and node.slice.id in self.constants and isinstance(self.constants[node.slice.id], str):
+                col = self.constants[node.slice.id]
+            elif isinstance(node.slice, ast.JoinedStr):
+                # Inspect literal components of f-string
+                for part in node.slice.values:
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        part_lower = part.value.lower()
+                        future_markers = {'future', 'next', 'tomorrow', 'forward'}
+                        if any(m in part_lower for m in future_markers):
+                            return f"accessing dynamic future column with pattern '{part.value}'"
+
+            if col is not None:
+                col_lower = col.lower()
+
+                # 1. Check if this specific column is tainted
                 if obj_name and f"{obj_name}.{col}" in self.tainted_vars:
                     return f"column '{col}' is tainted: {self.tainted_vars[f'{obj_name}.{col}'].reason}"
+
+                # 2. Check future-named columns
+                future_cols = {'future_price', 'future_return', 'next_close', 'next_price',
+                               'next_day', 'tomorrow', 'price_change_next_day', 'future_avg_price'}
+                if any(f in col_lower for f in future_cols):
+                    return f"accessing future-named column '{col}'"
+
+                # 3. Propagate only DIRECT variable-level taint (e.g. df = tainted.shift(-1)),
+                #    NOT column-derived taint from sibling columns
+                if obj_name and obj_name in self.tainted_vars:
+                    return self.tainted_vars[obj_name].reason
+                return None
+
             if isinstance(node.slice, (ast.List, ast.Tuple)):
+                # Multi-column access: check each column individually
                 for elt in node.slice.elts:
                     if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                         col = elt.value
                         if obj_name and f"{obj_name}.{col}" in self.tainted_vars:
                             return f"column '{col}' is tainted: {self.tainted_vars[f'{obj_name}.{col}'].reason}"
-            # Check if indexing a tainted column name
-            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
-                col_lower = node.slice.value.lower()
-                # Only flag column names that unambiguously refer to future data.
-                future_cols = {'future_price', 'future_return', 'next_close', 'next_price',
-                               'next_day', 'tomorrow', 'price_change_next_day', 'future_avg_price'}
-                if any(f in col_lower for f in future_cols):
-                    return f"accessing future-named column '{node.slice.value}'"
+                # Only propagate direct variable-level taint
+                if obj_name and obj_name in self.tainted_vars:
+                    return self.tainted_vars[obj_name].reason
+                return None
+
+            # Non-column subscript (numeric index, slice, variable): propagate all parent taints
+            val_taint = self._expr_taint(node.value)
+            if val_taint:
+                return val_taint
         
         if isinstance(node, ast.Attribute):
             return self._expr_taint(node.value)
@@ -345,14 +377,25 @@ class TaintTracker:
                     if kw.arg == 'periods' and self._is_negative_period(kw.value):
                         return "shift() with negative period (future access)"
             
-            if method in ('bfill', 'backfill'):
+            if method in ('bfill', 'backfill', 'backward_fill'):
                 return f".{method}() backfills from future values"
             
-            if method == 'fillna':
+            if method in ('fillna', 'fill_null'):
                 for kw in node.keywords:
-                    if kw.arg == 'method' and isinstance(kw.value, ast.Constant):
-                        if kw.value.value in ('bfill', 'backfill'):
-                            return f".fillna(method='{kw.value.value}') backfills from future"
+                    if kw.arg in ('method', 'strategy') and isinstance(kw.value, ast.Constant):
+                        if kw.value.value in ('bfill', 'backfill', 'backward'):
+                            return f".{method}({kw.arg}='{kw.value.value}') backfills from future"
+
+            if method == 'join_asof':
+                for kw in node.keywords:
+                    if kw.arg == 'strategy' and isinstance(kw.value, ast.Constant):
+                        if kw.value.value in ('forward', 'nearest'):
+                            return f".join_asof(strategy='{kw.value.value}') matches future timestamps"
+
+            if method == 'rolling' or method.startswith('rolling_'):
+                for kw in node.keywords:
+                    if kw.arg == 'center' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                        return f".{method}(center=True) uses future data (centered window)"
             
             if method == 'diff':
                 for arg in node.args:

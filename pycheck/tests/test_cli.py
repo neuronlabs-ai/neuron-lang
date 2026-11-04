@@ -60,7 +60,7 @@ df['future_signal'] = df['close'].shift(-1)
 def test_cli_gitlab_output_file():
     test_code = """
 import pandas as pd
-df['roll'] = df['price'].rolling(10).mean()
+df['roll'] = df['val'].rolling(10).mean()
 """
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(test_code)
@@ -108,6 +108,84 @@ X_scaled = scaler.fit_transform(X)
         assert res.returncode == 0
         data = json.loads(res.stdout)
         assert len(data.get(f_name, [])) == 0
+    finally:
+        if os.path.exists(f_name):
+            os.remove(f_name)
+
+
+def test_cli_sarif_format():
+    test_code = """
+import pandas as pd
+df['future_signal'] = df['close'].shift(-1)
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(test_code)
+        f_name = f.name
+
+    try:
+        res = run_cli(f_name, "--sarif")
+        assert res.returncode == 1  # T001 is an error
+        sarif = json.loads(res.stdout)
+        assert sarif["version"] == "2.1.0"
+        assert "sarif-schema-2.1.0.json" in sarif["$schema"]
+        runs = sarif["runs"]
+        assert len(runs) == 1
+        driver = runs[0]["tool"]["driver"]
+        assert driver["name"] == "PyCheck"
+        assert len(driver["rules"]) >= 37
+        results = runs[0]["results"]
+        assert len(results) >= 1
+        assert results[0]["ruleId"] == "T001"
+        assert results[0]["level"] == "error"
+        loc = results[0]["locations"][0]["physicalLocation"]
+        assert loc["region"]["startLine"] == 3
+    finally:
+        if os.path.exists(f_name):
+            os.remove(f_name)
+
+
+def test_cli_sarif_output_file():
+    test_code = """
+import pandas as pd
+df['roll'] = df['val'].rolling(10).mean()
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(test_code)
+        f_name = f.name
+
+    out_file = f_name + ".sarif"
+    try:
+        res = run_cli(f_name, "--sarif", "-o", out_file)
+        assert res.returncode == 0  # T003 is a warning
+        assert os.path.exists(out_file)
+        with open(out_file, "r") as sf:
+            data = json.load(sf)
+        assert data["version"] == "2.1.0"
+        assert len(data["runs"][0]["results"]) >= 1
+        assert data["runs"][0]["results"][0]["ruleId"] == "T003"
+        assert "SARIF v2.1.0 Report written to:" in res.stdout
+    finally:
+        if os.path.exists(f_name):
+            os.remove(f_name)
+        if os.path.exists(out_file):
+            os.remove(out_file)
+
+
+def test_cli_github_actions_annotations():
+    test_code = """
+import pandas as pd
+df['future_signal'] = df['close'].shift(-1)
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(test_code)
+        f_name = f.name
+
+    try:
+        res = run_cli(f_name, "--github-actions")
+        assert res.returncode == 1
+        assert "::error file=" in res.stdout
+        assert "title=T001::" in res.stdout
+        assert "line=3" in res.stdout
     finally:
         if os.path.exists(f_name):
             os.remove(f_name)

@@ -1,6 +1,6 @@
 # PyCheck — ML Safety Analyzer
 
-**34 rules. Zero dependencies. Catches the bugs that cost millions.**
+**37 rules. Zero dependencies. Catches the bugs that cost millions.**
 
 PyCheck is a static AST analyzer that detects **temporal lookahead bias**, **causal confusion**, and **unguarded uncertainty** in Python ML and trading scripts — before you run a single line of code.
 
@@ -30,7 +30,7 @@ PyCheck catches all three before execution:
 =================================================================
   PyCheck — NEURON ML Safety Analyzer
   Scanning: strategy.py
-  Rules: 34 active + Data Flow & Provenance Engine
+  Rules: 37 active + Data Flow & Provenance Engine
 =================================================================
 
   ERROR[T001]: .shift(-1) accesses data 1 rows INTO THE FUTURE
@@ -85,6 +85,9 @@ PyCheck catches all three before execution:
 | `T017` | Target laundering & un-split target encoding (`regime_success_rate`) | **Error** |
 | `T018` | In-sample target encoding via `.transform()` or un-split group means | **Error** |
 | `T019` | `np.roll(arr, -k)` — negative shift rotates future data into present position | **Error** |
+| `T020` | `KFold(shuffle=True)` or `StratifiedKFold` on chronologically sorted series | **Error** |
+| `T021` | `CalibratedClassifierCV` initialized without a temporal cross-validation splitter | Warning |
+| `T022` | `cross_val_predict()` using shuffled cross-validation on temporal data | Warning |
 
 ### Causal Confusion Rules (7 rules — `C001`–`C007`)
 
@@ -152,7 +155,7 @@ pycheck script.py              # Errors + warnings (default)
 pycheck script.py --info       # Include info-level diagnostics
 pycheck script.py --quiet      # Errors only
 pycheck script.py --json       # JSON output — pipe into CI/CD
-pycheck --list                 # List all 34 rules
+pycheck --list                 # List all 37 rules
 pycheck --help
 ```
 
@@ -245,6 +248,63 @@ pycheck:
 ```
 
 GitLab will automatically annotate the Merge Request diff with red warnings on every line where temporal data leaks or unguarded point predictions are introduced.
+
+---
+
+## GitHub Code Scanning & SARIF Integration
+
+PyCheck natively exports standard **SARIF v2.1.0** (Static Analysis Results Interchange Format) and GitHub Actions workflow commands, enabling turnkey integration into GitHub Code Scanning and PR annotations.
+
+```bash
+# Export standard SARIF v2.1.0 for GitHub Code Scanning
+pycheck . --sarif -o pycheck.sarif
+
+# Emit GitHub Actions workflow annotations directly in CI logs
+pycheck . --github-actions
+```
+
+### Turnkey `.github/workflows/pycheck.yml`
+
+```yaml
+name: PyCheck ML Safety Guard
+
+on: [push, pull_request]
+
+jobs:
+  pycheck:
+    name: PyCheck Temporal Leak Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyCheck
+        run: pip install pycheck-neuron
+
+      - name: Run PyCheck
+        run: pycheck . --sarif -o pycheck.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: pycheck.sarif
+```
+
+---
+
+## Polars First-Class Support
+
+PyCheck v1.2.0 includes native AST detection and taint tracking for **Polars** pipelines:
+
+- **Lookahead Fill**: Catches `pl.col().backward_fill()`, `.backward_fill()`, and `.fill_null(strategy="backward")` (`T007`).
+- **Centered Windows**: Catches `rolling_mean(center=True)`, `rolling_std(center=True)`, `rolling_median(center=True)`, etc. (`T009`).
+- **Event Merges**: Catches `.join_asof(strategy="forward")` and `.join_asof(strategy="nearest")` (`T016`).
+- **Dataflow Taint Tracking**: Traces future-tainted Polars expressions into downstream feature matrices and `.fit()` sinks (`F001`).
 
 ---
 

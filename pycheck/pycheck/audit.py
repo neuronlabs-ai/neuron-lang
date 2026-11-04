@@ -12,6 +12,8 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set, Tuple
 
+from pycheck.rules import ALL_RULES
+
 
 def get_git_metadata(repo_path: str) -> Dict[str, str]:
     """Extract git commit hash, branch, and remote URL if available."""
@@ -299,7 +301,7 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
     unscanned_count = cert.get('unscanned_local_imports_count', 0)
 
     if cert["audit_status"] == "CERTIFIED_ZERO_LEAKAGE":
-        summary_line = f"no known patterns detected (34 rules, {scanned_count} file{'s' if scanned_count != 1 else ''} scanned, {unscanned_count} local import{'s' if unscanned_count != 1 else ''} not scanned)"
+        summary_line = f"no known patterns detected ({len(ALL_RULES)} rules, {scanned_count} file{'s' if scanned_count != 1 else ''} scanned, {unscanned_count} local import{'s' if unscanned_count != 1 else ''} not scanned)"
         cat_status = "no known patterns detected"
     elif "UNVERIFIABLE" in cert["audit_status"]:
         summary_line = f"unverifiable ({scanned_count} file{'s' if scanned_count != 1 else ''} scanned, {unscanned_count} local import{'s' if unscanned_count != 1 else ''} not scanned)"
@@ -320,7 +322,7 @@ def format_certificate_text(cert: Dict[str, Any]) -> str:
         f"  Git Branch:           {cert['git_branch']}",
         f"  Scanned Files:        {scanned_count} ({unscanned_count} local imports not scanned)",
         "+----------------------------------------------------------------------+",
-        "  INVARIANT VERIFICATION CHECKLIST (34 RULES):",
+        f"  INVARIANT VERIFICATION CHECKLIST ({len(ALL_RULES)} RULES):",
         f"  Summary: {summary_line}",
         f"    * Temporal Lookahead Bias (T001-T019):     {cat_status if cert['invariants_verified']['temporal_lookahead_free'] else 'FAILED'}",
         f"    * Cross-Fold Lineage & Leakage (F001-F002): {cat_status if cert['invariants_verified']['partition_provenance_clean'] else 'FAILED'}",

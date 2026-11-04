@@ -1,7 +1,7 @@
 # id: A3
 # kind: leak
 # expect: T012
-# accept: 
+# accept: T020 
 # allow: 
 # xfail: 
 # desc: shuffled KFold on price data

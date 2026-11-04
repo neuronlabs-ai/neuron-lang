@@ -1,7 +1,7 @@
 # id: I6_kfold_timestamp_only
 # kind: leak
 # expect: T012
-# accept: 
+# accept: T020 
 # allow: 
 # xfail: 
 # desc: only temporal clue is sort_values('timestamp')

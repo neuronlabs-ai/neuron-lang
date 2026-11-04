@@ -106,7 +106,12 @@ class TestT002:
 
 class TestT003:
     def test_fires_on_rolling(self):
-        _check(T003_RollingBeforeSplit(), "df['sma'] = df['close'].rolling(14).mean()", expect_hit=True)
+        # Use non-temporal column name; temporal columns like 'close' are now suppressed
+        _check(T003_RollingBeforeSplit(), "df['sma'] = df['val'].rolling(14).mean()", expect_hit=True)
+
+    def test_suppressed_on_temporal_column(self):
+        # Rolling on financial columns like 'close' is recognized as a causal trailing indicator
+        _check(T003_RollingBeforeSplit(), "df['sma'] = df['close'].rolling(14).mean()", expect_hit=False)
 
     def test_silent_on_mean(self):
         _check(T003_RollingBeforeSplit(), "x = df['close'].mean()", expect_hit=False)
@@ -114,7 +119,12 @@ class TestT003:
 
 class TestT004:
     def test_fires_on_expanding(self):
-        _check(T004_ExpandingBeforeSplit(), "df['cum'] = df['close'].expanding().max()", expect_hit=True)
+        # Use non-temporal column name; temporal columns like 'close' are now suppressed
+        _check(T004_ExpandingBeforeSplit(), "df['cum'] = df['val'].expanding().max()", expect_hit=True)
+
+    def test_suppressed_on_temporal_column(self):
+        # Expanding on financial columns is recognized as a causal cumulative statistic
+        _check(T004_ExpandingBeforeSplit(), "df['cum'] = df['close'].expanding().max()", expect_hit=False)
 
     def test_silent_on_cumsum(self):
         _check(T004_ExpandingBeforeSplit(), "x = df['close'].cumsum()", expect_hit=False)
@@ -467,7 +477,7 @@ model.fit(X, c)
 
 class TestIntegration:
     def test_rule_count(self):
-        assert len(ALL_RULES) == 34, f"Expected exactly 34 rules, got {len(ALL_RULES)}"
+        assert len(ALL_RULES) == 37, f"Expected exactly 37 rules, got {len(ALL_RULES)}"
 
     def test_all_rules_have_code(self):
         for rule in ALL_RULES:
@@ -744,7 +754,7 @@ class TestStressFalsePositives:
 
     # C7: KFold should still fire when temporal markers are present
     def test_t012_fires_on_temporal_data(self):
-        code = "df['close'] = prices\ncv = KFold(n_splits=5, shuffle=True)"
+        code = "df['close'] = prices\ncv = KFold(n_splits=5)"
         tree = ast.parse(code)
         for parent in ast.walk(tree):
             for child in ast.iter_child_nodes(parent):
@@ -812,7 +822,8 @@ class TestStressFalsePositives:
 
     # Expanding without shift should still fire
     def test_t004_fires_on_bare_expanding(self):
-        _check(T004_ExpandingBeforeSplit(), "df['m'] = df['close'].expanding().mean()", expect_hit=True)
+        # Use non-temporal column name; temporal columns are now suppressed as causal
+        _check(T004_ExpandingBeforeSplit(), "df['m'] = df['val'].expanding().mean()", expect_hit=True)
 
 
 class TestStressMissedLeaks:
@@ -1123,3 +1134,76 @@ model.fit(X, df['target'])
         code_train_perc = "df['clipped'] = df['x'].clip(upper=np.percentile(train['x'], 99))"
         diags_train, _ = analyze_code(code_train_perc, "test.py")
         assert not [d for d in diags_train if d['code'] == 'T010'], "np.percentile on train data must be clean"
+
+
+    def test_polars_backward_fill_triggers_t007(self):
+        """Polars pl.col().backward_fill() fills missing values from future rows."""
+        code = """
+import polars as pl
+df = pl.read_csv('prices.csv')
+res = df.with_columns(pl.col('price').backward_fill())
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert any(d['code'] == 'T007' for d in diags), "Polars backward_fill must trigger T007"
+
+    def test_polars_fill_null_strategy_backward_triggers_t007(self):
+        """Polars .fill_null(strategy='backward') fills missing values from future rows."""
+        code = """
+import polars as pl
+df = pl.read_csv('prices.csv')
+res = df.with_columns(pl.col('price').fill_null(strategy='backward'))
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert any(d['code'] == 'T007' for d in diags), "Polars fill_null backward must trigger T007"
+
+    def test_polars_fill_null_strategy_forward_clean(self):
+        """Polars .fill_null(strategy='forward') is causal and clean."""
+        code = """
+import polars as pl
+df = pl.read_csv('prices.csv')
+res = df.with_columns(pl.col('price').fill_null(strategy='forward'))
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert not [d for d in diags if d['code'] == 'T007'], "Polars fill_null forward must not trigger T007"
+
+    def test_polars_rolling_mean_center_true_triggers_t009(self):
+        """Polars .rolling_mean(center=True) leaks future window data."""
+        code = """
+import polars as pl
+df = pl.read_csv('prices.csv')
+res = df.with_columns(pl.col('price').rolling_mean(window_size=10, center=True))
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert any(d['code'] == 'T009' for d in diags), "Polars rolling_mean center=True must trigger T009"
+
+    def test_polars_rolling_mean_center_false_clean(self):
+        """Polars .rolling_mean(center=False) is backward-looking and clean."""
+        code = """
+import polars as pl
+df = pl.read_csv('prices.csv')
+res = df.with_columns(pl.col('price').rolling_mean(window_size=10, center=False))
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert not [d for d in diags if d['code'] == 'T009'], "Polars rolling_mean center=False must not trigger T009"
+
+    def test_polars_join_asof_forward_triggers_t016(self):
+        """Polars .join_asof(strategy='forward') matches future events."""
+        code = """
+import polars as pl
+trades = pl.read_csv('trades.csv')
+quotes = pl.read_csv('quotes.csv')
+joined = trades.join_asof(quotes, on='timestamp', strategy='forward')
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert any(d['code'] == 'T016' for d in diags), "Polars join_asof strategy=forward must trigger T016"
+
+    def test_polars_join_asof_backward_clean(self):
+        """Polars .join_asof(strategy='backward') is causal and clean."""
+        code = """
+import polars as pl
+trades = pl.read_csv('trades.csv')
+quotes = pl.read_csv('quotes.csv')
+joined = trades.join_asof(quotes, on='timestamp', strategy='backward')
+"""
+        diags, _ = analyze_code(code, "test.py")
+        assert not [d for d in diags if d['code'] == 'T016'], "Polars join_asof strategy=backward must not trigger T016"

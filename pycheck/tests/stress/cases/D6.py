@@ -1,7 +1,7 @@
 # id: D6
 # kind: leak
 # expect: T012
-# accept: 
+# accept: T020 
 # allow: 
 # xfail: 
 # desc: shuffled KFold, temporal only via sort_values('timestamp')
