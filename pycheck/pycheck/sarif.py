@@ -35,7 +35,7 @@ def _rule_to_sarif(rule: Rule) -> Dict[str, Any]:
 def generate_sarif(
     diagnostics_by_file: Dict[str, List[Dict[str, Any]]],
     rules: Optional[List[Rule]] = None,
-    version: str = "1.2.0",
+    version: str = "1.1.1",
 ) -> Dict[str, Any]:
     """
     Generate a SARIF v2.1.0 log document from PyCheck diagnostics.

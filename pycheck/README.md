@@ -299,7 +299,7 @@ jobs:
 
 ## Polars First-Class Support
 
-PyCheck v1.2.0 includes native AST detection and taint tracking for **Polars** pipelines:
+PyCheck v1.1.1 includes native AST detection and taint tracking for **Polars** pipelines:
 
 - **Lookahead Fill**: Catches `pl.col().backward_fill()`, `.backward_fill()`, and `.fill_null(strategy="backward")` (`T007`).
 - **Centered Windows**: Catches `rolling_mean(center=True)`, `rolling_std(center=True)`, `rolling_median(center=True)`, etc. (`T009`).
