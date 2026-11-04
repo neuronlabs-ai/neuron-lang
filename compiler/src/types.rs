@@ -84,6 +84,14 @@ impl NType {
             NType::Model(name, _, _) => format!("Model[{}]", name),
             NType::Memory(inner) => format!("Memory[{}]", inner.display()),
             NType::EpisodicMemory(inner) => format!("EpisodicMemory[{}]", inner.display()),
+            NType::SemanticMemory(inner) => format!("SemanticMemory[{}]", inner.display()),
+            NType::WorkingMemory(inner, cap) => {
+                if let Some(c) = cap {
+                    format!("WorkingMemory[{}, {}]", inner.display(), c)
+                } else {
+                    format!("WorkingMemory[{}]", inner.display())
+                }
+            }
             NType::Reward(inner) => format!("Reward[{}]", inner.display()),
             NType::Agent(name) => format!("Agent[{}]", name),
             NType::Void => "Void".into(),
@@ -193,6 +201,9 @@ pub fn types_compatible(a: &NType, b: &NType) -> bool {
         (NType::Model(a, _, _), NType::Model(b, _, _)) => a == b,
         (NType::Model(a, _, _), NType::Base(b)) => a == b,
         (NType::Base(a), NType::Model(b, _, _)) => a == b,
+        (NType::CausalModel(a, _), NType::CausalModel(b, _)) => a == b,
+        (NType::CausalModel(a, _), NType::Base(b)) => a == b,
+        (NType::Base(a), NType::CausalModel(b, _)) => a == b,
         (NType::Void, NType::Void) => true,
         // Safe ingestion: raw data can be introduced into Temporal or Causal ("observed").
         // Raw types can NEVER accept Temporal or Causal, preventing egress/erasure bypasses.
@@ -441,6 +452,7 @@ impl SymbolTable {
         global.define("sum", NType::Fn_(vec![any.clone()], Box::new(float.clone()), None));
         global.define("WorkingMemory", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::WorkingMemory(Box::new(any.clone()), None)), None));
         global.define("EpisodicMemory", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::EpisodicMemory(Box::new(any.clone()))), None));
+        global.define("SemanticMemory", NType::Fn_(vec![int.clone(), int.clone()], Box::new(NType::SemanticMemory(Box::new(any.clone()))), None));
         global.define("Stream", NType::Fn_(vec![int.clone()], Box::new(NType::Stream(Box::new(any.clone()), 100)), None));
         global.define("recall", NType::Fn_(vec![any.clone(), any.clone(), any.clone()], Box::new(NType::List(Box::new(any.clone()))), None));
         global.define("store", NType::Fn_(vec![any.clone(), any.clone()], Box::new(NType::Void), None));
@@ -470,6 +482,7 @@ impl SymbolTable {
         global.define("wieferich_hunt", NType::Fn_(vec![int.clone(), int.clone()], Box::new(int.clone()), None));
 
         // Causal Built-in Operations
+        global.define("causal_dataset", NType::Fn_(vec![any.clone(), any.clone()], Box::new(any.clone()), None));
         global.define("causal_discover", NType::Fn_(vec![any.clone(), any.clone(), float.clone()], Box::new(any.clone()), None));
         global.define("causal_observe", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
         global.define("causal_intervene", NType::Fn_(vec![any.clone(), any.clone(), any.clone(), any.clone(), any.clone()], Box::new(any.clone()), None));
@@ -1788,11 +1801,15 @@ impl TypeChecker {
             if d.field == "slots" || d.field == "read" {
                 return NType::Tensor(vec![Dim::Dynamic, Dim::Dynamic]);
             }
-            if d.field == "clear" || d.field == "write" || d.field == "store" || d.field == "consolidate" {
+            if d.field == "clear" || d.field == "write" || d.field == "store" || d.field == "consolidate"
+                || d.field == "save" || d.field == "restore" || d.field == "load" || d.field == "sync" || d.field == "store_fact" {
                 return NType::Void;
             }
-            if d.field == "recall" {
+            if d.field == "recall" || d.field == "query" || d.field == "query_vector" {
                 return NType::List(Box::new(NType::Any));
+            }
+            if d.field == "query_value" {
+                return NType::Any;
             }
             if d.field == "len" || d.field == "size" {
                 return NType::Base("Int".into());
@@ -1820,7 +1837,8 @@ impl TypeChecker {
             _ => false,
         };
         let is_variadic_optimizer_or_builtin = match callee_name {
-            Some("sgd") | Some("adam") | Some("forget") | Some("print") | Some("println") | Some("print_inline") | Some("byte_encode") | Some("byte_decode") => true,
+            Some("sgd") | Some("adam") | Some("forget") | Some("print") | Some("println") | Some("print_inline") | Some("byte_encode") | Some("byte_decode")
+            | Some("WorkingMemory") | Some("EpisodicMemory") | Some("SemanticMemory") => true,
             _ => false,
         };
 
@@ -2108,7 +2126,7 @@ impl TypeChecker {
             match d.field.as_str() {
                 "observe" => return NType::Causal(Box::new(NType::Any), "observed".into()),
                 "intervene" => return NType::Causal(Box::new(NType::Any), "intervened".into()),
-                "identify" => return NType::Any,
+                "identify" | "identify_conditional" | "estimate_distribution" | "estimate" => return NType::Any,
                 "backdoor" | "frontdoor" => return NType::List(Box::new(NType::Base("String".into()))),
                 "causal_effect" => return NType::Base("Float".into()),
                 "counterfactual" => return NType::Any,
@@ -2124,6 +2142,8 @@ impl TypeChecker {
                 "write_gated" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Tensor".into()), NType::Base("Tensor".into())], Box::new(NType::Void), None),
                 "clear" => return NType::Fn_(vec![], Box::new(NType::Void), None),
                 "slots" => return NType::Base("Tensor".into()),
+                "save" | "restore" | "load" => return NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Void), None),
+                "sync" => return NType::Fn_(vec![], Box::new(NType::Void), None),
                 _ => {}
             }
         }
@@ -2137,6 +2157,24 @@ impl TypeChecker {
                 "recall_weighted" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Int".into())], Box::new(NType::Base("Tensor".into())), None),
                 "consolidate" => return NType::Fn_(vec![], Box::new(NType::Void), None),
                 "forget" => return NType::Fn_(vec![NType::Base("Int".into())], Box::new(NType::Void), None),
+                "len" | "size" => return NType::Base("Int".into()),
+                "clear" => return NType::Fn_(vec![], Box::new(NType::Void), None),
+                "save" | "restore" | "load" => return NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Void), None),
+                "sync" => return NType::Fn_(vec![], Box::new(NType::Void), None),
+                _ => {}
+            }
+        }
+
+        // SemanticMemory methods
+        if let NType::SemanticMemory(ref inner) = obj_ty {
+            match d.field.as_str() {
+                "store_fact" | "store" => return NType::Fn_(vec![NType::Base("String".into()), NType::Base("String".into()), NType::Base("String".into())], Box::new(NType::Void), None),
+                "query" => return NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::List(inner.clone())), None),
+                "query_value" => return NType::Fn_(vec![NType::Base("String".into()), NType::Base("String".into())], Box::new(NType::Any), None),
+                "query_vector" => return NType::Fn_(vec![NType::Base("Tensor".into()), NType::Base("Int".into())], Box::new(NType::List(inner.clone())), None),
+                "save" | "restore" | "load" => return NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Void), None),
+                "forget" | "forget_fact" => return NType::Fn_(vec![NType::Base("String".into())], Box::new(NType::Base("Int".into())), None),
+                "sync" | "clear" => return NType::Fn_(vec![], Box::new(NType::Void), None),
                 "len" | "size" => return NType::Base("Int".into()),
                 _ => {}
             }

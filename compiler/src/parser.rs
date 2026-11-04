@@ -969,11 +969,12 @@ impl Parser {
             TokenType::Store => self.parse_store_expr(),
             // Type constructors used as expressions (e.g., Uncertain(...), WorkingMemory(...), Stream(...))
             TokenType::UncertainKw | TokenType::RandomKw | TokenType::RewardKw
-            | TokenType::WorkingMemoryKw | TokenType::EpisodicMemoryKw | TokenType::MemoryKw
+            | TokenType::WorkingMemoryKw | TokenType::EpisodicMemoryKw | TokenType::SemanticMemoryKw | TokenType::MemoryKw
             | TokenType::StreamKw => {
                 let name = match self.peek_type() {
                     TokenType::WorkingMemoryKw => "WorkingMemory",
                     TokenType::EpisodicMemoryKw => "EpisodicMemory",
+                    TokenType::SemanticMemoryKw => "SemanticMemory",
                     TokenType::MemoryKw => "Memory",
                     TokenType::StreamKw => "Stream",
                     TokenType::UncertainKw => "Uncertain",

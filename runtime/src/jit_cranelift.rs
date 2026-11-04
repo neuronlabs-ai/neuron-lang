@@ -6,12 +6,21 @@
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, types, condcodes::IntCC};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
 
 use neuron_compiler::ir::{IRFunction, Terminator, IROp, IRConst, BlockId, ValueId};
 use std::collections::HashMap;
+
+
+extern "C" fn neuron_jit_print_i64(val: i64) {
+    println!("{}", val);
+}
+
+extern "C" fn neuron_jit_print_inline_i64(val: i64) {
+    print!("{}", val);
+}
 
 pub struct CraneliftEngine {
     builder_context: FunctionBuilderContext,
@@ -32,7 +41,9 @@ impl CraneliftEngine {
             .finish(isa_flags)
             .map_err(|e| e.to_string())?;
 
-        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        builder.symbol("neuron_jit_print_i64", neuron_jit_print_i64 as *const u8);
+        builder.symbol("neuron_jit_print_inline_i64", neuron_jit_print_inline_i64 as *const u8);
         let module = JITModule::new(builder);
 
         Ok(Self {
@@ -144,7 +155,30 @@ impl CraneliftEngine {
     pub fn compile_scalar_function(&mut self, func: &IRFunction) -> Result<fn() -> i64, String> {
         self.ctx.func.signature.returns.push(AbiParam::new(types::I64));
 
+        let mut print_sig = self.module.make_signature();
+        print_sig.params.push(AbiParam::new(types::I64));
+        let print_fn_id = self.module.declare_function("neuron_jit_print_i64", Linkage::Import, &print_sig)
+            .map_err(|e| e.to_string())?;
+
+        let mut print_inline_sig = self.module.make_signature();
+        print_inline_sig.params.push(AbiParam::new(types::I64));
+        let print_inline_fn_id = self.module.declare_function("neuron_jit_print_inline_i64", Linkage::Import, &print_inline_sig)
+            .map_err(|e| e.to_string())?;
+
         let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
+
+        // Scan all instructions across all blocks to collect all variable names
+        let mut var_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for block in &func.blocks {
+            for node in &block.instructions {
+                match &node.op {
+                    IROp::Store { name } | IROp::Load { name } => {
+                        var_names.insert(name.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         // Map NEURON BlockId -> Cranelift Block
         let mut cl_blocks: HashMap<BlockId, cranelift_codegen::ir::Block> = HashMap::new();
@@ -152,17 +186,31 @@ impl CraneliftEngine {
             cl_blocks.insert(block.id, builder.create_block());
         }
 
-        let entry_cl = cl_blocks[&func.entry];
-        builder.switch_to_block(entry_cl);
+        // Create a dedicated prologue block to declare and initialize variables
+        let prologue_block = builder.create_block();
+        builder.append_block_params_for_function_params(prologue_block);
+        builder.switch_to_block(prologue_block);
+
+        let mut var_map: HashMap<String, Variable> = HashMap::new();
+        let zero = builder.ins().iconst(types::I64, 0);
+        for name in &var_names {
+            let var = builder.declare_var(types::I64);
+            builder.def_var(var, zero);
+            var_map.insert(name.clone(), var);
+        }
+
+        let entry_cl = cl_blocks.get(&func.entry)
+            .copied()
+            .ok_or_else(|| format!("Entry block {} not found in IRFunction", func.entry))?;
+        builder.ins().jump(entry_cl, &[]);
+        builder.seal_block(prologue_block);
 
         // Map ValueId -> Cranelift Value
         let mut val_map: HashMap<ValueId, cranelift_codegen::ir::Value> = HashMap::new();
 
         for block in &func.blocks {
             let cl_block = cl_blocks[&block.id];
-            if builder.current_block() != Some(cl_block) {
-                builder.switch_to_block(cl_block);
-            }
+            builder.switch_to_block(cl_block);
 
             for node in &block.instructions {
                 let cl_val = match &node.op {
@@ -170,7 +218,6 @@ impl CraneliftEngine {
                         builder.ins().iconst(types::I64, *v)
                     }
                     IROp::Const(IRConst::Float(f)) => {
-                        builder.ins().f64const(*f);
                         builder.ins().iconst(types::I64, *f as i64)
                     }
                     IROp::Const(IRConst::Bool(b)) => {
@@ -195,6 +242,11 @@ impl CraneliftEngine {
                         let a = val_map[&node.inputs[0]];
                         let b = val_map[&node.inputs[1]];
                         builder.ins().sdiv(a, b)
+                    }
+                    IROp::Mod => {
+                        let a = val_map[&node.inputs[0]];
+                        let b = val_map[&node.inputs[1]];
+                        builder.ins().srem(a, b)
                     }
                     IROp::Neg => {
                         let a = val_map[&node.inputs[0]];
@@ -224,6 +276,18 @@ impl CraneliftEngine {
                         let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
                         builder.ins().uextend(types::I64, cmp)
                     }
+                    IROp::Eq => {
+                        let a = val_map[&node.inputs[0]];
+                        let b = val_map[&node.inputs[1]];
+                        let cmp = builder.ins().icmp(IntCC::Equal, a, b);
+                        builder.ins().uextend(types::I64, cmp)
+                    }
+                    IROp::Neq => {
+                        let a = val_map[&node.inputs[0]];
+                        let b = val_map[&node.inputs[1]];
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, a, b);
+                        builder.ins().uextend(types::I64, cmp)
+                    }
                     IROp::And => {
                         let a = val_map[&node.inputs[0]];
                         let b = val_map[&node.inputs[1]];
@@ -240,9 +304,36 @@ impl CraneliftEngine {
                         let cmp = builder.ins().icmp(IntCC::Equal, a, zero);
                         builder.ins().uextend(types::I64, cmp)
                     }
-                    _ => {
-                        // Default to 0 for unhandled ops in pure scalar prototype
+                    IROp::Store { name } => {
+                        let val = val_map[&node.inputs[0]];
+                        let var = var_map[name];
+                        builder.def_var(var, val);
+                        val
+                    }
+                    IROp::Load { name } => {
+                        let var = match var_map.get(name) {
+                            Some(v) => *v,
+                            None => return Err(format!("Load of undeclared variable '{}'", name)),
+                        };
+                        builder.use_var(var)
+                    }
+                    IROp::Print => {
+                        let val = val_map[&node.inputs[0]];
+                        let local_callee = self.module.declare_func_in_func(print_fn_id, builder.func);
+                        builder.ins().call(local_callee, &[val]);
                         builder.ins().iconst(types::I64, 0)
+                    }
+                    IROp::PrintInline => {
+                        let val = val_map[&node.inputs[0]];
+                        let local_callee = self.module.declare_func_in_func(print_inline_fn_id, builder.func);
+                        builder.ins().call(local_callee, &[val]);
+                        builder.ins().iconst(types::I64, 0)
+                    }
+                    IROp::Nop => {
+                        builder.ins().iconst(types::I64, 0)
+                    }
+                    _ => {
+                        return Err(format!("Unsupported IROp in scalar Cranelift JIT: {:?}", node.op));
                     }
                 };
                 val_map.insert(node.id, cl_val);
@@ -254,7 +345,9 @@ impl CraneliftEngine {
                 }
                 Terminator::Branch { cond, true_block, false_block } => {
                     let c = val_map[cond];
-                    builder.ins().brif(c, cl_blocks[true_block], &[], cl_blocks[false_block], &[]);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let cond_bool = builder.ins().icmp(IntCC::NotEqual, c, zero);
+                    builder.ins().brif(cond_bool, cl_blocks[true_block], &[], cl_blocks[false_block], &[]);
                 }
                 Terminator::Return(Some(vid)) => {
                     let ret = val_map[vid];
@@ -267,7 +360,7 @@ impl CraneliftEngine {
             }
         }
 
-        // Seal all blocks
+        // Seal all basic blocks
         for block in &func.blocks {
             builder.seal_block(cl_blocks[&block.id]);
         }
@@ -396,5 +489,38 @@ mod tests {
         let calc_fn = engine.compile_scalar_function(&func).expect("Compile failed");
         let result = calc_fn();
         assert_eq!(result, 205);
+    }
+
+    #[test]
+    fn test_cranelift_while_loop_with_variables() {
+        let source = r#"
+fn main():
+  let sum = 0
+  let i = 0
+  while i < 100:
+    let sum = sum + i
+    let i = i + 1
+  return sum
+"#;
+        let output = neuron_compiler::compile(source, "test_loop.nr").expect("compile");
+        let main_fn = output.ir.functions.iter().find(|f| f.name == "main").expect("main fn");
+        let mut engine = CraneliftEngine::new().expect("engine");
+        let native_fn = engine.compile_scalar_function(main_fn).expect("compile_scalar_function");
+        let result = native_fn();
+        assert_eq!(result, 4950);
+    }
+
+    #[test]
+    fn test_cranelift_bench_loop_full() {
+        let source = std::fs::read_to_string("../examples/bench_loop.nr").expect("read bench_loop.nr");
+        let output = neuron_compiler::compile(&source, "bench_loop.nr").expect("compile");
+        let main_fn = output.ir.functions.iter().find(|f| f.name == "main").expect("main fn");
+        let mut engine = CraneliftEngine::new().expect("engine");
+        let native_fn = engine.compile_scalar_function(main_fn).expect("compile_scalar_function");
+        let start = std::time::Instant::now();
+        let _ = native_fn();
+        let elapsed = start.elapsed();
+        println!("100k iterations native machine code executed in: {:?}", elapsed);
+        assert!(elapsed.as_millis() < 50, "Expected execution to be < 50ms, took {:?}", elapsed);
     }
 }

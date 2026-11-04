@@ -43,6 +43,8 @@ pub enum TapeOp {
     Reshape { original_shape: Vec<usize> },
     CrossEntropy { pred_softmax: Buffer, pred_shape: Vec<usize>, target: Buffer, batch_size: usize },
     MSE { pred: Buffer, pred_shape: Vec<usize>, target: Buffer, n: usize },
+    Scale { scalar: f64 },
+    Shift { scalar: f64 },
 }
 
 /// The gradient tape — records operations for backward pass.
@@ -54,6 +56,8 @@ pub struct GradTape {
     next_id: usize,
     /// Parameter IDs that should have their gradients preserved after backward
     pub parameter_ids: std::collections::HashSet<usize>,
+    /// When disabled, forward operations skip recording and allocating on the tape.
+    pub enabled: bool,
 }
 
 impl GradTape {
@@ -63,7 +67,27 @@ impl GradTape {
             grads: Vec::new(),
             next_id: 0,
             parameter_ids: std::collections::HashSet::new(),
+            enabled: true,
         }
+    }
+
+    /// Set tape enabled/disabled state; returns previous state.
+    pub fn set_enabled(&mut self, enabled: bool) -> bool {
+        let prev = self.enabled;
+        self.enabled = enabled;
+        prev
+    }
+
+    /// Check if tape recording is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Clear all recorded entries and gradient buffers.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.grads.clear();
+        self.next_id = 0;
     }
 
     /// Allocate a new tensor id.
@@ -84,6 +108,7 @@ impl GradTape {
 
     /// Run tracked add.
     pub fn add(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_add(a, b); }
         let result = tensor_add(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::Add { a_shape: a.shape.clone(), b_shape: b.shape.clone() },
@@ -96,6 +121,7 @@ impl GradTape {
 
     /// Run tracked sub.
     pub fn sub(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_sub(a, b); }
         let result = tensor_sub(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::Sub { a_shape: a.shape.clone(), b_shape: b.shape.clone() },
@@ -107,7 +133,31 @@ impl GradTape {
     }
 
     /// Run tracked mul.
+
+    pub fn scale(&mut self, a: &Tensor, scalar: f64) -> Tensor {
+        if !self.enabled { return tensor_mul_scalar(a, scalar); }
+        let result = tensor_mul_scalar(a, scalar);
+        let out_id = self.alloc_id();
+        self.record(TapeOp::Scale { scalar }, vec![a.id], out_id, result.shape.clone());
+        let mut r = result;
+        r.id = out_id;
+        r.tape_entry = Some(self.entries.len() - 1);
+        r
+    }
+
+    pub fn shift(&mut self, a: &Tensor, scalar: f64) -> Tensor {
+        if !self.enabled { return tensor_add_scalar(a, scalar); }
+        let result = tensor_add_scalar(a, scalar);
+        let out_id = self.alloc_id();
+        self.record(TapeOp::Shift { scalar }, vec![a.id], out_id, result.shape.clone());
+        let mut r = result;
+        r.id = out_id;
+        r.tape_entry = Some(self.entries.len() - 1);
+        r
+    }
+
     pub fn mul(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_mul(a, b); }
         let result = tensor_mul(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::Mul {
@@ -122,6 +172,7 @@ impl GradTape {
 
     /// Run tracked div.
     pub fn div(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_div(a, b); }
         let result = tensor_div(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::Div {
@@ -136,6 +187,7 @@ impl GradTape {
 
     /// Run tracked pow.
     pub fn pow(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_pow(a, b); }
         let result = tensor_pow(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::Pow {
@@ -150,6 +202,7 @@ impl GradTape {
 
     /// Run tracked exp.
     pub fn exp(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_exp(a); }
         let result = tensor_exp(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::Exp { output_data: result.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -161,6 +214,7 @@ impl GradTape {
 
     /// Run tracked log.
     pub fn log(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_log(a); }
         let result = tensor_log(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::Log { input_data: a.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -172,6 +226,7 @@ impl GradTape {
 
     /// Run tracked matmul.
     pub fn matmul(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_matmul(a, b); }
         let result = tensor_matmul(a, b);
         let out_id = self.alloc_id();
         self.record(TapeOp::MatMul {
@@ -186,6 +241,7 @@ impl GradTape {
 
     /// Run tracked relu.
     pub fn relu(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_relu(a); }
         let result = tensor_relu(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::ReLU { input_data: a.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -197,6 +253,7 @@ impl GradTape {
 
     /// Run tracked sigmoid.
     pub fn sigmoid(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_sigmoid(a); }
         let result = tensor_sigmoid(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::Sigmoid { output_data: result.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -208,6 +265,7 @@ impl GradTape {
 
     /// Run tracked tanh.
     pub fn tanh(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_tanh(a); }
         let result = tensor_tanh(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::Tanh { output_data: result.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -219,6 +277,7 @@ impl GradTape {
 
     /// Run tracked softmax.
     pub fn softmax(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_softmax(a); }
         let result = tensor_softmax(a);
         let out_id = self.alloc_id();
         let dim = a.ndim().saturating_sub(1);
@@ -231,6 +290,7 @@ impl GradTape {
 
     /// Run tracked cross-entropy.
     pub fn cross_entropy(&mut self, pred: &Tensor, target: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_cross_entropy(pred, target); }
         let sm = tensor_softmax(pred);
         let result = tensor_cross_entropy(pred, target);
         let out_id = self.alloc_id();
@@ -245,6 +305,7 @@ impl GradTape {
 
     /// Run tracked MSE.
     pub fn mse(&mut self, pred: &Tensor, target: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_mse(pred, target); }
         let result = tensor_mse(pred, target);
         let out_id = self.alloc_id();
         self.record(TapeOp::MSE { pred: pred.data.clone(), pred_shape: pred.shape.clone(), target: target.data.clone(), n: pred.numel() },
@@ -257,6 +318,7 @@ impl GradTape {
 
     /// Run tracked negation.
     pub fn neg(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_neg(a); }
         let result = tensor_neg(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::Neg, vec![a.id], out_id, result.shape.clone());
@@ -268,6 +330,7 @@ impl GradTape {
 
     /// Run tracked gelu.
     pub fn gelu(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return tensor_gelu(a); }
         let result = tensor_gelu(a);
         let out_id = self.alloc_id();
         self.record(TapeOp::GeLU { input_data: a.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -279,6 +342,7 @@ impl GradTape {
 
     /// Run tracked sum.
     pub fn sum(&mut self, a: &Tensor, dim: Option<usize>) -> Tensor {
+        if !self.enabled { return a.sum(dim); }
         let result = a.sum(dim);
         let out_id = self.alloc_id();
         self.record(TapeOp::Sum { input_shape: a.shape.clone(), dim }, vec![a.id], out_id, result.shape.clone());
@@ -290,6 +354,7 @@ impl GradTape {
 
     /// Run tracked mean.
     pub fn mean(&mut self, a: &Tensor, dim: Option<usize>) -> Tensor {
+        if !self.enabled { return a.mean(dim); }
         let result = a.mean(dim);
         let out_id = self.alloc_id();
         self.record(TapeOp::Mean { input_shape: a.shape.clone(), dim }, vec![a.id], out_id, result.shape.clone());
@@ -301,6 +366,7 @@ impl GradTape {
 
     /// Run tracked sqrt.
     pub fn sqrt(&mut self, a: &Tensor) -> Tensor {
+        if !self.enabled { return a.map(|x| x.sqrt()); }
         let result = a.map(|x| x.sqrt());
         let out_id = self.alloc_id();
         self.record(TapeOp::Sqrt { output_data: result.data.clone() }, vec![a.id], out_id, result.shape.clone());
@@ -725,6 +791,22 @@ impl GradTape {
                 TapeOp::Reshape { .. } => {
                     self.accumulate_grad(entry.inputs[0], out_grad);
                 }
+                TapeOp::Scale { scalar } => {
+                    let mut grad = Buffer::new(out_grad.len());
+                    if grad.len() > 65536 {
+                        use rayon::prelude::*;
+                        grad.par_iter_mut().zip(out_grad.par_iter())
+                            .for_each(|(g_in, &g)| { *g_in = g * scalar; });
+                    } else {
+                        for (g_in, &g) in grad.iter_mut().zip(out_grad.iter()) {
+                            *g_in = g * scalar;
+                        }
+                    }
+                    self.accumulate_grad(entry.inputs[0], grad);
+                }
+                TapeOp::Shift { .. } => {
+                    self.accumulate_grad(entry.inputs[0], out_grad);
+                }
             }
         }
     }
@@ -920,6 +1002,13 @@ impl GradTape {
                     let mut reshaped_t = reshaped;
                     reshaped_t.id = self.alloc_id();
                     Self::accumulate_tracked(&mut tracked_grads, self, entry.inputs[0], reshaped_t);
+                }
+                TapeOp::Scale { scalar } => {
+                    let grad_a = self.scale(&out_grad, *scalar);
+                    Self::accumulate_tracked(&mut tracked_grads, self, entry.inputs[0], grad_a);
+                }
+                TapeOp::Shift { .. } => {
+                    Self::accumulate_tracked(&mut tracked_grads, self, entry.inputs[0], out_grad);
                 }
                 _ => {}
             }

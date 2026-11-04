@@ -16,6 +16,7 @@ fn run_jit(src: &str) -> Result<Value, String> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     rust_code.hash(&mut hasher);
+    include_str!("../src/vm.rs").hash(&mut hasher);
     let code_hash = format!("{:016x}", hasher.finish());
 
     let cache_base = std::env::temp_dir().join("neuron_jit_test_shared");

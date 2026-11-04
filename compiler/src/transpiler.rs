@@ -268,9 +268,11 @@ fn jit_matmul_add(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value {
         (Value::Tensor(ta), Value::Tensor(tb)) => {
             let mut r = vm.tape.matmul(ta, tb);
             if let Value::Tensor(tbias) = &bias_plain {
-                r = neuron_runtime::tensor::tensor_add(&r, tbias);
+                r = vm.tape.add(&r, tbias);
             } else if let Value::Float(fbias) = bias_plain {
-                r = r.map(|x| x + fbias);
+                let mut b_tensor = neuron_runtime::tensor::Tensor::new(vec![fbias], vec![1, 1]);
+                b_tensor.id = vm.tape.alloc_id();
+                r = vm.tape.add(&r, &b_tensor);
             }
             Value::Tensor(r)
         }
@@ -302,9 +304,11 @@ fn jit_matmul_add_relu(vm: &mut VM, a: &Value, b: &Value, bias: &Value) -> Value
         (Value::Tensor(ta), Value::Tensor(tb)) => {
             let mut r = vm.tape.matmul(ta, tb);
             if let Value::Tensor(tbias) = &bias_plain {
-                r = neuron_runtime::tensor::tensor_add(&r, tbias);
+                r = vm.tape.add(&r, tbias);
             } else if let Value::Float(fbias) = bias_plain {
-                r = r.map(|x| x + fbias);
+                let mut b_tensor = neuron_runtime::tensor::Tensor::new(vec![fbias], vec![1, 1]);
+                b_tensor.id = vm.tape.alloc_id();
+                r = vm.tape.add(&r, &b_tensor);
             }
             Value::Tensor(vm.tape.relu(&r))
         }
@@ -942,12 +946,14 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                         vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                             function_name: String::new(),
                             current_block: 0,
+                            current_block_idx: 0,
                             instruction_idx: 0,
                             locals: locals.clone(),
                             ssa_values: HashMap::new(),
                             return_addr: None,
                             fused_groups: HashMap::new(),
                             fused_skipped_ids: std::collections::HashSet::new(),
+                        func: None,
                         }});
                         let parameter_ids = vm.collect_parameter_ids();
                         vm.tape.parameter_ids = parameter_ids;
@@ -1030,12 +1036,14 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                         vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                             function_name: String::new(),
                             current_block: 0,
+                            current_block_idx: 0,
                             instruction_idx: 0,
                             locals: locals.clone(),
                             ssa_values: HashMap::new(),
                             return_addr: None,
                             fused_groups: HashMap::new(),
                             fused_skipped_ids: std::collections::HashSet::new(),
+                        func: None,
                         }});
                         let parameter_ids = vm.collect_parameter_ids();
                         vm.tape.parameter_ids = parameter_ids;
@@ -1053,12 +1061,14 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                     vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                         function_name: String::new(),
                         current_block: 0,
+                            current_block_idx: 0,
                         instruction_idx: 0,
                         locals: locals.clone(),
                         ssa_values: HashMap::new(),
                         return_addr: None,
                         fused_groups: HashMap::new(),
                         fused_skipped_ids: std::collections::HashSet::new(),
+                        func: None,
                     }});
                     let res = vm.apply_optimizer({:?}, {} as f64, "adam").unwrap_or(Value::Void);
                     if let Some(frame) = vm.call_stack.last() {{
@@ -1077,12 +1087,14 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                     vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                         function_name: String::new(),
                         current_block: 0,
+                            current_block_idx: 0,
                         instruction_idx: 0,
                         locals: locals.clone(),
                         ssa_values: HashMap::new(),
                         return_addr: None,
                         fused_groups: HashMap::new(),
                         fused_skipped_ids: std::collections::HashSet::new(),
+                        func: None,
                     }});
                     let res = vm.apply_optimizer({:?}, {} as f64, "sgd").unwrap_or(Value::Void);
                     if let Some(frame) = vm.call_stack.last() {{
@@ -1101,12 +1113,14 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                     vm.call_stack.push(neuron_runtime::vm::CallFrame {{
                         function_name: String::new(),
                         current_block: 0,
+                            current_block_idx: 0,
                         instruction_idx: 0,
                         locals: locals.clone(),
                         ssa_values: HashMap::new(),
                         return_addr: None,
                         fused_groups: HashMap::new(),
                         fused_skipped_ids: std::collections::HashSet::new(),
+                        func: None,
                     }});
                     let res = vm.apply_optimizer({:?}, {} as f64, "adamw").unwrap_or(Value::Void);
                     if let Some(frame) = vm.call_stack.last() {{

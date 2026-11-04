@@ -369,7 +369,9 @@ fn cmd_jit(path: &str) {
                         let res = native_fn();
                         let dur = start.elapsed().as_secs_f64() * 1000.0;
                         eprintln!("✓ In-Memory Cranelift JIT compilation & execution completed in {:.2} ms (zero cargo subprocesses)", dur);
-                        println!("{}", res);
+                        if !matches!(main_fn.return_type, neuron_compiler::ir::IRType::Void) {
+                            println!("{}", res);
+                        }
                         return;
                     }
                 }
@@ -633,8 +635,14 @@ fn find_runtime_path() -> String {
     let local_path = std::path::Path::new("runtime");
     if local_path.exists() {
         if let Ok(abs) = std::fs::canonicalize(local_path) {
-            return abs.to_string_lossy().replace("\\", "/");
+            let s = abs.to_string_lossy().to_string();
+            let clean = s.strip_prefix(r"\\?\").unwrap_or(&s);
+            return clean.replace("\\", "/");
         }
+    }
+    let default_repo = std::path::Path::new(r"C:\Users\ADMIN\neuron-lang\runtime");
+    if default_repo.exists() {
+        return default_repo.to_string_lossy().replace("\\", "/");
     }
     "runtime".to_string()
 }

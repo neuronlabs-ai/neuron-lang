@@ -474,8 +474,22 @@ pub fn broadcast_shapes(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> 
     Ok(result)
 }
 
-/// Element-wise add.
+/// Element-wise add with shape identity fast-path to prevent broadcast buffer allocations.
 pub fn tensor_add(a: &Tensor, b: &Tensor) -> Tensor {
+    if a.shape == b.shape {
+        let mut data = Buffer::new(a.data.len());
+        if a.data.len() > 65536 {
+            use rayon::prelude::*;
+            data.par_iter_mut().zip(a.data.par_iter().zip(b.data.par_iter())).for_each(|(d, (x, y))| {
+                *d = x + y;
+            });
+        } else {
+            for (d, (x, y)) in data.iter_mut().zip(a.data.iter().zip(b.data.iter())) {
+                *d = x + y;
+            }
+        }
+        return Tensor::new(data, a.shape.clone());
+    }
     let common_shape = broadcast_shapes(&a.shape, &b.shape).expect("Broadcasting failed in add");
     let a_bc = a.broadcast_to(&common_shape);
     let b_bc = b.broadcast_to(&common_shape);
@@ -493,8 +507,38 @@ pub fn tensor_add(a: &Tensor, b: &Tensor) -> Tensor {
     Tensor::new(data, common_shape)
 }
 
-/// Element-wise subtract.
+/// Element-wise add a scalar directly without materializing broadcast tensor buffers.
+pub fn tensor_add_scalar(a: &Tensor, scalar: f64) -> Tensor {
+    let mut data = Buffer::new(a.data.len());
+    if a.data.len() > 65536 {
+        use rayon::prelude::*;
+        data.par_iter_mut().zip(a.data.par_iter()).for_each(|(d, x)| {
+            *d = x + scalar;
+        });
+    } else {
+        for (d, x) in data.iter_mut().zip(a.data.iter()) {
+            *d = x + scalar;
+        }
+    }
+    Tensor::new(data, a.shape.clone())
+}
+
+/// Element-wise subtract with shape identity fast-path.
 pub fn tensor_sub(a: &Tensor, b: &Tensor) -> Tensor {
+    if a.shape == b.shape {
+        let mut data = Buffer::new(a.data.len());
+        if a.data.len() > 65536 {
+            use rayon::prelude::*;
+            data.par_iter_mut().zip(a.data.par_iter().zip(b.data.par_iter())).for_each(|(d, (x, y))| {
+                *d = x - y;
+            });
+        } else {
+            for (d, (x, y)) in data.iter_mut().zip(a.data.iter().zip(b.data.iter())) {
+                *d = x - y;
+            }
+        }
+        return Tensor::new(data, a.shape.clone());
+    }
     let common_shape = broadcast_shapes(&a.shape, &b.shape).expect("Broadcasting failed in sub");
     let a_bc = a.broadcast_to(&common_shape);
     let b_bc = b.broadcast_to(&common_shape);
@@ -512,8 +556,43 @@ pub fn tensor_sub(a: &Tensor, b: &Tensor) -> Tensor {
     Tensor::new(data, common_shape)
 }
 
-/// Element-wise multiply.
+/// Element-wise subtract a scalar: tensor - scalar.
+pub fn tensor_sub_scalar(a: &Tensor, scalar: f64) -> Tensor {
+    tensor_add_scalar(a, -scalar)
+}
+
+/// Element-wise subtract from a scalar: scalar - tensor.
+pub fn tensor_rsub_scalar(scalar: f64, b: &Tensor) -> Tensor {
+    let mut data = Buffer::new(b.data.len());
+    if b.data.len() > 65536 {
+        use rayon::prelude::*;
+        data.par_iter_mut().zip(b.data.par_iter()).for_each(|(d, y)| {
+            *d = scalar - y;
+        });
+    } else {
+        for (d, y) in data.iter_mut().zip(b.data.iter()) {
+            *d = scalar - y;
+        }
+    }
+    Tensor::new(data, b.shape.clone())
+}
+
+/// Element-wise multiply with shape identity fast-path.
 pub fn tensor_mul(a: &Tensor, b: &Tensor) -> Tensor {
+    if a.shape == b.shape {
+        let mut data = Buffer::new(a.data.len());
+        if a.data.len() > 65536 {
+            use rayon::prelude::*;
+            data.par_iter_mut().zip(a.data.par_iter().zip(b.data.par_iter())).for_each(|(d, (x, y))| {
+                *d = x * y;
+            });
+        } else {
+            for (d, (x, y)) in data.iter_mut().zip(a.data.iter().zip(b.data.iter())) {
+                *d = x * y;
+            }
+        }
+        return Tensor::new(data, a.shape.clone());
+    }
     let common_shape = broadcast_shapes(&a.shape, &b.shape).expect("Broadcasting failed in mul");
     let a_bc = a.broadcast_to(&common_shape);
     let b_bc = b.broadcast_to(&common_shape);
@@ -531,8 +610,38 @@ pub fn tensor_mul(a: &Tensor, b: &Tensor) -> Tensor {
     Tensor::new(data, common_shape)
 }
 
-/// Element-wise divide.
+/// Element-wise multiply a tensor by a scalar directly.
+pub fn tensor_mul_scalar(a: &Tensor, scalar: f64) -> Tensor {
+    let mut data = Buffer::new(a.data.len());
+    if a.data.len() > 65536 {
+        use rayon::prelude::*;
+        data.par_iter_mut().zip(a.data.par_iter()).for_each(|(d, x)| {
+            *d = x * scalar;
+        });
+    } else {
+        for (d, x) in data.iter_mut().zip(a.data.iter()) {
+            *d = x * scalar;
+        }
+    }
+    Tensor::new(data, a.shape.clone())
+}
+
+/// Element-wise divide with shape identity fast-path.
 pub fn tensor_div(a: &Tensor, b: &Tensor) -> Tensor {
+    if a.shape == b.shape {
+        let mut data = Buffer::new(a.data.len());
+        if a.data.len() > 65536 {
+            use rayon::prelude::*;
+            data.par_iter_mut().zip(a.data.par_iter().zip(b.data.par_iter())).for_each(|(d, (x, y))| {
+                *d = x / y;
+            });
+        } else {
+            for (d, (x, y)) in data.iter_mut().zip(a.data.iter().zip(b.data.iter())) {
+                *d = x / y;
+            }
+        }
+        return Tensor::new(data, a.shape.clone());
+    }
     let common_shape = broadcast_shapes(&a.shape, &b.shape).expect("Broadcasting failed in div");
     let a_bc = a.broadcast_to(&common_shape);
     let b_bc = b.broadcast_to(&common_shape);
@@ -548,6 +657,27 @@ pub fn tensor_div(a: &Tensor, b: &Tensor) -> Tensor {
         }
     }
     Tensor::new(data, common_shape)
+}
+
+/// Element-wise divide a tensor by a scalar: tensor / scalar.
+pub fn tensor_div_scalar(a: &Tensor, scalar: f64) -> Tensor {
+    tensor_mul_scalar(a, 1.0 / scalar)
+}
+
+/// Element-wise divide a scalar by a tensor: scalar / tensor.
+pub fn tensor_rdiv_scalar(scalar: f64, b: &Tensor) -> Tensor {
+    let mut data = Buffer::new(b.data.len());
+    if b.data.len() > 65536 {
+        use rayon::prelude::*;
+        data.par_iter_mut().zip(b.data.par_iter()).for_each(|(d, y)| {
+            *d = scalar / y;
+        });
+    } else {
+        for (d, y) in data.iter_mut().zip(b.data.iter()) {
+            *d = scalar / y;
+        }
+    }
+    Tensor::new(data, b.shape.clone())
 }
 
 /// Element-wise power: a ^ b

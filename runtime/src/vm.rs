@@ -150,6 +150,7 @@ pub enum Value {
     CausalModel { name: String, variables: Vec<String> },
     WorkingMemory(std::rc::Rc<std::cell::RefCell<crate::memory::WorkingMemoryData>>),
     EpisodicMemory(std::rc::Rc<std::cell::RefCell<crate::memory::EpisodicMemoryData>>),
+    SemanticMemory(std::rc::Rc<std::cell::RefCell<crate::memory::SemanticMemoryData>>),
     Stream(std::rc::Rc<std::cell::RefCell<StreamData>>),
     Void,
     None,
@@ -175,7 +176,15 @@ impl Value {
         curr
     }
 
+    #[inline(always)]
+    pub fn is_wrapped(&self) -> bool {
+        matches!(self, Value::Temporal { .. } | Value::Causal { .. })
+    }
+
     pub fn strip_wrappers(self) -> (Value, Vec<ValueWrapper>) {
+        if !self.is_wrapped() {
+            return (self, Vec::new());
+        }
         let mut val = self;
         let mut wrappers = Vec::new();
         loop {
@@ -194,7 +203,11 @@ impl Value {
         (val, wrappers)
     }
 
+    #[inline(always)]
     pub fn apply_wrappers(mut self, wrappers: Vec<ValueWrapper>) -> Self {
+        if wrappers.is_empty() {
+            return self;
+        }
         for w in wrappers.into_iter().rev() {
             match w {
                 ValueWrapper::Temporal(dir) => self = Value::Temporal { data: Box::new(self), direction: dir },
@@ -204,7 +217,10 @@ impl Value {
         self
     }
 
+    #[inline(always)]
     pub fn combine_wrappers(mut a_wraps: Vec<ValueWrapper>, b_wraps: Vec<ValueWrapper>) -> Vec<ValueWrapper> {
+        if a_wraps.is_empty() { return b_wraps; }
+        if b_wraps.is_empty() { return a_wraps; }
         for w in b_wraps {
             if !a_wraps.iter().any(|cw| match (cw, &w) {
                 (ValueWrapper::Temporal(d1), ValueWrapper::Temporal(d2)) => d1 == d2,
@@ -305,6 +321,10 @@ impl Value {
                 let em_ref = em.borrow();
                 format!("<EpisodicMemory dim={} entries={}/{}>", em_ref.dim, em_ref.len(), em_ref.capacity)
             }
+            Value::SemanticMemory(sm) => {
+                let sm_ref = sm.borrow();
+                format!("<SemanticMemory dim={} entries={}/{}>", sm_ref.dim, sm_ref.len(), sm_ref.capacity)
+            }
             Value::Stream(s) => {
                 let s_ref = s.borrow();
                 format!("<Stream len={}/{} head={}>", s_ref.len(), s_ref.capacity, s_ref.head)
@@ -322,6 +342,8 @@ pub struct VM {
     pub globals: HashMap<String, Value>,
     /// Function table (name → IR function).
     pub functions: HashMap<String, IRFunction>,
+    /// Arc cached functions for fast clone-free execution.
+    pub arc_functions: HashMap<String, std::sync::Arc<IRFunction>>,
     /// Gradient tape.
     pub tape: GradTape,
     /// Call stack for nested function calls.
@@ -350,17 +372,21 @@ pub struct VM {
     pub precision: crate::tensor::DType,
     /// Distributed cluster training manager.
     pub dist_manager: crate::distributed::DistributedManager,
+    /// Cached last backward pass key: (loss_tensor_id, tape_len)
+    pub last_backward_loss: Option<(usize, usize)>,
 }
 
 pub struct CallFrame {
     pub function_name: String,
     pub current_block: BlockId,
+    pub current_block_idx: usize,
     pub instruction_idx: usize,
     pub locals: HashMap<String, Value>,
     pub ssa_values: HashMap<ValueId, Value>,
     pub return_addr: Option<(String, BlockId, ValueId)>, // (caller_function_name, caller_block, output_val_id)
     pub fused_groups: HashMap<ValueId, (usize, neuron_compiler::cuda_codegen::FusedGroup)>,
     pub fused_skipped_ids: std::collections::HashSet<ValueId>,
+    pub func: Option<std::sync::Arc<IRFunction>>,
 }
 
 impl VM {
@@ -368,6 +394,7 @@ impl VM {
         Self {
             globals: HashMap::new(),
             functions: HashMap::new(),
+            arc_functions: HashMap::new(),
             tape: GradTape::new(),
             call_stack: Vec::new(),
             max_depth: 256,
@@ -385,6 +412,7 @@ impl VM {
             dist_manager: crate::distributed::DistributedManager::new(
                 crate::distributed::DistributedConfig::single_node()
             ),
+            last_backward_loss: None,
         }
     }
 
@@ -394,9 +422,24 @@ impl VM {
     }
 
     /// Load an IR program into the VM.
+    /// Get or create an Arc-wrapped IRFunction for zero-clone execution.
+    pub fn get_arc_function(&mut self, name: &str) -> Option<std::sync::Arc<IRFunction>> {
+        if let Some(f) = self.arc_functions.get(name) {
+            return Some(f.clone());
+        }
+        if let Some(f) = self.functions.get(name) {
+            let arc = std::sync::Arc::new(f.clone());
+            self.arc_functions.insert(name.to_string(), arc.clone());
+            return Some(arc);
+        }
+        None
+    }
+
     pub fn load(&mut self, program: &IRProgram) {
         for func in &program.functions {
+            let arc = std::sync::Arc::new(func.clone());
             self.functions.insert(func.name.clone(), func.clone());
+            self.arc_functions.insert(func.name.clone(), arc);
         }
         for global in &program.globals {
             let val = match &global.value {
@@ -1155,12 +1198,31 @@ impl VM {
                 }
             }
         }
+
+        if resolved_name == "causal_dataset" || resolved_name == "CausalDataset" {
+            if args.len() < 2 {
+                return Err("causal_dataset requires (variables, rows)".into());
+            }
+            let variables = parse_string_or_list(&args[0])?;
+            let rows = parse_categorical_matrix(&args[1])?;
+            let dataset = crate::causal::CausalDataset::new(variables.clone(), rows.clone())?;
+            let mut fields = HashMap::new();
+            fields.insert("variables".into(), Value::List(variables.into_iter().map(Value::Str).collect()));
+            fields.insert("rows".into(), Value::List(rows.into_iter().map(|row| {
+                Value::List(row.into_iter().map(Value::Str).collect())
+            }).collect()));
+            fields.insert("sample_size".into(), Value::Int(dataset.rows().len() as i64));
+            return Ok(Value::Model {
+                name: "CausalDataset".into(),
+                fields: Rc::new(RefCell::new(fields)),
+            });
+        }
         
         if resolved_name.starts_with("obj_") {
             if let Some(first_arg) = args.first() {
                 if let Value::CausalModel { name: model_name, variables } = first_arg {
                     let method = &resolved_name[4..];
-                    let model = instantiate_causal_model(&self.globals, model_name, variables);
+                    let model = instantiate_causal_model(&self.globals, model_name, variables)?;
 
                     match method {
                         "observe" => {
@@ -1192,35 +1254,55 @@ impl VM {
                             return Ok(convert_causal_results(int_res));
                         }
                         "identify" => {
-                            let query = if args.len() >= 2 {
-                                match &args[1] {
-                                    Value::Str(s) => s.clone(),
-                                    _ => args[1].display(),
-                                }
-                            } else { "".to_string() };
-                            let do_var = if args.len() >= 3 {
-                                match &args[2] {
-                                    Value::Str(s) => s.clone(),
-                                    _ => args[2].display(),
-                                }
+                            let queries = if args.len() >= 2 {
+                                parse_string_or_list(&args[1])?
+                            } else { vec![] };
+                            let do_vars = if args.len() >= 3 {
+                                parse_string_or_list(&args[2])?
                             } else if let Some(pos) = keyword_args.iter().position(|k| k == "do") {
-                                args.get(pos + 1).map(|v| match v {
-                                    Value::Str(s) => s.clone(),
-                                    _ => v.display(),
-                                }).unwrap_or_default()
-                            } else { "".to_string() };
+                                match args.get(pos + 1) {
+                                    Some(value) => parse_string_or_list(value)?,
+                                    None => vec![],
+                                }
+                            } else { vec![] };
+                            let conditions = if args.len() >= 4 {
+                                parse_string_or_list(&args[3])?
+                            } else if let Some(pos) = keyword_args.iter().position(|k| k == "given" || k == "condition" || k == "conditions") {
+                                match args.get(pos + 1) {
+                                    Some(value) => parse_string_or_list(value)?,
+                                    None => vec![],
+                                }
+                            } else { vec![] };
 
-                            let res = model.identify(&[query], &[do_var]);
-                            let fields = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
-                            fields.borrow_mut().insert("identifiable".into(), Value::Bool(res.identifiable));
-                            fields.borrow_mut().insert("method".into(), Value::Str(res.method));
-                            fields.borrow_mut().insert("formula".into(), Value::Str(res.formula));
-                            fields.borrow_mut().insert("adjustment_set".into(), Value::List(res.adjustment_set.into_iter().map(Value::Str).collect()));
-                            fields.borrow_mut().insert("hedge".into(), Value::List(res.hedge.unwrap_or_default().into_iter().map(Value::Str).collect()));
-                            return Ok(Value::Model {
-                                name: "IdentificationResult".into(),
-                                fields,
-                            });
+                            let res = if conditions.is_empty() {
+                                model.identify(&queries, &do_vars)
+                            } else {
+                                model.identify_conditional(&queries, &do_vars, &conditions)
+                            };
+                            return Ok(identification_result_to_value(res));
+                        }
+                        "identify_conditional" => {
+                            if args.len() < 4 {
+                                return Err("identify_conditional requires 4 arguments: (model, outcomes, treatments, conditions)".into());
+                            }
+                            let queries = parse_string_or_list(&args[1])?;
+                            let do_vars = parse_string_or_list(&args[2])?;
+                            let conditions = parse_string_or_list(&args[3])?;
+                            let res = model.identify_conditional(&queries, &do_vars, &conditions);
+                            return Ok(identification_result_to_value(res));
+                        }
+                        "estimate_distribution" | "estimate" => {
+                            if args.len() < 5 {
+                                return Err("estimate_distribution requires (dataset, outcomes, interventions, conditions)".into());
+                            }
+                            let dataset = parse_causal_dataset(&args[1])?;
+                            let outcomes = parse_string_or_list(&args[2])?;
+                            let interventions = parse_category_map(&args[3])?;
+                            let conditions = parse_category_map(&args[4])?;
+                            let estimate = model.estimate_distribution(
+                                &dataset, &outcomes, &interventions, &conditions,
+                            )?;
+                            return Ok(causal_estimate_to_value(estimate));
                         }
                         "backdoor" => {
                             let treatment = if args.len() >= 2 { args[1].display() } else { "".to_string() };
@@ -1302,6 +1384,23 @@ impl VM {
                         "slots" => {
                             return Ok(Value::Tensor(wm.borrow().get_slots()));
                         }
+                        "save" => {
+                            if args.len() < 2 { return Err("save requires file path string".into()); }
+                            let path = args[1].display();
+                            wm.borrow().save_to_file(&path).map_err(|e| format!("Failed to save WorkingMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
+                        "restore" | "load" => {
+                            if args.len() < 2 { return Err("restore requires file path string".into()); }
+                            let path = args[1].display();
+                            let loaded = crate::memory::WorkingMemoryData::load_from_file(&path)?;
+                            *wm.borrow_mut() = loaded;
+                            return Ok(Value::Void);
+                        }
+                        "sync" => {
+                            wm.borrow().sync().map_err(|e| format!("Failed to sync WorkingMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
                         _ => return Err(format!("Unknown WorkingMemory method: {}", method)),
                     }
                 } else if let Value::EpisodicMemory(em) = first_arg {
@@ -1372,7 +1471,131 @@ impl VM {
                         "len" | "size" => {
                             return Ok(Value::Int(em.borrow().len() as i64));
                         }
+                        "clear" => {
+                            em.borrow_mut().entries.clear();
+                            return Ok(Value::Void);
+                        }
+                        "save" => {
+                            if args.len() < 2 { return Err("save requires file path string".into()); }
+                            let path = args[1].display();
+                            em.borrow().save_to_file(&path).map_err(|e| format!("Failed to save EpisodicMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
+                        "restore" | "load" => {
+                            if args.len() < 2 { return Err("restore requires file path string".into()); }
+                            let path = args[1].display();
+                            let loaded = crate::memory::EpisodicMemoryData::load_from_file(&path)?;
+                            *em.borrow_mut() = loaded;
+                            return Ok(Value::Void);
+                        }
+                        "sync" => {
+                            em.borrow().sync().map_err(|e| format!("Failed to sync EpisodicMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
                         _ => return Err(format!("Unknown EpisodicMemory method: {}", method)),
+                    }
+                } else if let Value::SemanticMemory(sm) = first_arg {
+                    let method = &resolved_name[4..];
+                    match method {
+                        "store_fact" | "store" => {
+                            if args.len() == 4 {
+                                let s = args[1].display();
+                                let r = args[2].display();
+                                let o = args[3].display();
+                                sm.borrow_mut().store_fact(&s, &r, &o, args[3].clone(), 1.0, None);
+                                return Ok(Value::Void);
+                            } else if args.len() == 3 {
+                                let s = args[1].display();
+                                let o = args[2].display();
+                                sm.borrow_mut().store_fact(&s, "is", &o, args[2].clone(), 1.0, None);
+                                return Ok(Value::Void);
+                            } else if args.len() == 2 {
+                                match &args[1] {
+                                    Value::Tuple(items) | Value::List(items) if items.len() >= 3 => {
+                                        let s = items[0].display();
+                                        let r = items[1].display();
+                                        let o = items[2].display();
+                                        let conf = if items.len() >= 4 { items[3].as_float() } else { 1.0 };
+                                        sm.borrow_mut().store_fact(&s, &r, &o, items[2].clone(), conf, None);
+                                    }
+                                    Value::Tensor(t) => {
+                                        sm.borrow_mut().store_fact("vector", "embedding", "", args[1].clone(), 1.0, Some(t.clone()));
+                                    }
+                                    _ => {
+                                        sm.borrow_mut().store_fact("concept", "is", &args[1].display(), args[1].clone(), 1.0, None);
+                                    }
+                                }
+                                return Ok(Value::Void);
+                            } else if args.len() >= 5 {
+                                let s = args[1].display();
+                                let r = args[2].display();
+                                let o = args[3].display();
+                                let val = args[3].clone();
+                                let conf = args[4].as_float();
+                                let emb = if args.len() >= 6 {
+                                    match &args[5] {
+                                        Value::Tensor(t) => Some(t.clone()),
+                                        _ => None,
+                                    }
+                                } else { None };
+                                sm.borrow_mut().store_fact(&s, &r, &o, val, conf, emb);
+                                return Ok(Value::Void);
+                            } else {
+                                return Err("SemanticMemory.store_fact requires (subject, relation, object, [confidence], [embedding])".into());
+                            }
+                        }
+                        "query" => {
+                            let subj = if args.len() >= 2 && !matches!(args[1], Value::None) { Some(args[1].display()) } else { None };
+                            let rel = if args.len() >= 3 && !matches!(args[2], Value::None) { Some(args[2].display()) } else { None };
+                            let obj = if args.len() >= 4 && !matches!(args[3], Value::None) { Some(args[3].display()) } else { None };
+                            let results = sm.borrow().query(subj.as_deref(), rel.as_deref(), obj.as_deref());
+                            return Ok(Value::List(results));
+                        }
+                        "query_value" => {
+                            let subj = if args.len() >= 2 { Some(args[1].display()) } else { None };
+                            let rel = if args.len() >= 3 { Some(args[2].display()) } else { None };
+                            let val = sm.borrow().query_value(subj.as_deref(), rel.as_deref());
+                            return Ok(val);
+                        }
+                        "query_vector" | "recall" => {
+                            if args.len() < 2 { return Err("SemanticMemory.query_vector requires query tensor".into()); }
+                            let q = match &args[1] { Value::Tensor(t) => t, _ => return Err("query must be Tensor".into()) };
+                            let k = if args.len() >= 3 { args[2].as_int() as usize } else { 5 };
+                            let results = sm.borrow().query_vector(q, k);
+                            return Ok(Value::List(results));
+                        }
+                        "save" => {
+                            if args.len() < 2 { return Err("save requires file path string".into()); }
+                            let path = args[1].display();
+                            sm.borrow().save_to_file(&path).map_err(|e| format!("Failed to save SemanticMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
+                        "restore" | "load" => {
+                            if args.len() < 2 { return Err("restore requires file path string".into()); }
+                            let path = args[1].display();
+                            let loaded = crate::memory::SemanticMemoryData::load_from_file(&path)?;
+                            *sm.borrow_mut() = loaded;
+                            return Ok(Value::Void);
+                        }
+                        "sync" => {
+                            sm.borrow().sync().map_err(|e| format!("Failed to sync SemanticMemory: {}", e))?;
+                            return Ok(Value::Void);
+                        }
+                        "forget" | "forget_fact" => {
+                            if args.len() < 2 { return Err("forget requires subject string".into()); }
+                            let s = args[1].display();
+                            let r = if args.len() >= 3 && !matches!(args[2], Value::None) { Some(args[2].display()) } else { None };
+                            let removed = sm.borrow_mut().forget_fact(&s, r.as_deref());
+                            return Ok(Value::Int(removed as i64));
+                        }
+                        "clear" => {
+                            sm.borrow_mut().clear();
+                            return Ok(Value::Void);
+                        }
+                        "len" | "size" => {
+                            return Ok(Value::Int(sm.borrow().len() as i64));
+                        }
+                        _ => return Err(format!("Unknown SemanticMemory method: {}", method)),
                     }
                 } else if let Value::Stream(s) = first_arg {
                     let method = &resolved_name[4..];
@@ -1536,25 +1759,26 @@ impl VM {
             });
         }
 
-        if resolved_name == "identify" {
-            if args.len() < 3 {
-                return Err("identify requires 3 arguments: (model, outcome, treatment)".into());
+        if resolved_name == "identify" || resolved_name == "identify_conditional" {
+            let conditional = resolved_name == "identify_conditional";
+            if args.len() < if conditional { 4 } else { 3 } {
+                return Err(if conditional {
+                    "identify_conditional requires 4 arguments: (model, outcomes, treatments, conditions)".into()
+                } else {
+                    "identify requires 3 arguments: (model, outcome, treatment)".into()
+                });
             }
             if let Value::CausalModel { name: model_name, variables } = &args[0] {
-                let model = instantiate_causal_model(&self.globals, model_name, variables);
-                let query = args[1].display();
-                let do_var = args[2].display();
-                let res = model.identify(&[query], &[do_var]);
-                let fields = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
-                fields.borrow_mut().insert("identifiable".into(), Value::Bool(res.identifiable));
-                fields.borrow_mut().insert("method".into(), Value::Str(res.method));
-                fields.borrow_mut().insert("formula".into(), Value::Str(res.formula));
-                fields.borrow_mut().insert("adjustment_set".into(), Value::List(res.adjustment_set.into_iter().map(Value::Str).collect()));
-                fields.borrow_mut().insert("hedge".into(), Value::List(res.hedge.unwrap_or_default().into_iter().map(Value::Str).collect()));
-                return Ok(Value::Model {
-                    name: "IdentificationResult".into(),
-                    fields,
-                });
+                let model = instantiate_causal_model(&self.globals, model_name, variables)?;
+                let query = parse_string_or_list(&args[1])?;
+                let do_var = parse_string_or_list(&args[2])?;
+                let conditions = if conditional { parse_string_or_list(&args[3])? } else { vec![] };
+                let res = if conditions.is_empty() {
+                    model.identify(&query, &do_var)
+                } else {
+                    model.identify_conditional(&query, &do_var, &conditions)
+                };
+                return Ok(identification_result_to_value(res));
             } else {
                 return Err("identify argument 1 must be a CausalModel".into());
             }
@@ -1565,7 +1789,7 @@ impl VM {
                 return Err("causal_effect requires 4 arguments: (model, treatment, outcome, val)".into());
             }
             if let Value::CausalModel { name: model_name, variables } = &args[0] {
-                let model = instantiate_causal_model(&self.globals, model_name, variables);
+                let model = instantiate_causal_model(&self.globals, model_name, variables)?;
                 let treatment = args[1].display();
                 let outcome = args[2].display();
                 let val = args[3].as_float();
@@ -3345,18 +3569,68 @@ impl VM {
         if resolved_name == "WorkingMemory" {
             let dim = if !args.is_empty() { args[0].as_int() as usize } else { 64 };
             let slots = if args.len() >= 2 { args[1].as_int() as usize } else { 8 };
-            return Ok(Value::WorkingMemory(std::rc::Rc::new(std::cell::RefCell::new(
+            let path = if args.len() >= 3 { Some(args[2].display()) } else { None };
+            let wm_data = if let Some(ref p) = path {
+                if std::path::Path::new(p).exists() {
+                    crate::memory::WorkingMemoryData::load_from_file(p)?
+                } else {
+                    let mut data = crate::memory::WorkingMemoryData::new(dim, slots);
+                    data.persist_path = Some(p.clone());
+                    data
+                }
+            } else {
                 crate::memory::WorkingMemoryData::new(dim, slots)
-            ))));
+            };
+            return Ok(Value::WorkingMemory(std::rc::Rc::new(std::cell::RefCell::new(wm_data))));
         }
 
         if resolved_name == "EpisodicMemory" {
             let dim = if !args.is_empty() { args[0].as_int() as usize } else { 64 };
             let capacity = if args.len() >= 2 { args[1].as_int() as usize } else { 100 };
-            let decay = if args.len() >= 3 { args[2].as_float() } else { 0.01 };
-            return Ok(Value::EpisodicMemory(std::rc::Rc::new(std::cell::RefCell::new(
-                crate::memory::EpisodicMemoryData::new(dim, capacity, Some(decay))
-            ))));
+            let decay = if args.len() >= 3 {
+                match &args[2] {
+                    Value::Float(f) => Some(*f),
+                    Value::Int(i) => Some(*i as f64),
+                    _ => None,
+                }
+            } else { None };
+            let path = if args.len() >= 4 {
+                Some(args[3].display())
+            } else if args.len() == 3 && matches!(&args[2], Value::Str(_)) {
+                Some(args[2].display())
+            } else {
+                None
+            };
+            let em_data = if let Some(ref p) = path {
+                if std::path::Path::new(p).exists() {
+                    crate::memory::EpisodicMemoryData::load_from_file(p)?
+                } else {
+                    let mut data = crate::memory::EpisodicMemoryData::new(dim, capacity, decay);
+                    data.persist_path = Some(p.clone());
+                    data
+                }
+            } else {
+                crate::memory::EpisodicMemoryData::new(dim, capacity, decay)
+            };
+            return Ok(Value::EpisodicMemory(std::rc::Rc::new(std::cell::RefCell::new(em_data))));
+        }
+
+        if resolved_name == "SemanticMemory" {
+            let dim = if !args.is_empty() { args[0].as_int() as usize } else { 64 };
+            let capacity = if args.len() >= 2 { args[1].as_int() as usize } else { 1000 };
+            let path = if args.len() >= 3 { Some(args[2].display()) } else { None };
+            let sm_data = if let Some(ref p) = path {
+                if std::path::Path::new(p).exists() {
+                    crate::memory::SemanticMemoryData::load_from_file(p)?
+                } else {
+                    let mut data = crate::memory::SemanticMemoryData::new(dim, capacity);
+                    data.persist_path = Some(p.clone());
+                    data
+                }
+            } else {
+                crate::memory::SemanticMemoryData::new(dim, capacity)
+            };
+            return Ok(Value::SemanticMemory(std::rc::Rc::new(std::cell::RefCell::new(sm_data))));
         }
 
         if resolved_name == "Stream" {
@@ -3686,12 +3960,12 @@ impl VM {
             return Ok(cert);
         }
 
-        let func = if let Some(f) = self.functions.get(&resolved_name) {
-            f.clone()
-        } else if self.functions.contains_key(&format!("{}_new", resolved_name)) {
+        let func = if let Some(f) = self.get_arc_function(&resolved_name) {
+            f
+        } else if self.functions.contains_key(&format!("{}_new", resolved_name)) || self.arc_functions.contains_key(&format!("{}_new", resolved_name)) {
             resolved_name = format!("{}_new", resolved_name);
-            self.functions.get(&resolved_name)
-                .ok_or_else(|| format!("Function '{}' not found", resolved_name))?.clone()
+            self.get_arc_function(&resolved_name)
+                .ok_or_else(|| format!("Function '{}' not found", resolved_name))?
         } else {
             return Err(format!("Function '{}' not found", resolved_name));
         };
@@ -3704,16 +3978,19 @@ impl VM {
             return Err("Stack overflow: maximum recursion depth exceeded".into());
         }
 
+        let entry_idx = func.blocks.iter().position(|b| b.id == func.entry).unwrap_or(0);
         // Initialize the first CallFrame
         let mut frame = CallFrame {
             function_name: resolved_name.clone(),
             current_block: func.entry,
+            current_block_idx: entry_idx,
             instruction_idx: 0,
             locals: HashMap::new(),
             ssa_values: HashMap::new(),
             return_addr: None,
             fused_groups: build_fused_groups_cache(&func, &self.functions.values().cloned().collect::<Vec<_>>()),
             fused_skipped_ids: std::collections::HashSet::new(),
+            func: Some(func.clone()),
         };
 
         // If it's a constructor, pre-initialize "self"
@@ -3738,18 +4015,31 @@ impl VM {
 
         while !self.call_stack.is_empty() {
             let frame_idx = self.call_stack.len() - 1;
-            let current_func_name = self.call_stack[frame_idx].function_name.clone();
-            
-            let func = self.functions.get(&current_func_name)
-                .ok_or_else(|| format!("Function '{}' not found during execution", current_func_name))?.clone();
+            let func = match self.call_stack[frame_idx].func {
+                Some(ref f) => f.clone(),
+                None => {
+                    let name = self.call_stack[frame_idx].function_name.clone();
+                    let f = self.get_arc_function(&name)
+                        .ok_or_else(|| format!("Function '{}' not found during execution", name))?;
+                    self.call_stack[frame_idx].func = Some(f.clone());
+                    f
+                }
+            };
             let current_block_id = self.call_stack[frame_idx].current_block;
+            let current_block_idx = self.call_stack[frame_idx].current_block_idx;
             let inst_idx = self.call_stack[frame_idx].instruction_idx;
             
-            let block = func.blocks.iter().find(|b| b.id == current_block_id)
-                .ok_or_else(|| format!("Block {} not found in function {}", current_block_id, current_func_name))?;
+            let block = if current_block_idx < func.blocks.len() && func.blocks[current_block_idx].id == current_block_id {
+                &func.blocks[current_block_idx]
+            } else if let Some(pos) = func.blocks.iter().position(|b| b.id == current_block_id) {
+                self.call_stack[frame_idx].current_block_idx = pos;
+                &func.blocks[pos]
+            } else {
+                return Err(format!("Block {} not found in function {}", current_block_id, self.call_stack[frame_idx].function_name));
+            };
             
             if inst_idx < block.instructions.len() {
-                let node = block.instructions[inst_idx].clone();
+                let node = &block.instructions[inst_idx];
                 
                 if self.call_stack[frame_idx].fused_skipped_ids.contains(&node.id) {
                     self.call_stack[frame_idx].instruction_idx += 1;
@@ -3770,7 +4060,7 @@ impl VM {
                     }
                     
                     // Retrieve arguments
-                    let mut call_args = Vec::new();
+                    let mut call_args = Vec::with_capacity(node.inputs.len());
                     for &input_id in &node.inputs {
                         let val = self.call_stack[frame_idx].ssa_values.get(&input_id).cloned()
                             .or_else(|| self.globals.get(&input_id.to_string()).cloned())
@@ -3789,34 +4079,39 @@ impl VM {
                         }
                     }
                     
-                    let callee = if let Some(f) = self.functions.get(&resolved_callee) {
-                        Some(f.clone())
-                    } else if self.functions.contains_key(&format!("{}_new", resolved_callee)) {
+                    let callee_arc = if let Some(f) = self.get_arc_function(&resolved_callee) {
+                        Some(f)
+                    } else if self.functions.contains_key(&format!("{}_new", resolved_callee)) || self.arc_functions.contains_key(&format!("{}_new", resolved_callee)) {
                         resolved_callee = format!("{}_new", resolved_callee);
-                        Some(self.functions.get(&resolved_callee)
-                            .ok_or_else(|| format!("Function '{}' not found", resolved_callee))?.clone())
+                        self.get_arc_function(&resolved_callee)
                     } else {
                         None
                     };
                     
-                    if let Some(callee) = callee {
+                    if let Some(callee) = callee_arc {
                         if crate::device::Device::cuda_available() && !self.compiled_functions.contains(&resolved_callee) {
                             self.compile_function_kernels(&callee);
                         }
+
+                        let caller_func_name = self.call_stack[frame_idx].function_name.clone();
+                        let caller_ret_addr = Some((caller_func_name, current_block_id, node.id));
 
                         // Update caller frame instruction index to point to next instruction
                         self.call_stack[frame_idx].instruction_idx += 1;
                         
                         // Create callee frame
+                        let callee_entry_idx = callee.blocks.iter().position(|b| b.id == callee.entry).unwrap_or(0);
                         let mut callee_frame = CallFrame {
                             function_name: resolved_callee.clone(),
                             current_block: callee.entry,
+                            current_block_idx: callee_entry_idx,
                             instruction_idx: 0,
                             locals: HashMap::new(),
                             ssa_values: HashMap::new(),
-                            return_addr: Some((current_func_name, current_block_id, node.id)),
+                            return_addr: caller_ret_addr,
                             fused_groups: build_fused_groups_cache(&callee, &self.functions.values().cloned().collect::<Vec<_>>()),
                             fused_skipped_ids: std::collections::HashSet::new(),
+                            func: Some(callee.clone()),
                         };
                         
                         let is_constructor = resolved_callee.ends_with("_new");
@@ -3846,15 +4141,28 @@ impl VM {
                         }
                     }
                 } else {
-                    let ssa_values = self.call_stack[frame_idx].ssa_values.clone();
-                    let result = self.exec_node(&node, &ssa_values)?;
-                    self.call_stack[frame_idx].ssa_values.insert(node.id, result);
-                    self.call_stack[frame_idx].instruction_idx += 1;
+                    let mut ssa_values = std::mem::take(&mut self.call_stack[frame_idx].ssa_values);
+                    let node_id = node.id;
+                    let result = self.exec_node(node, &ssa_values);
+                    match result {
+                        Ok(val) => {
+                            ssa_values.insert(node_id, val);
+                            self.call_stack[frame_idx].ssa_values = ssa_values;
+                            self.call_stack[frame_idx].instruction_idx += 1;
+                        }
+                        Err(e) => {
+                            self.call_stack[frame_idx].ssa_values = ssa_values;
+                            return Err(e);
+                        }
+                    }
                 }
             } else {
                 let next_state = match &block.terminator {
                     Terminator::Jump(target) => {
-                        self.call_stack[frame_idx].current_block = *target;
+                        let target_id = *target;
+                        let target_idx = func.blocks.iter().position(|b| b.id == target_id).unwrap_or(0);
+                        self.call_stack[frame_idx].current_block = target_id;
+                        self.call_stack[frame_idx].current_block_idx = target_idx;
                         self.call_stack[frame_idx].instruction_idx = 0;
                         self.call_stack[frame_idx].fused_skipped_ids.clear();
                         true
@@ -3865,14 +4173,16 @@ impl VM {
                             .cloned()
                             .unwrap_or(Value::Bool(false));
                         
-                        let target = if cond_val.as_bool() { *true_block } else { *false_block };
-                        self.call_stack[frame_idx].current_block = target;
+                        let target_id = if cond_val.as_bool() { *true_block } else { *false_block };
+                        let target_idx = func.blocks.iter().position(|b| b.id == target_id).unwrap_or(0);
+                        self.call_stack[frame_idx].current_block = target_id;
+                        self.call_stack[frame_idx].current_block_idx = target_idx;
                         self.call_stack[frame_idx].instruction_idx = 0;
                         self.call_stack[frame_idx].fused_skipped_ids.clear();
                         true
                     }
                     Terminator::Return(val_id) => {
-                        let is_constructor = current_func_name.ends_with("_new");
+                        let is_constructor = self.call_stack[frame_idx].function_name.ends_with("_new");
                         let ret_val = if is_constructor {
                             self.call_stack[frame_idx].locals.get("self").cloned().unwrap_or(Value::Void)
                         } else if let Some(vid) = val_id {
@@ -3989,39 +4299,27 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Int(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y as f64);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.add(ta, &tb);
+                        let r = self.tape.shift(ta, *y as f64);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Float(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.add(ta, &tb);
+                        let r = self.tape.shift(ta, *y);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Int(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x as f64);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.add(&ta, tb);
+                        let r = self.tape.shift(tb, *x as f64);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Float(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.add(&ta, tb);
+                        let r = self.tape.shift(tb, *x);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::BigInt(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, y.to_f64().unwrap_or(f64::INFINITY));
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.add(ta, &tb);
+                        let r = self.tape.shift(ta, y.to_f64().unwrap_or(f64::INFINITY));
                         Ok(Value::Tensor(r))
                     }
                     (Value::BigInt(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, x.to_f64().unwrap_or(f64::INFINITY));
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.add(&ta, tb);
+                        let r = self.tape.shift(tb, x.to_f64().unwrap_or(f64::INFINITY));
                         Ok(Value::Tensor(r))
                     }
                     (Value::Int(x), Value::Int(y)) => match x.checked_add(*y) {
@@ -4070,28 +4368,22 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Int(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y as f64);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.sub(ta, &tb);
+                        let r = self.tape.shift(ta, -(*y as f64));
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Float(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.sub(ta, &tb);
+                        let r = self.tape.shift(ta, -*y);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Int(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x as f64);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.sub(&ta, tb);
-                        Ok(Value::Tensor(r))
+                        let r = self.tape.shift(tb, -(*x as f64));
+                        let r_neg = self.tape.neg(&r);
+                        Ok(Value::Tensor(r_neg))
                     }
                     (Value::Float(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.sub(&ta, tb);
-                        Ok(Value::Tensor(r))
+                        let r = self.tape.shift(tb, -*x);
+                        let r_neg = self.tape.neg(&r);
+                        Ok(Value::Tensor(r_neg))
                     }
                     (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
                         let combined_std = (s1.powi(2) + s2.powi(2)).sqrt();
@@ -4131,27 +4423,19 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Int(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y as f64);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.mul(ta, &tb);
+                        let r = self.tape.scale(ta, *y as f64);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Float(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.mul(ta, &tb);
+                        let r = self.tape.scale(ta, *y);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Int(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x as f64);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.mul(&ta, tb);
+                        let r = self.tape.scale(tb, *x as f64);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Float(x), Value::Tensor(tb)) => {
-                        let mut ta = Tensor::full(&tb.shape, *x);
-                        ta.id = self.tape.alloc_id();
-                        let r = self.tape.mul(&ta, tb);
+                        let r = self.tape.scale(tb, *x);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Uncertain { value: v1, std: s1, confidence: c1 }, Value::Uncertain { value: v2, std: s2, confidence: c2 }) => {
@@ -4196,15 +4480,11 @@ impl VM {
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Int(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y as f64);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.div(ta, &tb);
+                        let r = self.tape.scale(ta, 1.0 / (*y as f64));
                         Ok(Value::Tensor(r))
                     }
                     (Value::Tensor(ta), Value::Float(y)) => {
-                        let mut tb = Tensor::full(&ta.shape, *y);
-                        tb.id = self.tape.alloc_id();
-                        let r = self.tape.div(ta, &tb);
+                        let r = self.tape.scale(ta, 1.0 / *y);
                         Ok(Value::Tensor(r))
                     }
                     (Value::Int(x), Value::Tensor(tb)) => {
@@ -4480,9 +4760,11 @@ impl VM {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let mut r = self.tape.matmul(ta, tb);
                         if let Value::Tensor(tbias) = &bias {
-                            r = crate::tensor::tensor_add(&r, tbias);
+                            r = self.tape.add(&r, tbias);
                         } else if let Value::Float(fbias) = bias {
-                            r = r.map(|x| x + fbias);
+                            let mut b_tensor = crate::tensor::Tensor::new(vec![fbias], vec![1, 1]);
+                            b_tensor.id = self.tape.alloc_id();
+                            r = self.tape.add(&r, &b_tensor);
                         }
                         Ok(Value::Tensor(r).apply_wrappers(wraps))
                     }
@@ -4513,9 +4795,11 @@ impl VM {
                     (Value::Tensor(ta), Value::Tensor(tb)) => {
                         let mut r = self.tape.matmul(ta, tb);
                         if let Value::Tensor(tbias) = &bias {
-                            r = crate::tensor::tensor_add(&r, tbias);
+                            r = self.tape.add(&r, tbias);
                         } else if let Value::Float(fbias) = bias {
-                            r = r.map(|x| x + fbias);
+                            let mut b_tensor = crate::tensor::Tensor::new(vec![fbias], vec![1, 1]);
+                            b_tensor.id = self.tape.alloc_id();
+                            r = self.tape.add(&r, &b_tensor);
                         }
                         let r_relu = self.tape.relu(&r);
                         Ok(Value::Tensor(r_relu).apply_wrappers(wraps))
@@ -4687,9 +4971,13 @@ impl VM {
                 if let Some(input_id) = node.inputs.first() {
                     let (val, _wraps) = get_stripped(input_id);
                     if let Value::Tensor(t) = &val {
-                        let parameter_ids = self.collect_parameter_ids();
-                        self.tape.parameter_ids = parameter_ids;
-                        self.tape.backward(t.id);
+                        let current_key = (t.id, self.tape.tape_len());
+                        if self.last_backward_loss != Some(current_key) {
+                            let parameter_ids = self.collect_parameter_ids();
+                            self.tape.parameter_ids = parameter_ids;
+                            self.tape.backward_opts(t.id, true);
+                            self.last_backward_loss = Some(current_key);
+                        }
                     }
                 }
                 Ok(Value::Void)
@@ -4753,9 +5041,10 @@ impl VM {
                         }
                     } else {
                         if let Some(frame) = self.call_stack.last_mut() {
-                            frame.locals.insert(name.clone(), val.clone());
+                            frame.locals.insert(name.clone(), val);
+                        } else {
+                            self.globals.insert(name.clone(), val);
                         }
-                        self.globals.insert(name.clone(), val);
                     }
                 }
                 Ok(Value::Void)
@@ -4899,6 +5188,23 @@ impl VM {
                             wm.borrow_mut().write(t);
                         }
                     }
+                    Value::SemanticMemory(sm) => {
+                        match item_val {
+                            Value::Tuple(ref items) | Value::List(ref items) if items.len() >= 3 => {
+                                let s = items[0].display();
+                                let r = items[1].display();
+                                let o = items[2].display();
+                                let conf = if items.len() >= 4 { items[3].as_float() } else { 1.0 };
+                                sm.borrow_mut().store_fact(&s, &r, &o, items[2].clone(), conf, None);
+                            }
+                            Value::Tensor(ref t) => {
+                                sm.borrow_mut().store_fact("vector", "embedding", "", item_val.clone(), 1.0, Some(t.clone()));
+                            }
+                            _ => {
+                                sm.borrow_mut().store_fact("concept", "is", &item_val.display(), item_val.clone(), 1.0, None);
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 Ok(Value::Void)
@@ -4922,6 +5228,22 @@ impl VM {
                             Ok(Value::Tensor(res))
                         } else {
                             Ok(Value::Void)
+                        }
+                    }
+                    Value::SemanticMemory(sm) => {
+                        match query_val {
+                            Value::Tensor(ref q) => {
+                                let res = sm.borrow().query_vector(q, *k as usize);
+                                Ok(Value::List(res))
+                            }
+                            Value::Str(ref s) => {
+                                let res = sm.borrow().query(Some(s.as_str()), None, None);
+                                Ok(Value::List(res))
+                            }
+                            _ => {
+                                let res = sm.borrow().query(None, None, None);
+                                Ok(Value::List(res))
+                            }
                         }
                     }
                     _ => Ok(Value::List(vec![])),
@@ -5658,6 +5980,16 @@ else:
                     }
                 }
             }
+            Value::SemanticMemory(sm) => {
+                if let Ok(sm_ref) = sm.try_borrow() {
+                    for entry in &sm_ref.entries {
+                        if let Some(ref emb) = entry.embedding {
+                            ids.insert(emb.id);
+                        }
+                        self.collect_tensor_ids_from_value(&entry.value, ids);
+                    }
+                }
+            }
             Value::Stream(s) => {
                 if let Ok(s_ref) = s.try_borrow() {
                     for v in &s_ref.buffer {
@@ -6214,6 +6546,85 @@ fn parse_string_list(val: &Value) -> Result<Vec<String>, String> {
     }
 }
 
+fn parse_string_or_list(val: &Value) -> Result<Vec<String>, String> {
+    match val {
+        Value::Str(value) => Ok(vec![value.clone()]),
+        Value::List(_) => parse_string_list(val),
+        _ => Err("Expected a string or a list of strings".into()),
+    }
+}
+
+fn categorical_value(val: &Value) -> Result<String, String> {
+    match val {
+        Value::Str(value) => Ok(value.clone()),
+        Value::Int(value) => Ok(value.to_string()),
+        Value::BigInt(value) => Ok(value.to_string()),
+        Value::Float(value) if value.is_finite() => {
+            if value.fract() == 0.0 { Ok(format!("{:.0}", value)) } else { Ok(value.to_string()) }
+        }
+        Value::Bool(value) => Ok(value.to_string()),
+        _ => Err("Categorical values must be strings, finite numbers, or booleans".into()),
+    }
+}
+
+fn parse_categorical_matrix(val: &Value) -> Result<Vec<Vec<String>>, String> {
+    let Value::List(rows) = val else {
+        return Err("CausalDataset rows must be a list of lists".into());
+    };
+    rows.iter().enumerate().map(|(row_index, row)| {
+        let Value::List(values) = row else {
+            return Err(format!("CausalDataset row {} must be a list", row_index));
+        };
+        values.iter().map(categorical_value).collect()
+    }).collect()
+}
+
+fn parse_causal_dataset(val: &Value) -> Result<crate::causal::CausalDataset, String> {
+    let Value::Model { name, fields } = val else {
+        return Err("Expected a CausalDataset value".into());
+    };
+    if name != "CausalDataset" {
+        return Err(format!("Expected CausalDataset, received {}", name));
+    }
+    let fields = fields.borrow();
+    let variables = fields.get("variables")
+        .ok_or_else(|| "CausalDataset is missing its variables".to_string())?;
+    let rows = fields.get("rows")
+        .ok_or_else(|| "CausalDataset is missing its rows".to_string())?;
+    crate::causal::CausalDataset::new(
+        parse_string_or_list(variables)?,
+        parse_categorical_matrix(rows)?,
+    )
+}
+
+fn parse_category_map(val: &Value) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
+    match val {
+        Value::Model { fields, .. } => {
+            for (name, value) in fields.borrow().iter() {
+                map.insert(name.clone(), categorical_value(value)?);
+            }
+        }
+        Value::List(pairs) => {
+            for (index, pair) in pairs.iter().enumerate() {
+                let values = match pair {
+                    Value::Tuple(values) | Value::List(values) if values.len() == 2 => values,
+                    _ => return Err(format!("Category assignment {} must be a [variable, value] pair", index)),
+                };
+                let Value::Str(name) = &values[0] else {
+                    return Err(format!("Category assignment {} variable name must be a string", index));
+                };
+                if map.contains_key(name) {
+                    return Err(format!("Duplicate category assignment for '{}'", name));
+                }
+                map.insert(name.clone(), categorical_value(&values[1])?);
+            }
+        }
+        _ => return Err("Category assignments must be a map or a list of [variable, value] pairs".into()),
+    }
+    Ok(map)
+}
+
 fn parse_float_list(val: &Value) -> Result<Vec<f64>, String> {
     if let Value::List(l) = val {
         Ok(l.iter().map(|item| item.as_float()).collect())
@@ -6274,7 +6685,107 @@ fn convert_causal_results(results: HashMap<String, (f64, f64)>) -> Value {
     }
 }
 
-fn instantiate_causal_model(globals: &HashMap<String, Value>, model_name: &str, variables: &[String]) -> crate::causal::CausalModel {
+fn identification_expr_to_value(expression: &crate::causal::IdentificationExpr) -> Value {
+    let mut fields = HashMap::new();
+    match expression {
+        crate::causal::IdentificationExpr::Kernel { name, variables, given } => {
+            fields.insert("kind".into(), Value::Str("kernel".into()));
+            fields.insert("name".into(), Value::Str(name.clone()));
+            fields.insert("variables".into(), Value::List(variables.iter().cloned().map(Value::Str).collect()));
+            fields.insert("given".into(), Value::List(given.iter().cloned().map(Value::Str).collect()));
+        }
+        crate::causal::IdentificationExpr::Sum { variables, expression } => {
+            fields.insert("kind".into(), Value::Str("sum".into()));
+            fields.insert("variables".into(), Value::List(variables.iter().cloned().map(Value::Str).collect()));
+            fields.insert("expression".into(), identification_expr_to_value(expression));
+        }
+        crate::causal::IdentificationExpr::Product(factors) => {
+            fields.insert("kind".into(), Value::Str("product".into()));
+            fields.insert("factors".into(), Value::List(factors.iter().map(identification_expr_to_value).collect()));
+        }
+        crate::causal::IdentificationExpr::Quotient { numerator, denominator } => {
+            fields.insert("kind".into(), Value::Str("quotient".into()));
+            fields.insert("numerator".into(), identification_expr_to_value(numerator));
+            fields.insert("denominator".into(), identification_expr_to_value(denominator));
+        }
+    }
+    Value::Model {
+        name: "IdentificationExpr".into(),
+        fields: Rc::new(RefCell::new(fields)),
+    }
+}
+
+fn identification_formula_to_value(formula: &crate::causal::IdentificationFormula) -> Value {
+    let definitions = formula.definitions.iter().map(|definition| {
+        let mut fields = HashMap::new();
+        fields.insert("name".into(), Value::Str(definition.name.clone()));
+        fields.insert("variables".into(), Value::List(definition.variables.iter().cloned().map(Value::Str).collect()));
+        fields.insert("given".into(), Value::List(definition.given.iter().cloned().map(Value::Str).collect()));
+        fields.insert("expression".into(), identification_expr_to_value(&definition.expression));
+        Value::Model {
+            name: "IdentificationDefinition".into(),
+            fields: Rc::new(RefCell::new(fields)),
+        }
+    }).collect();
+    let mut fields = HashMap::new();
+    fields.insert("outcomes".into(), Value::List(formula.outcomes.iter().cloned().map(Value::Str).collect()));
+    fields.insert("treatments".into(), Value::List(formula.treatments.iter().cloned().map(Value::Str).collect()));
+    fields.insert("conditions".into(), Value::List(formula.conditions.iter().cloned().map(Value::Str).collect()));
+    fields.insert("definitions".into(), Value::List(definitions));
+    fields.insert("expression".into(), identification_expr_to_value(&formula.expression));
+    fields.insert("display".into(), Value::Str(formula.render()));
+    Value::Model {
+        name: "IdentificationFormula".into(),
+        fields: Rc::new(RefCell::new(fields)),
+    }
+}
+
+fn identification_result_to_value(res: crate::causal::IdentificationResult) -> Value {
+    let formula_ast = res.formula_ast.as_ref()
+        .map(identification_formula_to_value)
+        .unwrap_or(Value::None);
+    let mut fields = HashMap::new();
+    fields.insert("identifiable".into(), Value::Bool(res.identifiable));
+    fields.insert("method".into(), Value::Str(res.method));
+    fields.insert("formula".into(), Value::Str(res.formula));
+    fields.insert("formula_ast".into(), formula_ast);
+    fields.insert("adjustment_set".into(), Value::List(res.adjustment_set.into_iter().map(Value::Str).collect()));
+    fields.insert("hedge_outer".into(), Value::List(res.hedge_outer.unwrap_or_default().into_iter().map(Value::Str).collect()));
+    fields.insert("hedge_inner".into(), Value::List(res.hedge_inner.unwrap_or_default().into_iter().map(Value::Str).collect()));
+    fields.insert("hedge".into(), Value::List(res.hedge.unwrap_or_default().into_iter().map(Value::Str).collect()));
+    Value::Model {
+        name: "IdentificationResult".into(),
+        fields: Rc::new(RefCell::new(fields)),
+    }
+}
+
+fn causal_estimate_to_value(estimate: crate::causal::CausalEstimate) -> Value {
+    let distribution = estimate.distribution.into_iter().map(|entry| {
+        let mut fields = HashMap::new();
+        fields.insert("values".into(), Value::List(entry.values.into_iter().map(Value::Str).collect()));
+        fields.insert("probability".into(), Value::Float(entry.probability));
+        Value::Model {
+            name: "OutcomeProbability".into(),
+            fields: Rc::new(RefCell::new(fields)),
+        }
+    }).collect();
+    let mut fields = HashMap::new();
+    fields.insert("method".into(), Value::Str(estimate.method));
+    fields.insert("formula".into(), Value::Str(estimate.formula));
+    fields.insert("formula_ast".into(), identification_formula_to_value(&estimate.formula_ast));
+    fields.insert("sample_size".into(), Value::Int(estimate.sample_size as i64));
+    fields.insert("distribution".into(), Value::List(distribution));
+    Value::Model {
+        name: "CausalEstimate".into(),
+        fields: Rc::new(RefCell::new(fields)),
+    }
+}
+
+fn instantiate_causal_model(
+    globals: &HashMap<String, Value>,
+    model_name: &str,
+    variables: &[String],
+) -> Result<crate::causal::CausalModel, String> {
     let weights = vec![vec![0.0; variables.len()]; variables.len()];
     let noise_vars = vec![1.0; variables.len()];
     let noise_means = vec![0.0; variables.len()];
@@ -6288,9 +6799,25 @@ fn instantiate_causal_model(globals: &HashMap<String, Value>, model_name: &str, 
                     let edges_str = &part["edges=".len()..];
                     for edge in edges_str.split(',') {
                         if edge.contains("<->") {
-                            let nodes: Vec<&str> = edge.split("<->").collect();
+                            let (edge_part, covariance) = if let Some(eq_pos) = edge.find('=') {
+                                let covariance = edge[eq_pos + 1..].parse::<f64>().map_err(|_| {
+                                    format!("Invalid covariance in bidirected edge '{}': expected a finite number", edge)
+                                })?;
+                                (&edge[..eq_pos], Some(covariance))
+                            } else {
+                                (edge, None)
+                            };
+                            let nodes: Vec<&str> = edge_part.split("<->").collect();
                             if nodes.len() == 2 {
-                                model.add_bidirected(nodes[0].trim(), nodes[1].trim());
+                                if let Some(covariance) = covariance {
+                                    model.add_bidirected_with_covariance(
+                                        nodes[0].trim(),
+                                        nodes[1].trim(),
+                                        covariance,
+                                    )?;
+                                } else {
+                                    model.add_bidirected(nodes[0].trim(), nodes[1].trim());
+                                }
                             }
                         } else if edge.contains("->") {
                             let (edge_part, weight_val) = if let Some(eq_pos) = edge.find('=') {
@@ -6313,7 +6840,7 @@ fn instantiate_causal_model(globals: &HashMap<String, Value>, model_name: &str, 
             }
         }
     }
-    model
+    Ok(model)
 }
 
 #[cfg(test)]
@@ -6348,6 +6875,88 @@ mod tests {
         vm.load(&prog);
         let result = vm.run_main().unwrap();
         assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn identify_arguments_accept_single_variables_and_lists() {
+        assert_eq!(parse_string_or_list(&Value::Str("Y".into())).unwrap(), vec!["Y"]);
+        assert_eq!(
+            parse_string_or_list(&Value::List(vec![Value::Str("Y".into()), Value::Str("Z".into())])).unwrap(),
+            vec!["Y", "Z"]
+        );
+        assert!(parse_string_or_list(&Value::Int(1)).is_err());
+    }
+
+    #[test]
+    fn categorical_dataset_and_assignments_accept_neuron_values() {
+        let matrix = Value::List(vec![
+            Value::List(vec![Value::Int(1), Value::Str("yes".into())]),
+            Value::List(vec![Value::Float(0.0), Value::Str("no".into())]),
+        ]);
+        let rows = parse_categorical_matrix(&matrix).unwrap();
+        assert_eq!(rows, vec![vec!["1", "yes"], vec!["0", "no"]]);
+
+        let assignments = Value::List(vec![Value::List(vec![
+            Value::Str("X".into()), Value::Float(1.0),
+        ])]);
+        assert_eq!(
+            parse_category_map(&assignments).unwrap(),
+            HashMap::from([("X".into(), "1".into())]),
+        );
+
+        let dataset = crate::causal::CausalDataset::new(
+            vec!["X".into(), "Y".into()], rows,
+        ).unwrap();
+        assert_eq!(dataset.rows().len(), 2);
+        assert_eq!(dataset.categories("X").unwrap(), &["1", "0"]);
+    }
+
+    #[test]
+    fn identification_formula_ast_is_available_as_nested_neuron_values() {
+        let formula = crate::causal::IdentificationFormula {
+            outcomes: vec!["Y".into()],
+            treatments: vec!["X".into()],
+            conditions: vec![],
+            definitions: vec![],
+            expression: crate::causal::IdentificationExpr::Kernel {
+                name: "P".into(),
+                variables: vec!["Y".into()],
+                given: vec!["X".into()],
+            },
+        };
+        let value = identification_formula_to_value(&formula);
+        let Value::Model { name, fields: formula_fields } = value else { panic!("expected formula model") };
+        assert_eq!(name, "IdentificationFormula");
+        assert!(matches!(formula_fields.borrow().get("conditions"), Some(Value::List(values)) if values.is_empty()));
+        let expression = formula_fields.borrow().get("expression").cloned().unwrap();
+        let Value::Model { name, fields } = expression else { panic!("expected expression node model") };
+        assert_eq!(name, "IdentificationExpr");
+        assert_eq!(fields.borrow().get("kind").unwrap().display(), "kernel");
+        assert_eq!(fields.borrow().get("name").unwrap().display(), "P");
+    }
+
+    #[test]
+    fn quotient_formula_ast_serializes_both_branches() {
+        let expression = crate::causal::IdentificationExpr::Quotient {
+            numerator: Box::new(crate::causal::IdentificationExpr::Kernel {
+                name: "Q".into(),
+                variables: vec!["Y".into(), "Z".into()],
+                given: vec!["X".into()],
+            }),
+            denominator: Box::new(crate::causal::IdentificationExpr::Sum {
+                variables: vec!["Y".into()],
+                expression: Box::new(crate::causal::IdentificationExpr::Kernel {
+                    name: "Q".into(),
+                    variables: vec!["Y".into(), "Z".into()],
+                    given: vec!["X".into()],
+                }),
+            }),
+        };
+        let value = identification_expr_to_value(&expression);
+        let Value::Model { fields, .. } = value else { panic!("expected quotient expression model") };
+        assert_eq!(fields.borrow().get("kind").unwrap().display(), "quotient");
+        assert!(fields.borrow().contains_key("numerator"));
+        assert!(fields.borrow().contains_key("denominator"));
     }
 
     #[test]
