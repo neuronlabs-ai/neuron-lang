@@ -398,7 +398,9 @@ impl SymbolTable {
         global.define("sin", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("cos", NType::Fn_(vec![any.clone()], Box::new(any.clone()), None));
         global.define("len", NType::Fn_(vec![any.clone()], Box::new(int.clone()), None));
-        global.define("transpose", NType::Fn_(vec![tensor.clone(), int.clone(), int.clone()], Box::new(tensor.clone()), None));
+        global.define("transpose", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("reshape", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
+        global.define("matmul", NType::Fn_(vec![tensor.clone(), tensor.clone()], Box::new(tensor.clone()), None));
         global.define("update_row", NType::Fn_(vec![tensor.clone(), int.clone(), any.clone()], Box::new(tensor.clone()), None));
         global.define("softmax", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
         global.define("sigmoid", NType::Fn_(vec![tensor.clone()], Box::new(tensor.clone()), None));
@@ -1854,7 +1856,7 @@ impl TypeChecker {
         };
         let is_variadic_optimizer_or_builtin = match callee_name {
             Some("sgd") | Some("adam") | Some("forget") | Some("print") | Some("println") | Some("print_inline") | Some("byte_encode") | Some("byte_decode")
-            | Some("WorkingMemory") | Some("EpisodicMemory") | Some("SemanticMemory") => true,
+            | Some("WorkingMemory") | Some("EpisodicMemory") | Some("SemanticMemory") | Some("reshape") | Some("transpose") => true,
             _ => false,
         };
         let is_reduction_with_optional_dim = match callee_name {

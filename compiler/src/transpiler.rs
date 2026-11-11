@@ -955,20 +955,7 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                                 format!("jit_sqrt(vm, &v{})", node.inputs[0])
                             }
                             IROp::Reshape(new_shape) => {
-                                let shape_str = format!("vec!{:?}", new_shape.iter().map(|&x| x as usize).collect::<Vec<_>>());
-                                let new_shape_debug = format!("{:?}", new_shape);
-                                format!(
-            r#"if let Value::Tensor(t) = &v{input} {{
-                    let target_shape = {shape};
-                    let new_n: usize = target_shape.iter().product();
-                    if t.numel() != new_n {{
-                        panic!("Runtime Error: Cannot reshape tensor of {{:?}} to {debug_shape}", t.shape);
-                    }}
-                    Value::Tensor(t.reshape(&target_shape))
-                }} else {{ v{input}.clone() }}"#,
-                                    input = node.inputs[0],
-                                    shape = shape_str,
-                                    debug_shape = new_shape_debug)
+                                format!("jit_reshape(vm, &v{}, &vec!{:?})", node.inputs[0], new_shape)
                             }
                             IROp::UpdateRow => {
                                 format!("jit_update_row(vm, &v{}, &v{}, &v{})", node.inputs[0], node.inputs[1], node.inputs[2])
@@ -1218,10 +1205,7 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
 
                             IROp::Transpose(dim0, dim1) => {
-                                format!(
-            r#"if let Value::Tensor(t) = &v{} {{
-                    Value::Tensor(t.transpose({}, {}))
-                }} else {{ Value::Void }}"#, node.inputs[0], dim0, dim1)
+                                format!("jit_transpose(vm, &v{}, {}, {})", node.inputs[0], dim0, dim1)
                             }
                             IROp::Print => {
                                 if node.inputs.is_empty() {

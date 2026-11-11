@@ -949,13 +949,13 @@ impl Lowerer {
                         "explain" => return self.emit(func, IROp::Explain, arg_ids, IRType::String),
                         "stop_grad" => return self.emit(func, IROp::StopGrad, arg_ids, IRType::Tensor(vec![])),
                         "reshape" => {
-                            // reshape(tensor, dim1, dim2, ...)
                             let tensor_id = arg_ids[0];
                             let shape_dims: Vec<i64> = c.args.iter().skip(1).filter_map(|a| {
-                                if let Expr::IntLit(v, _) = &a.value { Some(*v) } else { None }
+                                extract_int_arg(&a.value)
                             }).collect();
                             return self.emit(func, IROp::Reshape(shape_dims), vec![tensor_id], IRType::Tensor(vec![]));
                         }
+                        "matmul" => return self.emit(func, IROp::MatMul, arg_ids, IRType::Tensor(vec![])),
                         _ => {}
                     }
                 }
@@ -1007,6 +1007,21 @@ impl Lowerer {
                                     }
                                 }
                                 return self.emit(func, IROp::Mean { dim }, vec![receiver_id], IRType::Tensor(vec![]));
+                            }
+                            "reshape" => {
+                                let shape_dims: Vec<i64> = c.args.iter().filter_map(|a| {
+                                    extract_int_arg(&a.value)
+                                }).collect();
+                                return self.emit(func, IROp::Reshape(shape_dims), vec![receiver_id], IRType::Tensor(vec![]));
+                            }
+                            "transpose" => {
+                                let dim0 = c.args.get(0).and_then(|a| extract_int_arg(&a.value)).unwrap_or(0) as usize;
+                                let dim1 = c.args.get(1).and_then(|a| extract_int_arg(&a.value)).unwrap_or(1) as usize;
+                                return self.emit(func, IROp::Transpose(dim0, dim1), vec![receiver_id], IRType::Tensor(vec![]));
+                            }
+                            "matmul" => {
+                                let rhs_id = self.lower_expr(func, &c.args[0].value);
+                                return self.emit(func, IROp::MatMul, vec![receiver_id, rhs_id], IRType::Tensor(vec![]));
                             }
                             _ => {
                                 arg_ids.insert(0, receiver_id);

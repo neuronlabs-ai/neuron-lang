@@ -725,3 +725,45 @@ pub fn jit_or(a: &Value, b: &Value) -> Value {
 pub fn jit_not(a: &Value) -> Value {
     Value::Bool(!a.as_bool())
 }
+
+pub fn jit_transpose(vm: &mut VM, a: &Value, dim0: usize, dim1: usize) -> Value {
+    if let Value::Tensor(t) = a {
+        Value::Tensor(vm.tape.transpose(t, dim0, dim1))
+    } else {
+        a.clone()
+    }
+}
+
+pub fn jit_reshape(vm: &mut VM, a: &Value, new_shape: &[i64]) -> Value {
+    if let Value::Tensor(t) = a {
+        let mut neg_idx = None;
+        let mut known_prod: usize = 1;
+        let mut shape_dims = Vec::with_capacity(new_shape.len());
+        for (i, &x) in new_shape.iter().enumerate() {
+            if x == -1 {
+                if neg_idx.is_some() {
+                    panic!("Runtime Error: Only one dimension can be inferred (-1) in reshape");
+                }
+                neg_idx = Some(i);
+                shape_dims.push(0);
+            } else if x <= 0 {
+                panic!("Runtime Error: Reshape dimension must be positive or -1, got {}", x);
+            } else {
+                let x_u = x as usize;
+                known_prod = known_prod.checked_mul(x_u).expect("Reshape dimension product overflow");
+                shape_dims.push(x_u);
+            }
+        }
+        if let Some(idx) = neg_idx {
+            if known_prod == 0 || t.numel() % known_prod != 0 {
+                panic!("Runtime Error: Cannot infer dimension -1 for size {} with product {}", t.numel(), known_prod);
+            }
+            shape_dims[idx] = t.numel() / known_prod;
+        } else if t.numel() != known_prod {
+            panic!("Runtime Error: Cannot reshape tensor of size {} to shape {:?}", t.numel(), shape_dims);
+        }
+        Value::Tensor(vm.tape.reshape(t, &shape_dims))
+    } else {
+        a.clone()
+    }
+}

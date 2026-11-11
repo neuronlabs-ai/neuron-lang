@@ -75,3 +75,30 @@ fn main():
     let result = vm.run_main();
     assert!(result.is_ok(), "Running indexing and slicing test failed: {:?}", result.err());
 }
+
+#[test]
+fn test_integration_vm_autograd_matrix_ops() {
+    let src = r#"
+fn main():
+    let A = ones(2, 3)
+    let B = ones(3, 2)
+    let C = matmul(A, B)
+    let loss_c = sum(C)
+    let grad_A = grad(loss_c, wrt=A)
+
+    let x = ones(2, 3)
+    let x_flat = x.reshape(-1)
+    let loss_x = sum(x_flat * 2.0)
+    let grad_x = grad(loss_x, wrt=x)
+
+    let M = ones(2, 3)
+    let M_T = M.transpose()
+    let loss_m = sum(M_T * 3.0)
+    let grad_M = grad(loss_m, wrt=M)
+"#;
+    let out = compile(src, "test_autograd_matrix.nr").unwrap();
+    let mut vm = VM::new();
+    vm.load(&out.ir);
+    let result = vm.run_main();
+    assert!(result.is_ok(), "Running autograd matrix ops test failed: {:?}", result.err());
+}

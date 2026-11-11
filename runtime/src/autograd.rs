@@ -41,6 +41,7 @@ pub enum TapeOp {
     Mean { input_shape: Vec<usize>, dim: Option<usize> },
     Sqrt { output_data: Buffer },
     Reshape { original_shape: Vec<usize> },
+    Transpose { dim0: usize, dim1: usize },
     CrossEntropy { pred_softmax: Buffer, pred_shape: Vec<usize>, target: Buffer, batch_size: usize },
     MSE { pred: Buffer, pred_shape: Vec<usize>, target: Buffer, n: usize },
     Scale { scalar: f64 },
@@ -370,6 +371,30 @@ impl GradTape {
         let result = a.map(|x| x.sqrt());
         let out_id = self.alloc_id();
         self.record(TapeOp::Sqrt { output_data: result.data.clone() }, vec![a.id], out_id, result.shape.clone());
+        let mut r = result;
+        r.id = out_id;
+        r.tape_entry = Some(self.entries.len() - 1);
+        r
+    }
+
+    /// Run tracked reshape.
+    pub fn reshape(&mut self, a: &Tensor, shape: &[usize]) -> Tensor {
+        if !self.enabled { return a.reshape(shape); }
+        let result = a.reshape(shape);
+        let out_id = self.alloc_id();
+        self.record(TapeOp::Reshape { original_shape: a.shape.clone() }, vec![a.id], out_id, result.shape.clone());
+        let mut r = result;
+        r.id = out_id;
+        r.tape_entry = Some(self.entries.len() - 1);
+        r
+    }
+
+    /// Run tracked transpose.
+    pub fn transpose(&mut self, a: &Tensor, dim0: usize, dim1: usize) -> Tensor {
+        if !self.enabled { return a.transpose(dim0, dim1); }
+        let result = a.transpose(dim0, dim1);
+        let out_id = self.alloc_id();
+        self.record(TapeOp::Transpose { dim0, dim1 }, vec![a.id], out_id, result.shape.clone());
         let mut r = result;
         r.id = out_id;
         r.tape_entry = Some(self.entries.len() - 1);
@@ -791,6 +816,10 @@ impl GradTape {
                 TapeOp::Reshape { .. } => {
                     self.accumulate_grad(entry.inputs[0], out_grad);
                 }
+                TapeOp::Transpose { dim0, dim1 } => {
+                    let grad_t = Tensor::new(out_grad.clone(), entry.output_shape.clone()).transpose(*dim0, *dim1);
+                    self.accumulate_grad(entry.inputs[0], grad_t.data);
+                }
                 TapeOp::Scale { scalar } => {
                     let mut grad = Buffer::new(out_grad.len());
                     if grad.len() > 65536 {
@@ -1002,6 +1031,11 @@ impl GradTape {
                     let mut reshaped_t = reshaped;
                     reshaped_t.id = self.alloc_id();
                     Self::accumulate_tracked(&mut tracked_grads, self, entry.inputs[0], reshaped_t);
+                }
+                TapeOp::Transpose { dim0, dim1 } => {
+                    let mut transposed = out_grad.transpose(*dim0, *dim1);
+                    transposed.id = self.alloc_id();
+                    Self::accumulate_tracked(&mut tracked_grads, self, entry.inputs[0], transposed);
                 }
                 TapeOp::Scale { scalar } => {
                     let grad_a = self.scale(&out_grad, *scalar);

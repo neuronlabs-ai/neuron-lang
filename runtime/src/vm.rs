@@ -5494,7 +5494,7 @@ impl VM {
                         if *dim0 >= ndim || *dim1 >= ndim {
                             return Err(format!("Runtime Error: Transpose dimensions ({}, {}) out of bounds for tensor of rank {}", dim0, dim1, ndim));
                         }
-                        return Ok(Value::Tensor(t.transpose(*dim0, *dim1)).apply_wrappers(wraps));
+                        return Ok(Value::Tensor(self.tape.transpose(t, *dim0, *dim1)).apply_wrappers(wraps));
                     }
                 }
                 Ok(Value::Void)
@@ -5782,25 +5782,37 @@ impl VM {
             IROp::Reshape(new_shape) => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = if let Value::Tensor(t) = &a {
-                    // Validate new shape doesn't have negative numbers or zero-element overflow
-                    let mut new_n: usize = 1;
-                    let mut shape_usize = Vec::new();
-                    for &x in new_shape {
-                        if x <= 0 {
-                            return Err(format!("Runtime Error: Reshape dimension must be positive, got {}", x));
-                        }
-                        let x_usize = x as usize;
-                        if let Some(prod) = new_n.checked_mul(x_usize) {
-                            new_n = prod;
+                    let mut neg_idx = None;
+                    let mut known_prod: usize = 1;
+                    let mut shape_dims = Vec::with_capacity(new_shape.len());
+                    for (i, &x) in new_shape.iter().enumerate() {
+                        if x == -1 {
+                            if neg_idx.is_some() {
+                                return Err("Runtime Error: Only one dimension can be inferred (-1) in reshape".to_string());
+                            }
+                            neg_idx = Some(i);
+                            shape_dims.push(0);
+                        } else if x <= 0 {
+                            return Err(format!("Runtime Error: Reshape dimension must be positive or -1, got {}", x));
                         } else {
-                            return Err("Runtime Error: Reshape dimension product overflows usize".to_string());
+                            let x_usize = x as usize;
+                            if let Some(prod) = known_prod.checked_mul(x_usize) {
+                                known_prod = prod;
+                            } else {
+                                return Err("Runtime Error: Reshape dimension product overflows usize".to_string());
+                            }
+                            shape_dims.push(x_usize);
                         }
-                        shape_usize.push(x_usize);
                     }
-                    if t.numel() != new_n {
-                        return Err(format!("Runtime Error: Cannot reshape tensor of size {} to shape {:?}", t.numel(), shape_usize));
+                    if let Some(idx) = neg_idx {
+                        if known_prod == 0 || t.numel() % known_prod != 0 {
+                            return Err(format!("Runtime Error: Cannot infer dimension -1 for size {} with product {}", t.numel(), known_prod));
+                        }
+                        shape_dims[idx] = t.numel() / known_prod;
+                    } else if t.numel() != known_prod {
+                        return Err(format!("Runtime Error: Cannot reshape tensor of size {} to shape {:?}", t.numel(), shape_dims));
                     }
-                    Ok(Value::Tensor(t.reshape(&shape_usize)))
+                    Ok(Value::Tensor(self.tape.reshape(t, &shape_dims)))
                 } else {
                     Ok(a)
                 };
