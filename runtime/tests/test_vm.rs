@@ -35,3 +35,20 @@ fn test_integration_vm_agi_agent_compiles() {
     let out = compile(&src, "agi_agent.nr");
     assert!(out.is_ok(), "Compiling agi_agent.nr failed: {:?}", out.err());
 }
+
+#[test]
+fn test_integration_vm_disconnected_gradient() {
+    let src = r#"
+fn main():
+    let a: Tensor[1] = zeros(1) + 2.0
+    let b: Tensor[1] = zeros(1) + 5.0
+    let c = a * 3.0
+    let g = grad(c, wrt=b)
+    print(g)
+"#;
+    let out = compile(src, "test_grad.nr").unwrap();
+    let mut vm = VM::new();
+    vm.load(&out.ir);
+    let result = vm.run_main();
+    assert!(result.is_ok(), "Running disconnected gradient test failed: {:?}", result.err());
+}

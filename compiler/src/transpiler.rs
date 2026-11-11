@@ -978,14 +978,18 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                         vm.tape.backward(t.id);
                         vm.call_stack.pop();
                         let mut found = None;
-                        if let Some(ref param_name) = {} {{
+                        let wrt_target = {};
+                        if let Some(ref param_name) = wrt_target {{
                             if let Some(Value::Tensor(param)) = locals.get(param_name) {{
                                 if let Some(grad_data) = vm.tape.get_grad(param.id) {{
                                     found = Some(Value::Tensor(Tensor::new(grad_data.clone(), param.shape.clone())));
+                                }} else {{
+                                    found = Some(Value::Tensor(Tensor::zeros(&param.shape)));
                                 }}
+                            }} else {{
+                                panic!("Runtime Error: Parameter '{{}}' not found for gradient calculation", param_name);
                             }}
-                        }}
-                        if found.is_none() {{
+                        }} else {{
                             if let Some(grad_data) = vm.tape.get_grad(t.id) {{
                                 found = Some(Value::Tensor(Tensor::new(grad_data.clone(), t.shape.clone())));
                             }}

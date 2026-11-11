@@ -4975,9 +4975,12 @@ impl VM {
                                 if let Some(grad_data) = self.tape.get_grad(param.id) {
                                     return Ok(Value::Tensor(Tensor::new(grad_data.clone(), param.shape.clone())));
                                 }
+                                // Parameter is disconnected from the loss computation graph: gradient is 0
+                                return Ok(Value::Tensor(Tensor::zeros(&param.shape)));
                             }
+                            return Err(format!("Runtime Error: Parameter '{}' not found for gradient calculation", param_name));
                         }
-                        // Return gradient of loss itself
+                        // Return gradient of loss itself only when wrt was not specified
                         if let Some(grad_t) = grads.get(&t.id) {
                             return Ok(Value::Tensor(grad_t.clone()));
                         }
