@@ -173,52 +173,93 @@ agent WorkingMemorySystem(embed_dim: Int, num_slots: Int):
     let self.slots = self.slots * 0.0
 
 // ─────────────────────────────────────────────
-//  Meta-Learning
+//  One-Shot Meta-Learning
 // ─────────────────────────────────────────────
 
 agent MetaLearner(state_dim: Int, action_dim: Int, hidden_dim: Int):
-  // MAML-style Meta-Learning (Finn et al. 2017)
-  // Learns initialization that enables fast adaptation
-  // Inner loop: few gradient steps on task
-  // Outer loop: optimize initialization across tasks
+  // Task adaptation state is kept separate from the shared initialization so
+  // query gradients can flow through each differentiable inner update.
   meta_w1: Tensor[state_dim, hidden_dim] = glorot(state_dim, hidden_dim)
   meta_b1: Tensor[1, hidden_dim] = zeros(1, hidden_dim)
   meta_w2: Tensor[hidden_dim, action_dim] = glorot(hidden_dim, action_dim)
   meta_b2: Tensor[1, action_dim] = zeros(1, action_dim)
+  task_w1: Tensor[state_dim, hidden_dim] = zeros(state_dim, hidden_dim)
+  task_b1: Tensor[1, hidden_dim] = zeros(1, hidden_dim)
+  task_w2: Tensor[hidden_dim, action_dim] = zeros(hidden_dim, action_dim)
+  task_b2: Tensor[1, action_dim] = zeros(1, action_dim)
   inner_lr: Float = 0.01
   outer_lr: Float = 0.001
   num_inner_steps: Int = 5
   memory: EpisodicMemory[Tensor[state_dim]]
 
+  fn set_hyperparameters(self, inner_rate: Float, outer_rate: Float, inner_steps: Int) [Effect[Mut[self]]]:
+    let self.inner_lr = inner_rate
+    let self.outer_lr = outer_rate
+    let self.num_inner_steps = inner_steps
+
   fn forward(self, x: Tensor[B, state_dim]) -> Tensor[B, action_dim]:
     let h = relu(x @ self.meta_w1 + self.meta_b1)
     return h @ self.meta_w2 + self.meta_b2
 
-  fn inner_adapt(self, support_x: Tensor[K, state_dim], support_y: Tensor[K, action_dim]) -> Tensor[state_dim, hidden_dim] [Effect[Mut[self]]]:
-    // Inner loop: adapt to task with K examples
-    // For each inner step:
-    //   pred = forward(support_x)
-    //   loss = mse(pred, support_y)
-    //   w = w - inner_lr * grad(loss, w)
-    let adapted_w1 = self.meta_w1
-    for step in range(self.num_inner_steps):
-      let h = relu(support_x @ adapted_w1 + self.meta_b1)
-      let pred = h @ self.meta_w2 + self.meta_b2
-      let loss = mse(pred, support_y)
-      let g = grad(loss)
-      let adapted_w1 = adapted_w1 - g * self.inner_lr
-    return adapted_w1
+  fn forward_adapted(self, x: Tensor[B, state_dim]) -> Tensor[B, action_dim]:
+    let h = relu(x @ self.task_w1 + self.task_b1)
+    return h @ self.task_w2 + self.task_b2
 
-  fn meta_update(self, tasks: Tensor[N, K, state_dim]) [Effect[Mut[self]]]:
-    // Outer loop: optimize meta-parameters across N tasks
-    // For each task:
-    //   1. Split into support/query sets
-    //   2. Inner-adapt on support set
-    //   3. Evaluate adapted model on query set
-    // 4. Update meta-params using sum of query losses
-    let meta_loss = zeros(1, 1)
-    // Accumulate losses across tasks
-    update self by adam(grad(meta_loss), lr=self.outer_lr)
+  fn inner_adapt(self, support_x: Tensor[K, state_dim], support_y: Tensor[K, action_dim]) -> Tensor[hidden_dim, action_dim] [Effect[Mut[self]]]:
+    // Reset all task parameters from the shared initialization, then optimize
+    // on the support batch. grad() keeps its derivative graph, which lets the
+    // MAML outer loss differentiate through these updates.
+    let self.task_w1 = self.meta_w1
+    let self.task_b1 = self.meta_b1
+    let self.task_w2 = self.meta_w2
+    let self.task_b2 = self.meta_b2
+    for step in range(self.num_inner_steps):
+      let task_w1 = self.task_w1
+      let task_b1 = self.task_b1
+      let task_w2 = self.task_w2
+      let task_b2 = self.task_b2
+      let h = relu(support_x @ task_w1 + task_b1)
+      let pred = h @ task_w2 + task_b2
+      let loss = mse(pred, support_y)
+      let g_w1 = grad(loss, wrt=task_w1)
+      let g_b1 = grad(loss, wrt=task_b1)
+      let g_w2 = grad(loss, wrt=task_w2)
+      let g_b2 = grad(loss, wrt=task_b2)
+      let self.task_w1 = task_w1 - (g_w1 * self.inner_lr)
+      let self.task_b1 = task_b1 - (g_b1 * self.inner_lr)
+      let self.task_w2 = task_w2 - (g_w2 * self.inner_lr)
+      let self.task_b2 = task_b2 - (g_b2 * self.inner_lr)
+    return self.task_w2
+
+  fn meta_update(self, support_x: Tensor[K, state_dim], support_y: Tensor[K, action_dim]) [Effect[Mut[self]]]:
+    // First-order Reptile outer step, retained as a lower-cost alternative.
+    let _adapted_w2 = self.inner_adapt(support_x, support_y)
+    let d_w1 = self.task_w1 - self.meta_w1
+    let d_b1 = self.task_b1 - self.meta_b1
+    let d_w2 = self.task_w2 - self.meta_w2
+    let d_b2 = self.task_b2 - self.meta_b2
+    let self.meta_w1 = self.meta_w1 + (d_w1 * self.outer_lr)
+    let self.meta_b1 = self.meta_b1 + (d_b1 * self.outer_lr)
+    let self.meta_w2 = self.meta_w2 + (d_w2 * self.outer_lr)
+    let self.meta_b2 = self.meta_b2 + (d_b2 * self.outer_lr)
+
+  fn maml_update(self, support_x: Tensor[K, state_dim], support_y: Tensor[K, action_dim], query_x: Tensor[Q, state_dim], query_y: Tensor[Q, action_dim]) -> Tensor[1, 1] [Effect[Mut[self]]]:
+    // Full second-order MAML: query loss differentiates through every inner
+    // gradient step and updates all shared weights and biases.
+    let _adapted_w2 = self.inner_adapt(support_x, support_y)
+    let query_h = relu(query_x @ self.task_w1 + self.task_b1)
+    let query_pred = query_h @ self.task_w2 + self.task_b2
+    let query_loss = mse(query_pred, query_y)
+
+    // Scale the objective so the configured outer rate remains an ordinary
+    // differentiable scalar, then let the optimizer's backward update each
+    // shared parameter from the same retained query graph.
+    let scaled_query_loss = query_loss * self.outer_lr
+    update self.meta_w1 by sgd(grad(scaled_query_loss), lr=1.0)
+    update self.meta_b1 by sgd(grad(scaled_query_loss), lr=1.0)
+    update self.meta_w2 by sgd(grad(scaled_query_loss), lr=1.0)
+    update self.meta_b2 by sgd(grad(scaled_query_loss), lr=1.0)
+    return query_loss
 
 // ─────────────────────────────────────────────
 //  Curiosity & Intrinsic Motivation
