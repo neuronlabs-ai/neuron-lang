@@ -1,3 +1,18 @@
+
+fn resolve_slice_range(start_opt: Option<i64>, end_opt: Option<i64>, len: usize) -> (usize, usize) {
+    let len_i = len as i64;
+    let start = match start_opt {
+        Some(s) if s < 0 => (len_i + s).max(0) as usize,
+        Some(s) => s.clamp(0, len_i) as usize,
+        None => 0,
+    };
+    let end = match end_opt {
+        Some(e) if e < 0 => (len_i + e).max(0) as usize,
+        Some(e) => e.clamp(0, len_i) as usize,
+        None => len,
+    };
+    if start <= end { (start, end) } else { (start, start) }
+}
 /// NEURON Virtual Machine — executes NEURON IR against the runtime.
 ///
 /// Maintains a value stack, call stack, and gradient tape.
@@ -5594,6 +5609,9 @@ impl VM {
             }
             IROp::Index => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
+                if node.inputs.len() < 2 {
+                    return Err("Runtime Error: Index operation missing index operand".into());
+                }
                 let idx = get(&node.inputs[1]);
                 let idx_val = idx.as_int();
                 if idx_val < 0 {
@@ -5609,7 +5627,23 @@ impl VM {
                         }
                     }
                     Value::Tensor(t) => {
-                        if t.ndim() == 2 {
+                        if node.inputs.len() >= 3 && t.ndim() == 2 {
+                            let col_idx = get(&node.inputs[2]);
+                            let col_val = col_idx.as_int();
+                            if col_val < 0 {
+                                return Err(format!("Runtime Error: Negative index {} is not allowed", col_val));
+                            }
+                            let j = col_val as usize;
+                            let rows = t.shape[0];
+                            let cols = t.shape[1];
+                            if i >= rows {
+                                return Err(format!("Index {} out of bounds for tensor with {} rows", i, rows));
+                            }
+                            if j >= cols {
+                                return Err(format!("Index {} out of bounds for tensor with {} columns", j, cols));
+                            }
+                            Ok(Value::Float(t.data[i * cols + j]))
+                        } else if t.ndim() == 2 {
                             let cols = t.shape[1];
                             let start = i * cols;
                             let end = start + cols;
@@ -5630,6 +5664,56 @@ impl VM {
                         }
                     }
                     other => Err(format!("Cannot index into {:?}", other)),
+                };
+                res.map(|v| v.apply_wrappers(wraps))
+            }
+            IROp::Slice(ref specs) => {
+                let (a, wraps) = get_stripped(&node.inputs[0]);
+                let res = match a {
+                    Value::List(items) => {
+                        let spec = specs.first().cloned().unwrap_or(SliceSpec { start: None, end: None, step: None });
+                        let (start, end) = resolve_slice_range(spec.start, spec.end, items.len());
+                        Ok(Value::List(items[start..end].to_vec()))
+                    }
+                    Value::Tensor(t) => {
+                        if t.ndim() == 1 {
+                            let spec = specs.first().cloned().unwrap_or(SliceSpec { start: None, end: None, step: None });
+                            let (start, end) = resolve_slice_range(spec.start, spec.end, t.shape[0]);
+                            let sliced_data = t.data[start..end].to_vec();
+                            let new_len = end.saturating_sub(start);
+                            Ok(Value::Tensor(Tensor::new(sliced_data, vec![new_len])))
+                        } else if t.ndim() == 2 {
+                            let r_spec = specs.get(0).cloned().unwrap_or(SliceSpec { start: None, end: None, step: None });
+                            let c_spec = specs.get(1).cloned().unwrap_or(SliceSpec { start: None, end: None, step: None });
+                            let rows = t.shape[0];
+                            let cols = t.shape[1];
+                            let (r_start, r_end) = resolve_slice_range(r_spec.start, r_spec.end, rows);
+                            let (c_start, c_end) = resolve_slice_range(c_spec.start, c_spec.end, cols);
+                            let new_rows = r_end.saturating_sub(r_start);
+                            let new_cols = c_end.saturating_sub(c_start);
+                            let mut new_data = Vec::with_capacity(new_rows * new_cols);
+                            for r in r_start..r_end {
+                                let row_offset = r * cols;
+                                for c in c_start..c_end {
+                                    new_data.push(t.data[row_offset + c]);
+                                }
+                            }
+                            Ok(Value::Tensor(Tensor::new(new_data, vec![new_rows, new_cols])))
+                        } else if t.ndim() == 3 {
+                            let b_spec = specs.get(0).cloned().unwrap_or(SliceSpec { start: None, end: None, step: None });
+                            let batches = t.shape[0];
+                            let (b_start, b_end) = resolve_slice_range(b_spec.start, b_spec.end, batches);
+                            let new_b = b_end.saturating_sub(b_start);
+                            let inner_size = t.shape[1] * t.shape[2];
+                            let start_idx = b_start * inner_size;
+                            let end_idx = b_end * inner_size;
+                            let new_data = t.data[start_idx..end_idx].to_vec();
+                            Ok(Value::Tensor(Tensor::new(new_data, vec![new_b, t.shape[1], t.shape[2]])))
+                        } else {
+                            Err(format!("Slicing not supported for {}-dimensional tensors", t.ndim()))
+                        }
+                    }
+                    other => Err(format!("Cannot slice into {:?}", other)),
                 };
                 res.map(|v| v.apply_wrappers(wraps))
             }

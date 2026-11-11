@@ -463,6 +463,85 @@ pub fn jit_index(a: &Value, idx: &Value) -> Value {
     }
 }
 
+pub fn jit_index_2d(a: &Value, row_idx: &Value, col_idx: &Value) -> Value {
+    let r_val = row_idx.as_int();
+    let c_val = col_idx.as_int();
+    if r_val < 0 || c_val < 0 {
+        panic!("Runtime Error: Negative index is not allowed");
+    }
+    match a {
+        Value::Tensor(t) if t.ndim() == 2 => {
+            let (rows, cols) = (t.shape[0], t.shape[1]);
+            let (r, c) = (r_val as usize, c_val as usize);
+            if r < rows && c < cols {
+                Value::Float(t.data[r * cols + c])
+            } else {
+                panic!("Index out of bounds for tensor of shape [{}, {}]", rows, cols);
+            }
+        }
+        _ => Value::Void,
+    }
+}
+
+fn resolve_slice_range(start_opt: Option<i64>, end_opt: Option<i64>, len: usize) -> (usize, usize) {
+    let len_i = len as i64;
+    let start = match start_opt {
+        Some(s) if s < 0 => (len_i + s).max(0) as usize,
+        Some(s) => s.clamp(0, len_i) as usize,
+        None => 0,
+    };
+    let end = match end_opt {
+        Some(e) if e < 0 => (len_i + e).max(0) as usize,
+        Some(e) => e.clamp(0, len_i) as usize,
+        None => len,
+    };
+    if start <= end { (start, end) } else { (start, start) }
+}
+
+pub fn jit_slice(a: &Value, s0: Option<i64>, e0: Option<i64>, s1: Option<i64>, e1: Option<i64>) -> Value {
+    match a {
+        Value::List(items) => {
+            let (start, end) = resolve_slice_range(s0, e0, items.len());
+            Value::List(items[start..end].to_vec())
+        }
+        Value::Tensor(t) => {
+            if t.ndim() == 1 {
+                let (start, end) = resolve_slice_range(s0, e0, t.shape[0]);
+                let sliced_data = t.data[start..end].to_vec();
+                let new_len = end.saturating_sub(start);
+                Value::Tensor(Tensor::new(sliced_data, vec![new_len]))
+            } else if t.ndim() == 2 {
+                let rows = t.shape[0];
+                let cols = t.shape[1];
+                let (r_start, r_end) = resolve_slice_range(s0, e0, rows);
+                let (c_start, c_end) = resolve_slice_range(s1, e1, cols);
+                let new_rows = r_end.saturating_sub(r_start);
+                let new_cols = c_end.saturating_sub(c_start);
+                let mut new_data = Vec::with_capacity(new_rows * new_cols);
+                for r in r_start..r_end {
+                    let row_offset = r * cols;
+                    for c in c_start..c_end {
+                        new_data.push(t.data[row_offset + c]);
+                    }
+                }
+                Value::Tensor(Tensor::new(new_data, vec![new_rows, new_cols]))
+            } else if t.ndim() == 3 {
+                let batches = t.shape[0];
+                let (b_start, b_end) = resolve_slice_range(s0, e0, batches);
+                let new_b = b_end.saturating_sub(b_start);
+                let inner_size = t.shape[1] * t.shape[2];
+                let start_idx = b_start * inner_size;
+                let end_idx = b_end * inner_size;
+                let new_data = t.data[start_idx..end_idx].to_vec();
+                Value::Tensor(Tensor::new(new_data, vec![new_b, t.shape[1], t.shape[2]]))
+            } else {
+                Value::Void
+            }
+        }
+        _ => Value::Void,
+    }
+}
+
 pub fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
     if let Value::Tensor(t) = a {
         let dim_usize = if let Some(d) = dim {

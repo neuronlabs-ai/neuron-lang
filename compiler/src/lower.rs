@@ -1031,15 +1031,36 @@ impl Lowerer {
             }
             Expr::Index(idx) => {
                 let obj = self.lower_expr(func, &idx.obj);
-                // Lower index items
-                let mut index_ids = vec![obj];
-                for item in &idx.indices {
-                    match item {
-                        IndexItem::Expr(e) => { index_ids.push(self.lower_expr(func, e)); }
-                        _ => {} // Slices handled as special IR
+                let has_slice = idx.indices.iter().any(|item| matches!(item, IndexItem::Slice { .. } | IndexItem::Full));
+                if has_slice {
+                    let mut specs = Vec::new();
+                    for item in &idx.indices {
+                        match item {
+                            IndexItem::Full => specs.push(SliceSpec { start: None, end: None, step: None }),
+                            IndexItem::Slice { start, end } => {
+                                let s = start.as_ref().and_then(extract_int_arg);
+                                let e = end.as_ref().and_then(extract_int_arg);
+                                specs.push(SliceSpec { start: s, end: e, step: None });
+                            }
+                            IndexItem::Expr(e) => {
+                                if let Some(i) = extract_int_arg(e) {
+                                    specs.push(SliceSpec { start: Some(i), end: Some(i + 1), step: None });
+                                } else {
+                                    specs.push(SliceSpec { start: None, end: None, step: None });
+                                }
+                            }
+                        }
                     }
+                    self.emit(func, IROp::Slice(specs), vec![obj], IRType::Tensor(vec![]))
+                } else {
+                    let mut index_ids = vec![obj];
+                    for item in &idx.indices {
+                        if let IndexItem::Expr(e) = item {
+                            index_ids.push(self.lower_expr(func, e));
+                        }
+                    }
+                    self.emit(func, IROp::Index, index_ids, IRType::Any)
                 }
-                self.emit(func, IROp::Index, index_ids, IRType::Any)
             }
             Expr::Grad(g) => {
                 let expr_id = self.lower_expr(func, &g.expr);

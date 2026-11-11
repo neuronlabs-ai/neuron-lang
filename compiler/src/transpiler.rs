@@ -928,7 +928,22 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             IROp::Or => format!("jit_or(&v{}, &v{})", node.inputs[0], node.inputs[1]),
                             IROp::Not => format!("jit_not(&v{})", node.inputs[0]),
                             IROp::ListLen => format!("jit_list_len(&v{})", node.inputs[0]),
-                            IROp::Index => format!("jit_index(&v{}, &v{})", node.inputs[0], node.inputs[1]),
+                            IROp::Index => {
+                                if node.inputs.len() >= 3 {
+                                    format!("jit_index_2d(&v{}, &v{}, &v{})", node.inputs[0], node.inputs[1], node.inputs[2])
+                                } else if node.inputs.len() >= 2 {
+                                    format!("jit_index(&v{}, &v{})", node.inputs[0], node.inputs[1])
+                                } else {
+                                    format!("v{}.clone()", node.inputs[0])
+                                }
+                            }
+                            IROp::Slice(ref specs) => {
+                                let s0 = specs.get(0).and_then(|s| s.start);
+                                let e0 = specs.get(0).and_then(|s| s.end);
+                                let s1 = specs.get(1).and_then(|s| s.start);
+                                let e1 = specs.get(1).and_then(|s| s.end);
+                                format!("jit_slice(&v{}, {:?}, {:?}, {:?}, {:?})", node.inputs[0], s0, e0, s1, e1)
+                            }
                             IROp::StopGrad => format!("jit_stop_grad(vm, &v{})", node.inputs[0]),
                             IROp::Sum { dim } => {
                                 format!("jit_sum(vm, &v{}, {:?})", node.inputs[0], dim)

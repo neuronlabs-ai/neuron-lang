@@ -52,3 +52,26 @@ fn main():
     let result = vm.run_main();
     assert!(result.is_ok(), "Running disconnected gradient test failed: {:?}", result.err());
 }
+
+#[test]
+fn test_integration_vm_tensor_indexing_and_slicing() {
+    let src = r#"
+fn main():
+    let t = ones(3, 4)
+    let row0 = t[0]
+    let elem = t[0, 1]
+    let s_rows = t[0:2]
+    let s_cols = t[:, 1:3]
+    let s_both = t[0:2, 1:3]
+    let s_neg = t[0:-1]
+    let v = ones(6)
+    let v_slice = v[1:4]
+    let l = [10, 20, 30, 40]
+    let l_sub = l[1:3]
+"#;
+    let out = compile(src, "test_slice.nr").unwrap();
+    let mut vm = VM::new();
+    vm.load(&out.ir);
+    let result = vm.run_main();
+    assert!(result.is_ok(), "Running indexing and slicing test failed: {:?}", result.err());
+}

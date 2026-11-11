@@ -1163,15 +1163,31 @@ impl TypeChecker {
             Expr::Index(idx) => {
                 let obj_ty = self.infer_expr(&idx.obj);
                 let (stripped_obj, wrappers) = strip_wrappers(obj_ty);
+                let has_slice = idx.indices.iter().any(|item| matches!(item, IndexItem::Slice { .. } | IndexItem::Full));
                 let elem_ty = match stripped_obj {
                     NType::Tensor(ref dims) => {
-                        if dims.len() <= 1 {
-                            NType::Base("Float".into())
+                        if has_slice {
+                            NType::Tensor(dims.clone())
                         } else {
-                            NType::Tensor(dims[1..].to_vec())
+                            let num_indices = idx.indices.len();
+                            if !dims.is_empty() {
+                                if num_indices >= dims.len() {
+                                    NType::Base("Float".into())
+                                } else {
+                                    NType::Tensor(dims[num_indices..].to_vec())
+                                }
+                            } else {
+                                NType::Base("Float".into())
+                            }
                         }
                     }
-                    NType::List(inner) => *inner.clone(),
+                    NType::List(inner) => {
+                        if has_slice {
+                            NType::List(inner)
+                        } else {
+                            *inner.clone()
+                        }
+                    },
                     NType::Tuple(ref types) => {
                         if idx.indices.len() == 1 {
                             if let IndexItem::Expr(Expr::IntLit(val, _)) = &idx.indices[0] {
@@ -1860,6 +1876,7 @@ impl TypeChecker {
             NType::Fn_(ref params, ref ret, _) => {
                 if is_variadic_shape_creator {
                     // Variadic shape creator: all arguments should be integers, lists, or tuples
+                    let mut shape_dims = Vec::new();
                     for (i, arg) in c.args.iter().enumerate() {
                         let arg_ty = self.infer_expr(&arg.value);
                         if !types_compatible(&NType::Base("Int".into()), &arg_ty) && !matches!(arg_ty, NType::List(_) | NType::Tuple(_) | NType::Any) {
@@ -1869,7 +1886,13 @@ impl TypeChecker {
                                 c.span.clone(),
                             ));
                         }
+                        if let Some(dim_val) = self.eval_const_int(&arg.value) {
+                            shape_dims.push(Dim::Static(dim_val.max(0)));
+                        } else {
+                            shape_dims.push(Dim::Dynamic);
+                        }
                     }
+                    return NType::Tensor(shape_dims);
                 } else if is_variadic_optimizer_or_builtin {
                     for arg in &c.args {
                         self.infer_expr(&arg.value);
