@@ -371,8 +371,35 @@ impl Lexer {
     fn lex_string(&mut self, line: usize, col: usize) -> Result<(), NeuronError> {
         self.advance(); // skip opening "
         let mut value = String::new();
-        while !self.at_end() && self.peek() != '"' {
+        while !self.at_end() {
             let ch = self.peek();
+            if ch == '"' {
+                break;
+            }
+            if ch == '\\' {
+                self.advance(); // consume '\'
+                if self.at_end() {
+                    return Err(NeuronError::new(
+                        ErrorCode::UnterminatedString,
+                        "Unterminated string escape sequence",
+                        Span::new(line, col, 1),
+                    ));
+                }
+                match self.advance() {
+                    'n' => value.push('\n'),
+                    't' => value.push('\t'),
+                    'r' => value.push('\r'),
+                    '\\' => value.push('\\'),
+                    '"' => value.push('"'),
+                    '\'' => value.push('\''),
+                    '0' => value.push('\0'),
+                    other => {
+                        value.push('\\');
+                        value.push(other);
+                    }
+                }
+                continue;
+            }
             if ch == '\n' || ch == '\r' {
                 return Err(NeuronError::new(
                     ErrorCode::UnterminatedString,
@@ -547,6 +574,12 @@ mod tests {
         assert!(matches!(toks[4].ty, TokenType::Neq));
         assert!(matches!(toks[5].ty, TokenType::And));
         assert!(matches!(toks[6].ty, TokenType::Or));
+    }
+
+    #[test]
+    fn test_string_escape_sequences() {
+        let toks = lex(r#""hello \n \t \"world\" \\""#);
+        assert!(matches!(toks[0].ty, TokenType::StringLit(ref s) if s == "hello \n \t \"world\" \\"));
     }
 
     #[test]
