@@ -55,4 +55,13 @@ fn main():
   print("mean(ones((3, 2))):")
   print(m_val)
 
+  // 5. Test negative dimension reductions
+  let t_2d = ones(2, 3)
+  let s_dim = t_2d.sum(dim=-1)
+  let m_dim = mean(t_2d, -1)
+  print("s_dim shape:")
+  print(shape(s_dim))
+  print("m_dim shape:")
+  print(shape(m_dim))
+
   print("ALL MATH PRIMITIVES PASSED")

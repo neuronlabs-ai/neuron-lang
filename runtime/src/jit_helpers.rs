@@ -465,13 +465,17 @@ pub fn jit_index(a: &Value, idx: &Value) -> Value {
 
 pub fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
     if let Value::Tensor(t) = a {
-        if let Some(d) = dim {
+        let dim_usize = if let Some(d) = dim {
             let ndim = t.ndim() as i64;
-            if d < 0 || d >= ndim {
+            let d_resolved = if d < 0 { ndim + d } else { d };
+            if d_resolved < 0 || d_resolved >= ndim {
                 panic!("Runtime Error: Sum dimension {} out of bounds for tensor of rank {}", d, ndim);
             }
-        }
-        Value::Tensor(vm.tape.sum(t, dim.map(|d| d as usize)))
+            Some(d_resolved as usize)
+        } else {
+            None
+        };
+        Value::Tensor(vm.tape.sum(t, dim_usize))
     } else {
         a.clone()
     }
@@ -479,13 +483,17 @@ pub fn jit_sum(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
 
 pub fn jit_mean(vm: &mut VM, a: &Value, dim: Option<i64>) -> Value {
     if let Value::Tensor(t) = a {
-        if let Some(d) = dim {
+        let dim_usize = if let Some(d) = dim {
             let ndim = t.ndim() as i64;
-            if d < 0 || d >= ndim {
+            let d_resolved = if d < 0 { ndim + d } else { d };
+            if d_resolved < 0 || d_resolved >= ndim {
                 panic!("Runtime Error: Mean dimension {} out of bounds for tensor of rank {}", d, ndim);
             }
-        }
-        Value::Tensor(vm.tape.mean(t, dim.map(|d| d as usize)))
+            Some(d_resolved as usize)
+        } else {
+            None
+        };
+        Value::Tensor(vm.tape.mean(t, dim_usize))
     } else {
         a.clone()
     }

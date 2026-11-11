@@ -6,6 +6,24 @@
 use crate::ast::*;
 use crate::ir::*;
 
+fn extract_int_arg(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::IntLit(val, _) => Some(*val),
+        Expr::UnaryOp(u) => {
+            if matches!(u.op, UnaryOp::Neg) {
+                if let Expr::IntLit(val, _) = &u.operand {
+                    Some(-*val)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 pub struct Lowerer {
     program: IRProgram,
     next_id: ValueId,
@@ -904,18 +922,24 @@ impl Lowerer {
                         "println" => return self.emit(func, IROp::Print, arg_ids, IRType::Void),
                         "sum" => {
                             let mut dim = None;
-                            if c.args.len() > 1 {
-                                if let Expr::IntLit(val, _) = &c.args[1].value {
-                                    dim = Some(*val);
+                            for arg in c.args.iter().skip(1) {
+                                if arg.name.is_none() || arg.name.as_deref() == Some("dim") {
+                                    if let Some(val) = extract_int_arg(&arg.value) {
+                                        dim = Some(val);
+                                        break;
+                                    }
                                 }
                             }
                             return self.emit(func, IROp::Sum { dim }, vec![arg_ids[0]], IRType::Tensor(vec![]));
                         }
                         "mean" => {
                             let mut dim = None;
-                            if c.args.len() > 1 {
-                                if let Expr::IntLit(val, _) = &c.args[1].value {
-                                    dim = Some(*val);
+                            for arg in c.args.iter().skip(1) {
+                                if arg.name.is_none() || arg.name.as_deref() == Some("dim") {
+                                    if let Some(val) = extract_int_arg(&arg.value) {
+                                        dim = Some(val);
+                                        break;
+                                    }
                                 }
                             }
                             return self.emit(func, IROp::Mean { dim }, vec![arg_ids[0]], IRType::Tensor(vec![]));
@@ -962,18 +986,24 @@ impl Lowerer {
                         match d.field.as_str() {
                             "sum" => {
                                 let mut dim = None;
-                                if !c.args.is_empty() {
-                                    if let Expr::IntLit(val, _) = &c.args[0].value {
-                                        dim = Some(*val);
+                                for arg in &c.args {
+                                    if arg.name.is_none() || arg.name.as_deref() == Some("dim") {
+                                        if let Some(val) = extract_int_arg(&arg.value) {
+                                            dim = Some(val);
+                                            break;
+                                        }
                                     }
                                 }
                                 return self.emit(func, IROp::Sum { dim }, vec![receiver_id], IRType::Tensor(vec![]));
                             }
                             "mean" => {
                                 let mut dim = None;
-                                if !c.args.is_empty() {
-                                    if let Expr::IntLit(val, _) = &c.args[0].value {
-                                        dim = Some(*val);
+                                for arg in &c.args {
+                                    if arg.name.is_none() || arg.name.as_deref() == Some("dim") {
+                                        if let Some(val) = extract_int_arg(&arg.value) {
+                                            dim = Some(val);
+                                            break;
+                                        }
                                     }
                                 }
                                 return self.emit(func, IROp::Mean { dim }, vec![receiver_id], IRType::Tensor(vec![]));

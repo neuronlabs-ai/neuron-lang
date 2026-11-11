@@ -5648,12 +5648,16 @@ impl VM {
             IROp::Sum { dim } => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = if let Value::Tensor(t) = &a {
-                    if let Some(d) = dim {
-                        if *d < 0 || (*d as usize) >= t.ndim() {
+                    let dim_usize = if let Some(d) = dim {
+                        let ndim = t.ndim() as i64;
+                        let d_resolved = if *d < 0 { ndim + *d } else { *d };
+                        if d_resolved < 0 || d_resolved >= ndim {
                             return Err(format!("Runtime Error: Sum dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
                         }
-                    }
-                    let dim_usize = dim.map(|d| d as usize);
+                        Some(d_resolved as usize)
+                    } else {
+                        None
+                    };
                     Ok(Value::Tensor(self.tape.sum(t, dim_usize)))
                 } else {
                     Ok(a)
@@ -5663,12 +5667,16 @@ impl VM {
             IROp::Mean { dim } => {
                 let (a, wraps) = get_stripped(&node.inputs[0]);
                 let res = if let Value::Tensor(t) = &a {
-                    if let Some(d) = dim {
-                        if *d < 0 || (*d as usize) >= t.ndim() {
+                    let dim_usize = if let Some(d) = dim {
+                        let ndim = t.ndim() as i64;
+                        let d_resolved = if *d < 0 { ndim + *d } else { *d };
+                        if d_resolved < 0 || d_resolved >= ndim {
                             return Err(format!("Runtime Error: Mean dimension {} out of bounds for tensor of rank {}", d, t.ndim()));
                         }
-                    }
-                    let dim_usize = dim.map(|d| d as usize);
+                        Some(d_resolved as usize)
+                    } else {
+                        None
+                    };
                     Ok(Value::Tensor(self.tape.mean(t, dim_usize)))
                 } else {
                     Ok(a)

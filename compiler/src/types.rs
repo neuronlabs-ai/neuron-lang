@@ -1841,6 +1841,10 @@ impl TypeChecker {
             | Some("WorkingMemory") | Some("EpisodicMemory") | Some("SemanticMemory") => true,
             _ => false,
         };
+        let is_reduction_with_optional_dim = match callee_name {
+            Some("sum") | Some("mean") => true,
+            _ => false,
+        };
 
         let mut is_method_call = false;
         if let Expr::Dot(ref d) = c.callee {
@@ -1869,6 +1873,27 @@ impl TypeChecker {
                 } else if is_variadic_optimizer_or_builtin {
                     for arg in &c.args {
                         self.infer_expr(&arg.value);
+                    }
+                } else if is_reduction_with_optional_dim {
+                    if c.args.is_empty() || c.args.len() > 2 {
+                        self.result.add_error(NeuronError::new(
+                            ErrorCode::TypeMismatch,
+                            format!("Function call expected 1 or 2 arguments but got {}", c.args.len()),
+                            c.span.clone(),
+                        ));
+                    } else {
+                        let _ = self.infer_expr(&c.args[0].value);
+                        if c.args.len() == 2 {
+                            let arg1_ty = self.infer_expr(&c.args[1].value);
+                            if !types_compatible(&NType::Base("Int".into()), &arg1_ty) && !matches!(arg1_ty, NType::Any) {
+                                self.result.add_error(NeuronError::new(
+                                    ErrorCode::TypeMismatch,
+                                    format!("Dimension argument 2 must be an integer, got {}", arg1_ty.display()),
+                                    c.args[1].value.span().clone(),
+                                ));
+                            }
+                            return NType::Tensor(vec![]);
+                        }
                     }
                 } else {
                     let expected_args_len = if is_method_call { params.len().saturating_sub(1) } else { params.len() };
