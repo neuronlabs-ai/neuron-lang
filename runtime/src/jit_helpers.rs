@@ -585,10 +585,28 @@ pub fn jit_validate_shape(shape_i64: Vec<i64>) -> Vec<usize> {
         product = product.checked_mul(dim).expect("Runtime Error: Shape size overflow");
         shape.push(dim);
     }
-    if product > 10_000_000 {
+    if product > 100_000_000 {
         panic!("Runtime Error: Tensor size too large: {} elements", product);
     }
     shape
+}
+
+pub fn jit_validate_shape_from_values(values: &[&Value]) -> Vec<usize> {
+    if values.len() == 1 {
+        match values[0].unwrap_ref() {
+            Value::List(items) => {
+                let dims: Vec<i64> = items.iter().map(|item| item.as_int()).collect();
+                return jit_validate_shape(dims);
+            }
+            Value::Tuple(items) => {
+                let dims: Vec<i64> = items.iter().map(|item| item.as_int()).collect();
+                return jit_validate_shape(dims);
+            }
+            _ => {}
+        }
+    }
+    let dims: Vec<i64> = values.iter().map(|v| v.as_int()).collect();
+    jit_validate_shape(dims)
 }
 
 pub fn jit_mod(_vm: &mut VM, a: &Value, b: &Value) -> Value {

@@ -902,6 +902,24 @@ impl Lowerer {
                         "generate_reply" => return self.emit(func, IROp::GenerateReply, arg_ids, IRType::String),
                         "search" => return self.emit(func, IROp::Search { strategy: "default".into(), max_iter: 100 }, arg_ids, IRType::Any),
                         "println" => return self.emit(func, IROp::Print, arg_ids, IRType::Void),
+                        "sum" => {
+                            let mut dim = None;
+                            if c.args.len() > 1 {
+                                if let Expr::IntLit(val, _) = &c.args[1].value {
+                                    dim = Some(*val);
+                                }
+                            }
+                            return self.emit(func, IROp::Sum { dim }, vec![arg_ids[0]], IRType::Tensor(vec![]));
+                        }
+                        "mean" => {
+                            let mut dim = None;
+                            if c.args.len() > 1 {
+                                if let Expr::IntLit(val, _) = &c.args[1].value {
+                                    dim = Some(*val);
+                                }
+                            }
+                            return self.emit(func, IROp::Mean { dim }, vec![arg_ids[0]], IRType::Tensor(vec![]));
+                        }
                         "nll_loss" => return self.emit(func, IROp::NLLLoss, arg_ids, IRType::F64),
                         "kl_divergence" => return self.emit(func, IROp::KLDivergence, arg_ids, IRType::F64),
                         "explain" => return self.emit(func, IROp::Explain, arg_ids, IRType::String),

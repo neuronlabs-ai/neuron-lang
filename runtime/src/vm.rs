@@ -27,18 +27,74 @@ static GLOBAL_KERNEL_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collection
 fn validate_shape(inputs: &[ValueId], get: impl Fn(ValueId) -> Value) -> Result<Vec<usize>, String> {
     let mut shape = Vec::new();
     let mut product: usize = 1;
-    for &id in inputs {
-        let val = get(id).as_int();
-        if val < 0 {
-            return Err(format!("Runtime Error: Negative dimension size: {}", val));
+
+    let check_and_push = |v_raw: i64, shape: &mut Vec<usize>, product: &mut usize| -> Result<(), String> {
+        if v_raw < 0 {
+            return Err(format!("Runtime Error: Negative dimension size: {}", v_raw));
         }
-        let dim = val as usize;
+        let dim = v_raw as usize;
         if dim > 1_000_000 {
             return Err(format!("Runtime Error: Dimension size too large: {}", dim));
         }
-        product = product.checked_mul(dim)
+        *product = product.checked_mul(dim)
             .ok_or_else(|| "Runtime Error: Shape size overflow".to_string())?;
         shape.push(dim);
+        Ok(())
+    };
+
+    // If a single argument was passed, check if it is a List or Tuple of dimensions (e.g., randn([10, 10]))
+    if inputs.len() == 1 {
+        let first = get(inputs[0]);
+        match first.unwrap_ref() {
+            Value::List(items) => {
+                for item in items {
+                    match item.unwrap_ref() {
+                        Value::Int(i) => check_and_push(*i, &mut shape, &mut product)?,
+                        Value::Float(f) => check_and_push(*f as i64, &mut shape, &mut product)?,
+                        other => return Err(format!("Runtime Error: Expected integer dimension, found {:?}", other)),
+                    }
+                }
+                if product > 100_000_000 {
+                    return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));
+                }
+                return Ok(shape);
+            }
+            Value::Tuple(items) => {
+                for item in items {
+                    match item.unwrap_ref() {
+                        Value::Int(i) => check_and_push(*i, &mut shape, &mut product)?,
+                        Value::Float(f) => check_and_push(*f as i64, &mut shape, &mut product)?,
+                        other => return Err(format!("Runtime Error: Expected integer dimension, found {:?}", other)),
+                    }
+                }
+                if product > 100_000_000 {
+                    return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));
+                }
+                return Ok(shape);
+            }
+            _ => {
+                let v = match first.unwrap_ref() {
+                    Value::Int(i) => *i,
+                    Value::Float(f) => *f as i64,
+                    other => return Err(format!("Runtime Error: Expected integer dimension, found {:?}", other)),
+                };
+                check_and_push(v, &mut shape, &mut product)?;
+                if product > 100_000_000 {
+                    return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));
+                }
+                return Ok(shape);
+            }
+        }
+    }
+
+    for &id in inputs {
+        let val = get(id);
+        let v = match val.unwrap_ref() {
+            Value::Int(i) => *i,
+            Value::Float(f) => *f as i64,
+            other => return Err(format!("Runtime Error: Expected integer dimension, found {:?}", other)),
+        };
+        check_and_push(v, &mut shape, &mut product)?;
     }
     if product > 100_000_000 {
         return Err(format!("Runtime Error: Tensor size too large: {} elements (max 100M)", product));

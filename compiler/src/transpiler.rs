@@ -658,10 +658,28 @@ fn jit_validate_shape(shape_i64: Vec<i64>) -> Vec<usize> {
         product = product.checked_mul(dim).expect("Runtime Error: Shape size overflow");
         shape.push(dim);
     }
-    if product > 10_000_000 {
+    if product > 100_000_000 {
         panic!("Runtime Error: Tensor size too large: {} elements", product);
     }
     shape
+}
+
+fn jit_validate_shape_from_values(values: &[&Value]) -> Vec<usize> {
+    if values.len() == 1 {
+        match values[0].unwrap_ref() {
+            Value::List(items) => {
+                let dims: Vec<i64> = items.iter().map(|item| item.as_int()).collect();
+                return jit_validate_shape(dims);
+            }
+            Value::Tuple(items) => {
+                let dims: Vec<i64> = items.iter().map(|item| item.as_int()).collect();
+                return jit_validate_shape(dims);
+            }
+            _ => {}
+        }
+    }
+    let dims: Vec<i64> = values.iter().map(|v| v.as_int()).collect();
+    jit_validate_shape(dims)
 }
 
 fn jit_mod(vm: &mut VM, a: &Value, b: &Value) -> Value {
@@ -825,8 +843,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             },
                             IROp::Zeros(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
-                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("&v{}", id)).collect();
+                                    format!("jit_validate_shape_from_values(&[{}])", parts.join(", "))
                                 } else {
                                     format!("jit_validate_shape(vec!{:?})", shape)
                                 };
@@ -837,8 +855,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Ones(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
-                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("&v{}", id)).collect();
+                                    format!("jit_validate_shape_from_values(&[{}])", parts.join(", "))
                                 } else {
                                     format!("jit_validate_shape(vec!{:?})", shape)
                                 };
@@ -849,8 +867,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Glorot(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
-                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("&v{}", id)).collect();
+                                    format!("jit_validate_shape_from_values(&[{}])", parts.join(", "))
                                 } else {
                                     format!("jit_validate_shape(vec!{:?})", shape)
                                 };
@@ -861,8 +879,8 @@ r#"                locals.insert({:?}.to_string(), v{}.clone());
                             }
                             IROp::Randn(shape) => {
                                 let shape_str = if !node.inputs.is_empty() {
-                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("v{}.as_int()", id)).collect();
-                                    format!("jit_validate_shape(vec![{}])", parts.join(", "))
+                                    let parts: Vec<String> = node.inputs.iter().map(|id| format!("&v{}", id)).collect();
+                                    format!("jit_validate_shape_from_values(&[{}])", parts.join(", "))
                                 } else {
                                     format!("jit_validate_shape(vec!{:?})", shape)
                                 };

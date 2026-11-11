@@ -44,4 +44,15 @@ fn main():
   print("Tensor log(t):")
   print(t_log)
 
+  // 4. Test tensor shape unpacking and free-standing aggregations
+  let t_list = zeros([2, 3])
+  let t_tuple = ones((3, 2))
+  let t_randn = randn([2, 2])
+  let s_val = sum(t_tuple)
+  let m_val = mean(t_tuple)
+  print("sum(ones((3, 2))):")
+  print(s_val)
+  print("mean(ones((3, 2))):")
+  print(m_val)
+
   print("ALL MATH PRIMITIVES PASSED")
